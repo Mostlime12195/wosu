@@ -4,17 +4,15 @@
 
 osu! is a rhythm game in which you click circles on the screen, following the rhythm of the music.
 
-wosu! is an unofficial osu!standard client that runs entirely in your browser, with nothing to install. The whole game, menus included, is a single [PixiJS](https://pixijs.com) app rendered with WebGL (or WebGPU, opt-in from Settings → Graphics), modelled closely on osu!lazer's look and behaviour. Beatmaps come from community mirrors ([Sayobot](https://osu.sayobot.cn), [Mino](https://catboy.best), [NeriNyan](https://nerinyan.moe)) or from your own `.osz` files.
+wosu! is an unofficial osu!std client that runs entirely in your browser, without any installation! Beatmaps come from mirrors like ([Sayobot](https://osu.sayobot.cn), [Mino](https://catboy.best), [NeriNyan](https://nerinyan.moe)) or you can upload your own `.osz` files.
 
-wosu! is the successor to [WebOsu 2](https://github.com/WebOsu-2/webosu-2.github.io), itself a continuation of [the original WebOsu](https://github.com/111116/webosu). The classic WebOsu 2 is still online at [webosu-2.github.io](https://webosu-2.github.io) if your device struggles with wosu! or you just prefer it. Scoring and judgement follow osu!stable's rules closely, but can still differ from official osu!; modes other than osu!standard are not supported.
+wosu! is the successor to [WebOsu 2](https://github.com/WebOsu-2/webosu-2.github.io), itself a continuation of [the original WebOsu](https://github.com/111116/webosu). The classic WebOsu 2 is still online if your device struggles with wosu! or if you just prefer it.
 
-![Gameplay](screenshots/gameplay.jpg)
+Scoring and judgement follow osu!'s rules closely, but can still differ from official osu!; modes other than osu!std are not supported yet.
 
-| Main menu | Song select |
-| --- | --- |
-| ![Main menu](screenshots/menu.jpg) | ![Song select](screenshots/song-select.jpg) |
-| **Beatmap listing** | **Results** |
-| ![Beatmap listing](screenshots/beatmap-listing.jpg) | ![Results](screenshots/results.jpg) |
+![wosu! gameplay: YOASOBI - Yoru ni Kakeru (Keirelia's Insane) on Autoplay](screenshots/gameplay.gif)
+
+<sub>YOASOBI - Yoru ni Kakeru [Keirelia's Insane], mapped by [Petal](https://osu.ppy.sh/beatmapsets/1238759) (Autoplay).</sub>
 
 ## Features
 
