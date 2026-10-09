@@ -1,10 +1,10 @@
-import { Container, type Sprite } from 'pixi.js';
+import { Container, Texture, type Sprite } from 'pixi.js';
 import type { PlayableSlider, SliderEvent } from '../../beatmap/types';
 import { SliderBody } from '../../graphics/slider/SliderRenderer';
-import type { SkinTexture } from '../../skin/BeatmapSkin';
+import type { SkinTexture } from '../../skin/LegacySkin';
 import { sliderBallPosition, sliderProgress, sliderSpan, type SliderState } from '../GameplayRules';
 import {
-    ApproachCircle, CirclePiece, approachAlpha, circleScale, clamp01, comboColor, ease, legacyScale, sprite, type DrawableContext,
+    ApproachCircle, CirclePiece, approachAlpha, clamp01, comboColor, ease, legacyScale, sprite, type DrawableContext,
 } from './context';
 import { shakeOffset, type Drawable } from './DrawableHitCircle';
 
@@ -39,7 +39,9 @@ export class DrawableSlider extends Container implements Drawable {
     private readonly body: SliderBody;
     private readonly head: CirclePiece;
     private readonly approach: ApproachCircle;
-    private readonly ball: Sprite;
+    /** The ball: optional sliderb-nd underlay, the (animated) sliderb, optional additive sliderb-spec. */
+    private readonly ball = new Container();
+    private readonly ballSprite: Sprite;
     private readonly follow: Sprite;
     private readonly ticks: Tick[] = [];
     private readonly repeats: Repeat[] = [];
@@ -49,6 +51,8 @@ export class DrawableSlider extends Container implements Drawable {
     private readonly arrowScale: number;
     private readonly followBase: number;
     private readonly ballFrames: SkinTexture[];
+    private readonly followFrames: SkinTexture[];
+    private readonly ballFlip: boolean;
     private readonly hiddenOn: boolean;
     private readonly snakeDuration: number;
 
@@ -62,22 +66,21 @@ export class DrawableSlider extends Container implements Drawable {
         this.body = new SliderBody(ctx.sliders, h.path.points, ctx.radius, h.comboColorIndex % rows);
         this.addChild(this.body);
 
-        const s = circleScale(ctx.radius);
-        const bs = ctx.beatmapSkin;
-        const tick = bs?.texture('sliderscorepoint') ?? null;
-        const arrow = bs?.texture('reversearrow') ?? null;
-        this.tickScale = tick ? legacyScale(ctx.radius, tick) : s;
-        this.arrowScale = arrow ? legacyScale(ctx.radius, arrow) : s * 0.75;
+        const chain = ctx.skin;
+        const tick = chain.texture('sliderscorepoint');
+        const arrow = chain.texture('reversearrow');
+        this.tickScale = legacyScale(ctx.radius, tick);
+        this.arrowScale = legacyScale(ctx.radius, arrow);
         h.events.forEach((ev, i) => {
             if (ev.kind === 'tick') {
-                const t = sprite(tick ? tick.texture : ctx.skin.get('sliderscorepoint.png'), this.tickScale);
+                const t = sprite(tick?.texture ?? Texture.EMPTY, this.tickScale);
                 t.position.set(ev.x, ev.y);
                 const spanStart = h.time + ev.spanIndex * h.spanDuration;
                 const offset = ev.spanIndex > 0 ? 200 : ctx.preempt * 0.66;
                 this.ticks.push({ sprite: t, event: ev, eventIndex: i, appear: ev.time - ((ev.time - spanStart) / 2 + offset) });
                 this.overlays.addChild(t);
             } else if (ev.kind === 'repeat') {
-                const r = sprite(arrow ? arrow.texture : ctx.skin.get('reversearrow.png'), this.arrowScale);
+                const r = sprite(arrow?.texture ?? Texture.EMPTY, this.arrowScale);
                 const atTail = ev.spanIndex % 2 === 0;
                 this.repeats.push({ sprite: r, event: ev, eventIndex: i, atTail, order: ev.spanIndex });
                 this.overlays.addChild(r);
@@ -85,14 +88,31 @@ export class DrawableSlider extends Container implements Drawable {
         });
         this.addChild(this.overlays);
 
-        const follow = bs?.texture('sliderfollowcircle') ?? null;
-        this.follow = sprite(follow ? follow.texture : ctx.skin.get('sliderfollowcircle.png'), 0);
-        // A map's follow circle reaches its own size (osu!: the texture at circle scale) when fully tracking.
-        this.followBase = follow ? legacyScale(ctx.radius, follow) / FOLLOW_SCALE : (2 * ctx.radius) / this.follow.texture.width;
+        // The follow circle reaches the texture's own size (at circle scale) when fully tracking.
+        this.followFrames = chain.frames('sliderfollowcircle');
+        const follow = this.followFrames[0] ?? null;
+        this.follow = sprite(follow?.texture ?? Texture.EMPTY, 0);
+        this.followBase = legacyScale(ctx.radius, follow) / FOLLOW_SCALE;
         this.follow.visible = false;
-        this.ballFrames = bs?.frames('sliderb') ?? [];
-        const ball = this.ballFrames[0];
-        this.ball = sprite(ball ? ball.texture : ctx.skin.get('sliderb.png'), ball ? legacyScale(ctx.radius, ball) : s * 0.98);
+        // lazer's LegacySliderBall: an underlay, the ball (tinted only if the skin allows it) and a specular layer.
+        this.ballFrames = chain.frames('sliderb');
+        const first = this.ballFrames[0] ?? null;
+        const nd = chain.texture('sliderb-nd');
+        const spec = chain.texture('sliderb-spec');
+        if (nd) {
+            const under = sprite(nd.texture, legacyScale(ctx.radius, nd));
+            under.tint = 0x050505;
+            this.ball.addChild(under);
+        }
+        this.ballSprite = sprite(first?.texture ?? Texture.EMPTY, legacyScale(ctx.radius, first));
+        this.ballSprite.tint = chain.config('allowSliderBallTint') ? color : chain.config('sliderBall') ?? 0xffffff;
+        this.ball.addChild(this.ballSprite);
+        if (spec) {
+            const shine = sprite(spec.texture, legacyScale(ctx.radius, spec));
+            shine.blendMode = 'add';
+            this.ball.addChild(shine);
+        }
+        this.ballFlip = chain.config('sliderBallFlip');
         this.ball.visible = false;
         this.head = new CirclePiece(ctx, h, true, true);
         this.head.position.set(h.x, h.y);
@@ -239,13 +259,28 @@ export class DrawableSlider extends Container implements Drawable {
             this.follow.visible = false;
             return;
         }
-        const p = sliderBallPosition(h, Math.min(time, h.endTime));
+        const t = Math.min(time, h.endTime);
+        const p = sliderBallPosition(h, t);
         this.ball.position.set(p.x, p.y);
         this.follow.position.set(p.x, p.y);
-        if (this.ballFrames.length > 1) {
-            // osu!'s animated slider ball, at 60 frames per second.
-            const f = this.ballFrames[Math.floor(Math.max(0, time - h.time) / (1000 / 60)) % this.ballFrames.length];
-            if (this.ball.texture !== f.texture) this.ball.texture = f.texture;
+        // The ball faces its direction of travel (lazer's LegacySliderBall); reversed spans
+        // mirror it when the skin asks (SliderBallFlip) instead of turning it upside down.
+        const reversed = sliderSpan(h, t) % 2 === 1;
+        const dir = h.path.directionAt(sliderProgress(h, t));
+        this.ball.rotation = Math.atan2(reversed ? -dir.y : dir.y, reversed ? -dir.x : dir.x);
+        this.ball.scale.set(1, reversed && this.ballFlip ? -1 : 1);
+        const elapsed = Math.max(0, time - h.time);
+        const n = this.ballFrames.length;
+        if (n > 1) {
+            // Animated balls run at the skin's frame rate (osu! defaults to 60fps for the ball).
+            const fps = this.ctx.skin.config('animationFramerate');
+            const f = this.ballFrames[Math.floor(elapsed / (fps > 0 ? 1000 / fps : 1000 / 60)) % n];
+            if (this.ballSprite.texture !== f.texture) this.ballSprite.texture = f.texture;
+        }
+        const fn = this.followFrames.length;
+        if (fn > 1) {
+            const f = this.followFrames[Math.floor(elapsed / this.ctx.skin.frameDuration(fn)) % fn];
+            if (this.follow.texture !== f.texture) this.follow.texture = f.texture;
         }
         const after = time - h.endTime;
         if (after > 0) {

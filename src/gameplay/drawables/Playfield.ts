@@ -1,8 +1,8 @@
 import { Container, type Renderer } from 'pixi.js';
 import type { PlayableBeatmap } from '../../beatmap/types';
 import { SliderResources } from '../../graphics/slider/SliderRenderer';
-import type { BeatmapSkin } from '../../skin/BeatmapSkin';
 import type { Skin } from '../../skin/Skin';
+import type { SkinChain } from '../../skin/SkinChain';
 import type { GameplayRules } from '../GameplayRules';
 import { legacyScale, makeKiaiFlash, type DrawableContext } from './context';
 import { DrawableHitCircle, type Drawable } from './DrawableHitCircle';
@@ -13,7 +13,10 @@ import { Judgements } from './Judgements';
 
 export interface PlayfieldOptions {
     renderer: Renderer;
-    skin: Skin;
+    /** The skins in effect (beatmap → selected → default). */
+    skin: SkinChain;
+    /** The game's own UI atlas. */
+    ui: Skin;
     beatmap: PlayableBeatmap;
     rules: GameplayRules;
     hidden: boolean;
@@ -23,8 +26,6 @@ export interface PlayfieldOptions {
     snakingOut: boolean;
     /** Initial "Kiai flashes on hit objects" value (live via `kiaiFlashes`). */
     kiaiFlashes?: boolean;
-    /** The map's own skin elements, when "Beatmap skins" is on. */
-    beatmapSkin?: BeatmapSkin | null;
 }
 
 /** osu!'s playfield size in osu! pixels. */
@@ -57,7 +58,7 @@ export class Playfield extends Container {
         this.sliderResources = new SliderResources(o.renderer, b.comboColors, b.data.sliderTrackOverride, b.data.sliderBorder);
         this.ctx = {
             skin: o.skin,
-            beatmapSkin: o.beatmapSkin ?? null,
+            ui: o.ui,
             beatmap: b,
             rules: o.rules,
             sliders: this.sliderResources,
@@ -75,17 +76,10 @@ export class Playfield extends Container {
         };
         const ctx = this.ctx;
         ctx.kiaiFlash = makeKiaiFlash(b, () => ctx.kiaiFlashes);
-        const fp = o.beatmapSkin?.texture('followpoint') ?? null;
-        this.followPoints = o.hideFollowPoints ? null
-            : new FollowPoints(b, fp ? fp.texture : o.skin.get('followpoint.png'), d.preempt, d.fadeIn, d.circleRadius, fp ? legacyScale(d.circleRadius, fp) : undefined);
-        this.judgements = new Judgements(o.skin.tex('glow'), d.circleRadius);
-        const bs = o.beatmapSkin;
-        if (bs) {
-            for (const [result, name] of [['great', 'hit300'], ['ok', 'hit100'], ['meh', 'hit50'], ['miss', 'hit0']] as const) {
-                const frames = bs.frames(name);
-                if (frames.length) this.judgements.legacy[result] = frames;
-            }
-        }
+        const fp = o.skin.frames('followpoint')[0] ?? null;
+        this.followPoints = o.hideFollowPoints || !fp ? null
+            : new FollowPoints(b, fp.texture, d.preempt, d.fadeIn, d.circleRadius, legacyScale(d.circleRadius, fp));
+        this.judgements = new Judgements(o.skin, d.circleRadius);
         if (this.followPoints) this.addChild(this.followPoints);
         this.addChild(this.objectLayer, this.approachLayer, this.judgements);
     }

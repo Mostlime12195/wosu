@@ -62,6 +62,8 @@ export class GameSettings {
     readonly storyboard = new Bindable(true);
     /** Use a beatmap's own skin elements and colours (lazer's "Beatmap skins"). */
     readonly beatmapSkin = new Bindable(true);
+    /** Use a beatmap's own combo and slider colours (lazer's "Beatmap colours"). */
+    readonly beatmapColours = new Bindable(true);
     readonly fullscreenOnPlay = new Bindable(false);
 
     // Audio

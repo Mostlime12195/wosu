@@ -19,7 +19,7 @@ const SETS: readonly SampleSetName[] = ['normal', 'soft', 'drum'];
 const OGG_AND_WAV: readonly HitsoundName[] = [
     'hitnormal', 'hitwhistle', 'hitfinish', 'hitclap', 'slidertick', 'sliderslide', 'sliderwhistle',
 ];
-/** Only shipped as .wav in public/assets/hitsounds. */
+/** Only shipped as .wav in the default skin (public/assets/skins/default). */
 const WAV_ONLY: readonly HitsoundName[] = ['spinnerspin', 'spinnerbonus'];
 
 interface SampleSpec {
@@ -89,7 +89,7 @@ export class SampleBank {
     }
 
     /** Load every sample (missing ones are skipped). Idempotent. */
-    load(baseUrl: string = resolveAssetUrl('assets/hitsounds/')): Promise<void> {
+    load(baseUrl: string = resolveAssetUrl('assets/skins/default/')): Promise<void> {
         if (!this.loading) {
             const base = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
             this.loading = Promise.all(sampleManifest().map(spec => this.loadOne(base, spec))).then(() => undefined);

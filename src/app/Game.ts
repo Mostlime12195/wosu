@@ -34,6 +34,7 @@ import { Toolbar } from '../overlays/Toolbar';
 import { VolumeOverlay } from '../overlays/VolumeOverlay';
 import { GameSettings } from '../settings/Settings';
 import { Skin } from '../skin/Skin';
+import { SkinManager } from '../skin/SkinManager';
 import { Favourites } from '../storage/Favourites';
 import { KnownVideos } from '../storage/KnownVideos';
 import { ScoreStore } from '../storage/ScoreStore';
@@ -112,15 +113,26 @@ export class Game {
         });
         const loading = showBootSpinner(app);
         const skin = new Skin();
-        const [, , cursorTextures] = await Promise.all([loadFonts(), skin.load(), Cursor.loadTextures()]);
+        const skins = new SkinManager();
+        const [, , cursorTextures] = await Promise.all([loadFonts(), skin.load(), Cursor.loadTextures(), skins.loadDefault()]);
         installBitmapFonts(app.renderer.resolution);
         loading.destroy();
-        const game = new Game(app, settings, skin, cursorTextures);
+        const game = new Game(app, settings, skin, skins, cursorTextures);
         await game.start();
         return game;
     }
 
-    private constructor(readonly app: App, readonly settings: GameSettings, readonly skin: Skin, cursorTextures: CursorTextures) {
+    /**
+     * `skin` holds the UI's own textures (shapes, glows, fades); `skins`
+     * the osu!-format gameplay skins (default, selected, beatmap).
+     */
+    private constructor(
+        readonly app: App,
+        readonly settings: GameSettings,
+        readonly skin: Skin,
+        readonly skins: SkinManager,
+        cursorTextures: CursorTextures,
+    ) {
         this.input = new InputManager(app, this.textInput);
         this.samples = new SampleBank(this.audio);
         this.uiSounds = new UISounds(this.audio);

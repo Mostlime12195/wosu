@@ -32,7 +32,8 @@ export class DrawableSpinner extends Container implements Drawable {
     constructor(private readonly ctx: DrawableContext, private readonly h: PlayableSpinner) {
         super();
         this.index = h.index;
-        const skin = ctx.skin;
+        // Temporary: the old atlas spinner until the skinnable spinner lands.
+        const skin = ctx.ui;
         this.position.set(256, 192);
         this.base = sprite(skin.get('spinnerbase.png'), DIAMETER / 963);
         this.fill = sprite(skin.get('spinnerprogress.png'), 0);

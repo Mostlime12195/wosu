@@ -7,7 +7,7 @@ import { buildPlayableBeatmap } from '../../src/beatmap/processing';
 import type { PlayableSlider } from '../../src/beatmap/types';
 import { HitsoundPlayer } from '../../src/gameplay/HitsoundPlayer';
 import { NO_MODS } from '../../src/gameplay/mods';
-import type { BeatmapSkin } from '../../src/skin/BeatmapSkin';
+import type { LegacySkin } from '../../src/skin/LegacySkin';
 
 const FIXDIR = join(__dirname, '..', 'fixtures', 'map1');
 const osuFile = readdirSync(FIXDIR).find(f => f.endsWith('.osu'))!;
@@ -38,7 +38,7 @@ function fakeSkin(samples: Record<string, { name: string } | null>) {
     return {
         sample: (name: string, index = 1) => samples[index > 1 ? `${name}${index}` : name],
         file: (f: string) => samples[f],
-    } as unknown as BeatmapSkin;
+    } as unknown as LegacySkin;
 }
 
 describe('HitsoundPlayer', () => {

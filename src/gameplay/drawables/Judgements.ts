@@ -1,8 +1,9 @@
-import { BitmapText, Container, type Sprite, type Texture } from 'pixi.js';
-import type { SkinTexture } from '../../skin/BeatmapSkin';
+import { BitmapText, Container, Texture, type Sprite } from 'pixi.js';
+import type { SkinTexture } from '../../skin/LegacySkin';
+import type { SkinChain } from '../../skin/SkinChain';
 import { Colors, Fonts } from '../../ui/theme';
 import type { HitResult } from '../scoring/ScoreProcessor';
-import { clamp01, ease, sprite } from './context';
+import { clamp01, ease, legacyScale, sprite } from './context';
 
 const LIFETIME = 800;
 const LIGHTING_LIFETIME = 600;
@@ -50,20 +51,27 @@ export class Judgements extends Container {
     private readonly freeLights: Sprite[] = [];
     hideGreat = false;
     hitLighting = true;
-    /** The map's judgement images replace our text (osu!'s legacy judgement animation). */
+    /** The skin's judgement images (hit300/100/50/0); our text is only a fallback. */
     legacy: LegacyJudgements = {};
+    private readonly lighting: SkinTexture | null;
     private readonly sprites = new Container();
     private readonly activeSprites: SpriteEntry[] = [];
     private readonly freeSprites: Sprite[] = [];
 
-    constructor(private readonly glow: Texture, private readonly radius: number) {
+    constructor(private readonly chain: SkinChain, private readonly radius: number) {
         super();
+        // osu!'s lighting.png: an additive glow under every hit (only when the skin has one).
+        this.lighting = chain.texture('lighting');
+        for (const [result, name] of [['great', 'hit300'], ['ok', 'hit100'], ['meh', 'hit50'], ['miss', 'hit0']] as const) {
+            const frames = chain.frames(name);
+            if (frames.length) this.legacy[result] = frames;
+        }
         this.eventMode = 'none';
         this.addChild(this.lights, this.texts, this.sprites);
     }
 
     add(result: HitResult, x: number, y: number, time: number, color: number): void {
-        if (result !== 'miss' && this.hitLighting) this.addLight(x, y, time, color);
+        if (result !== 'miss' && this.hitLighting && this.lighting) this.addLight(x, y, time, color);
         if (result === 'great' && this.hideGreat) return;
         const frames = this.legacy[result];
         if (frames?.length) {
@@ -82,7 +90,7 @@ export class Judgements extends Container {
     }
 
     private makeSprite(): Sprite {
-        const s = sprite(this.glow);
+        const s = sprite(Texture.EMPTY);
         this.sprites.addChild(s);
         return s;
     }
@@ -104,7 +112,8 @@ export class Judgements extends Container {
                 continue;
             }
             const n = e.frames.length;
-            const f = e.frames[Math.min(n - 1, Math.floor((clamp01(dt / LIFETIME) * n)))];
+            // Animated judgements play once at the skin's frame rate, holding the last frame.
+            const f = e.frames[Math.min(n - 1, Math.floor(Math.max(0, dt) / this.chain.frameDuration(n)))];
             if (e.sprite.texture !== f.texture) e.sprite.texture = f.texture;
             e.sprite.alpha = Math.min(clamp01(dt / 120), 1 - clamp01((dt - 600) / 200));
             let pop: number;
@@ -141,7 +150,7 @@ export class Judgements extends Container {
     }
 
     private makeLight(): Sprite {
-        const s = sprite(this.glow);
+        const s = sprite(this.lighting?.texture ?? Texture.EMPTY);
         s.blendMode = 'add';
         this.lights.addChild(s);
         return s;
@@ -175,7 +184,7 @@ export class Judgements extends Container {
                 e.text.rotation = 0;
             }
         }
-        const lightBase = (this.radius * 2.6) / this.glow.width;
+        const lightBase = legacyScale(this.radius, this.lighting);
         for (let i = this.activeLights.length - 1; i >= 0; i--) {
             const l = this.activeLights[i];
             const dt = time - l.time;

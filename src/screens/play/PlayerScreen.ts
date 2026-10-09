@@ -5,7 +5,8 @@ import type { MusicTrack } from '../../audio/MusicTrack';
 import { calculateDifficulty } from '../../beatmap/difficulty';
 import { buildPlayableBeatmap } from '../../beatmap/processing';
 import type { Storyboard } from '../../beatmap/storyboard';
-import type { BeatmapSkin } from '../../skin/BeatmapSkin';
+import type { LegacySkin } from '../../skin/LegacySkin';
+import type { SkinChain } from '../../skin/SkinChain';
 import type { BeatmapData, PlayableBeatmap, PlayableSlider } from '../../beatmap/types';
 import { clamp01, damp } from '../../core/math';
 import { tween } from '../../core/Tweener';
@@ -45,7 +46,7 @@ export interface PlayerOptions {
     /** Parsed storyboard (.osb + this difficulty's events), if the map has one. */
     storyboard?: Storyboard | null;
     /** The map's own skin elements and hitsounds (owned by the loader). */
-    beatmapSkin?: BeatmapSkin | null;
+    beatmapSkin?: LegacySkin | null;
 }
 
 /** How a Player ended, read by the loader when it resumes. */
@@ -133,6 +134,8 @@ export class PlayerScreen extends Screen {
     private built = false;
     private entered = false;
     private video: BackgroundVideo | null = null;
+    /** The skins in effect for this play (beatmap → selected → default). */
+    skinChain!: SkinChain;
     private storyboard: StoryboardView | null = null;
     private storyboardLoad: Promise<void> | null = null;
     private storyboardLoaded = false;
@@ -176,9 +179,23 @@ export class PlayerScreen extends Screen {
         const o = this.options;
         const mods = o.mods;
         this.mode = inputMode(mods);
-        // "Beatmap skins" off: the map's colours go too (lazer treats them as part of its skin).
-        const useSkin = g.settings.beatmapSkin.value;
-        const data = useSkin ? o.data : { ...o.data, comboColors: [], sliderTrackOverride: null, sliderBorder: null };
+        // The skins in effect: the map's own (its images under "Beatmap skins", its .osu
+        // colours under "Beatmap colours"), then the selected skin, then wosu!'s default.
+        const set = g.settings;
+        const raw = o.data;
+        const chain = (this.skinChain = g.skins.chain({
+            skin: o.beatmapSkin ?? null,
+            textures: set.beatmapSkin.value,
+            samples: false, // the map's hitsounds follow osu!'s sample-index rules (HitsoundPlayer)
+            config: { comboColours: raw.comboColors, sliderTrackOverride: raw.sliderTrackOverride ?? undefined, sliderBorder: raw.sliderBorder ?? undefined },
+            useConfig: set.beatmapColours.value,
+        }));
+        const data = {
+            ...raw,
+            comboColors: chain.config('comboColours').slice(),
+            sliderTrackOverride: chain.config('sliderTrackOverride') ?? null,
+            sliderBorder: chain.config('sliderBorder') ?? null,
+        };
         const beatmap = (this.beatmap = buildPlayableBeatmap(data, mods));
         const d = o.data.difficulty;
         const objectCount = beatmap.hitObjects.length;
@@ -211,12 +228,13 @@ export class PlayerScreen extends Screen {
         this.input = new GameplayInput(g.app, g.settings, () => this.clock.now, { x: g.input.pointer.x, y: g.input.pointer.y });
         this.input.ignorePointer = (x, y) => this.holdButton.containsPoint(x, y) ||
             (this.skip.available && x >= this.skip.x && y >= this.skip.y && x <= this.skip.x + this.skip.w && y <= this.skip.y + this.skip.h);
-        this.hitsounds = new HitsoundPlayer(g.samples, beatmap, o.beatmapSkin ?? null);
+        this.hitsounds = new HitsoundPlayer(g.samples, beatmap, o.beatmapSkin ?? null, g.skins.current.value);
         this.hitsounds.useBeatmapSamples = g.settings.beatmapHitsounds.value;
 
         this.playfield = new Playfield({
             renderer: g.app.renderer,
-            skin: g.skin,
+            skin: chain,
+            ui: g.skin,
             beatmap,
             rules: this.rules,
             hidden: mods.has('HD'),
@@ -225,7 +243,6 @@ export class PlayerScreen extends Screen {
             snakingIn: g.settings.snakingIn.value,
             snakingOut: g.settings.snakingOut.value,
             kiaiFlashes: g.settings.kiaiFlash.value,
-            beatmapSkin: useSkin ? o.beatmapSkin ?? null : null,
         });
         this.playfield.judgements.hideGreat = g.settings.hideGreat.value;
         this.playfield.judgements.hitLighting = g.settings.hitLighting.value;

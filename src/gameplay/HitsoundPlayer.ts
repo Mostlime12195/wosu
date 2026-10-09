@@ -1,7 +1,7 @@
 import type { HitsoundName, LoopHandle, SampleBank, SampleName } from '../audio/SampleBank';
 import { sampleSetName } from '../audio/SampleBank';
 import type { PlayableBeatmap, PlayableHitObject, PlayableSlider, SampleSet } from '../beatmap/types';
-import type { BeatmapSkin } from '../skin/BeatmapSkin';
+import type { LegacySkin } from '../skin/LegacySkin';
 
 /** Stereo spread by horizontal position (lazer's balance adjust). */
 const PAN_AMOUNT = 0.8;
@@ -26,7 +26,9 @@ export class HitsoundPlayer {
     constructor(
         private readonly samples: SampleBank,
         private readonly beatmap: PlayableBeatmap,
-        private readonly custom: BeatmapSkin | null = null,
+        private readonly custom: LegacySkin | null = null,
+        /** The selected skin's hitsounds, used wherever the map doesn't override (index-less, like osu!). */
+        private readonly userSkin: LegacySkin | null = null,
     ) {}
 
     /** osu!'s sample index: the object's own, else its timing point's (0 = the game's samples). */
@@ -36,8 +38,15 @@ export class HitsoundPlayer {
 
     /** The map's override for a sample (null = silenced), or undefined to use ours. */
     private override(set: number, name: HitsoundName, index: number): AudioBuffer | null | undefined {
-        if (!this.custom || !this.useBeatmapSamples || index === 0) return undefined;
-        return this.custom.sample(`${sampleSetName(set)}-${name}`, index);
+        const key = `${sampleSetName(set)}-${name}`;
+        if (this.custom && this.useBeatmapSamples && index !== 0) {
+            const b = this.custom.sample(key, index);
+            if (b !== undefined) return b;
+        }
+        const skin = this.userSkin?.sample(key);
+        if (skin !== undefined) return skin;
+        // Skins name the spinner sounds without a sample set ("spinnerspin.wav").
+        return name === 'spinnerspin' || name === 'spinnerbonus' ? this.userSkin?.sample(name) : undefined;
     }
 
     private playOne(set: number, name: HitsoundName, index: number, volume: number, pan: number): void {
@@ -145,6 +154,12 @@ export class HitsoundPlayer {
     }
 
     comboBreak(): void {
+        const map = this.useBeatmapSamples ? this.custom?.sample('combobreak') : undefined;
+        const own = map !== undefined ? map : this.userSkin?.sample('combobreak');
+        if (own !== undefined) {
+            if (own) this.samples.playBuffer(own, 0.8);
+            return;
+        }
         this.samples.play('combobreak', 0.8);
     }
 

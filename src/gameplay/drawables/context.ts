@@ -1,9 +1,10 @@
-import { Container, Sprite, type Texture } from 'pixi.js';
+import { Container, Sprite, Texture } from 'pixi.js';
 import type { PlayableBeatmap, PlayableHitObject } from '../../beatmap/types';
 import { Easing } from '../../core/easing';
 import type { SliderResources } from '../../graphics/slider/SliderRenderer';
-import type { BeatmapSkin, SkinTexture } from '../../skin/BeatmapSkin';
+import type { SkinTexture } from '../../skin/LegacySkin';
 import type { Skin } from '../../skin/Skin';
+import type { SkinChain } from '../../skin/SkinChain';
 import type { GameplayRules } from '../GameplayRules';
 
 /**
@@ -13,9 +14,10 @@ import type { GameplayRules } from '../GameplayRules';
  * desync them from the music.
  */
 export interface DrawableContext {
-    readonly skin: Skin;
-    /** The map's own skin elements (null: none, or "Beatmap skins" off). */
-    readonly beatmapSkin: BeatmapSkin | null;
+    /** The skins in effect (beatmap → selected → default); every element comes from here. */
+    readonly skin: SkinChain;
+    /** The game's own UI atlas (non-skin textures). */
+    readonly ui: Skin;
     readonly beatmap: PlayableBeatmap;
     readonly rules: GameplayRules;
     readonly sliders: SliderResources;
@@ -70,8 +72,8 @@ export function makeKiaiFlash(beatmap: PlayableBeatmap, enabled: () => boolean):
     };
 }
 
-/** Atlas circles are 256px; this scale makes them (old WebOsu proportions) fit radius r. */
-export const circleScale = (r: number): number => r / 120;
+/** osu! skin scale: at 1x a 128px hit circle spans one diameter (@2x textures carry 0.5). */
+export const legacyScale = (radius: number, t: SkinTexture | null): number => (radius / 64) * (t?.scale ?? 1);
 
 export const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 
@@ -103,13 +105,11 @@ export function sprite(tex: Texture, scale = 1, anchor = 0.5): Sprite {
     return s;
 }
 
-/** Scale for an osu!-skin element: 128px (at 1x) spans a circle's diameter. */
-export const legacyScale = (radius: number, t: SkinTexture): number => (radius / 64) * t.scale;
-
-/** Combo number from a beatmap skin's default-N digits (osu!: 0.8× circle scale, 2px overlap). */
-function legacyComboNumber(bs: BeatmapSkin, n: number, radius: number): Container | null {
-    const digits = String(n).split('').map(ch => bs.texture(`default-${ch}`));
+/** A combo number in the skin's hit circle font, centred on (0, 0), at osu!'s 0.8 circle scale. */
+export function comboNumber(chain: SkinChain, n: number, radius: number): Container | null {
+    const digits = String(n).split('').map(ch => chain.glyph('hitCirclePrefix', ch));
     if (digits.some(d => !d)) return null;
+    const overlap = chain.config('hitCircleOverlap');
     const c = new Container();
     let x = 0;
     const parts: Sprite[] = [];
@@ -117,84 +117,48 @@ function legacyComboNumber(bs: BeatmapSkin, n: number, radius: number): Containe
         const s = sprite(d.texture, d.scale, 0);
         s.anchor.set(0, 0.5);
         s.x = x;
-        x += d.texture.width * d.scale - 2;
-        parts.push(s);
-        c.addChild(s);
-    }
-    for (const s of parts) s.x -= (x + 2) / 2;
-    c.scale.set((radius / 64) * 0.8);
-    return c;
-}
-
-/** Combo number from the score digit sprites, centred on (0, 0). */
-export function comboNumber(skin: Skin, n: number, radius: number): Container {
-    const c = new Container();
-    const digits = String(n);
-    const scale = circleScale(radius) * (digits.length === 1 ? 0.8 : digits.length === 2 ? 0.7 : 0.6);
-    let x = 0;
-    const overlap = 12;
-    const parts: Sprite[] = [];
-    for (const ch of digits) {
-        const s = sprite(skin.get(`score-${ch}.png`), 1, 0);
-        s.anchor.set(0, 0.5);
-        s.x = x;
-        x += s.texture.width - overlap;
+        x += d.texture.width * d.scale - overlap;
         parts.push(s);
         c.addChild(s);
     }
     const width = x + overlap;
     for (const s of parts) s.x -= width / 2;
-    c.scale.set(scale);
-    c.y = radius * 0.02;
+    c.scale.set((radius / 64) * 0.8);
     return c;
 }
 
 /**
- * The visual hit circle (shared by circles and slider heads): tinted base,
- * white overlay ring, combo number and an additive glow ring, plus the
- * flash used by the hit explosion.
+ * The visual hit circle shared by circles and slider heads, drawn from
+ * the skin like lazer's LegacyMainCirclePiece: the body (hitcircle, or
+ * sliderstartcircle for slider heads) tinted with the combo colour, its
+ * overlay, and the combo number above or below the overlay (skin.ini).
  */
 export class CirclePiece extends Container {
     readonly base: Sprite;
-    readonly overlay: Sprite;
-    readonly glow: Sprite;
-    readonly flash: Sprite;
-    /** lazer's KiaiFlash layer: additive white over the body, under the ring and number. */
+    readonly overlay: Sprite | null;
+    /** lazer's KiaiFlash (an opt-in extra): additive white over the body. */
     readonly kiai: Sprite;
     readonly number: Container | null;
-    /** Drawn from the beatmap's skin (osu!'s look and hit animation, no glow or kiai flash). */
-    readonly legacy: boolean;
 
     constructor(ctx: DrawableContext, h: PlayableHitObject, withNumber: boolean, sliderHead = false) {
         super();
-        const s = circleScale(ctx.radius);
+        const chain = ctx.skin;
         const color = comboColor(ctx, h);
-        const bs = ctx.beatmapSkin;
-        // Slider heads use sliderstartcircle when the map has one, else hitcircle (osu!).
-        const startCircle = sliderHead ? bs?.texture('sliderstartcircle') ?? null : null;
-        const body = startCircle ?? bs?.texture('hitcircle') ?? null;
-        const ring = startCircle ? bs?.texture('sliderstartcircleoverlay') ?? null : bs?.texture('hitcircleoverlay') ?? null;
-        this.legacy = !!(body || ring);
-        this.base = body ? sprite(body.texture, legacyScale(ctx.radius, body)) : sprite(ctx.skin.get('disc.png'), s);
+        // Slider heads use sliderstartcircle(+overlay) when the skin has it, else the hit circle.
+        const start = sliderHead ? chain.texture('sliderstartcircle') : null;
+        const body = start ?? chain.texture('hitcircle');
+        const ring = start ? chain.texture('sliderstartcircleoverlay') : chain.frames('hitcircleoverlay')[0] ?? null;
+        this.base = sprite(body?.texture ?? Texture.EMPTY, legacyScale(ctx.radius, body));
         this.base.tint = color;
-        this.overlay = ring ? sprite(ring.texture, legacyScale(ctx.radius, ring)) : sprite(ctx.skin.get('hitcircleoverlay.png'), s);
-        this.glow = sprite(ctx.skin.get('ring-glow.png'), s * 0.92);
-        this.glow.tint = color;
-        this.glow.blendMode = 'add';
-        this.flash = sprite(ctx.skin.get('hitburst.png'), s);
-        this.flash.alpha = 0;
-        this.flash.blendMode = 'add';
-        this.kiai = sprite(ctx.skin.get('hitburst.png'), s);
+        this.kiai = sprite(body?.texture ?? Texture.EMPTY, legacyScale(ctx.radius, body));
         this.kiai.blendMode = 'add';
-        this.kiai.alpha = 0;
         this.kiai.visible = false;
-        this.addChild(this.base, this.kiai, this.overlay);
-        this.number = withNumber && !ctx.hideNumbers
-            ? (bs && legacyComboNumber(bs, h.comboNumber, ctx.radius)) ?? comboNumber(ctx.skin, h.comboNumber, ctx.radius)
-            : null;
-        if (this.number) this.addChild(this.number);
-        this.addChild(this.glow, this.flash);
-        if (this.legacy) this.glow.visible = false;
+        this.overlay = ring ? sprite(ring.texture, legacyScale(ctx.radius, ring)) : null;
+        this.number = withNumber && !ctx.hideNumbers ? comboNumber(chain, h.comboNumber, ctx.radius) : null;
+        this.addChild(this.base, this.kiai);
+        const parts = [this.overlay, this.number].filter((p): p is Container => !!p);
+        if (!chain.config('hitCircleOverlayAboveNumber')) parts.reverse();
+        if (parts.length) this.addChild(...parts);
         this.eventMode = 'none';
     }
 
@@ -203,49 +167,31 @@ export class CirclePiece extends Container {
         this.visible = a > 0.001;
         this.alpha = a;
         this.scale.set(1);
-        this.base.visible = this.overlay.visible = true;
+        this.base.visible = true;
+        if (this.overlay) this.overlay.visible = true;
         if (this.number) this.number.visible = true;
-        this.glow.alpha = 0.5;
-        this.flash.alpha = 0;
-        this.kiai.visible = !this.legacy && kiai > 0.001;
+        this.kiai.visible = kiai > 0.001;
         this.kiai.alpha = kiai;
     }
 
     /**
-     * lazer's MainCirclePiece hit animation, `dt` ms after the hit: a white
-     * flash, the piece swelling to 1.5×, the circle itself vanishing under
-     * the flash and the glow fading out.
+     * osu!'s hit animation (lazer's LegacyMainCirclePiece), `dt` ms after
+     * the hit: the circle swells to 1.4× and fades out over 240ms; the
+     * number disappears at once.
      */
     showHit(dt: number): boolean {
-        if (this.legacy) {
-            // osu!'s legacy hit: the circle swells to 1.4× and fades over 240ms; the number goes at once.
-            if (dt >= 240) {
-                this.visible = false;
-                return false;
-            }
-            const k = clamp01(dt / 240);
-            this.visible = true;
-            this.alpha = 1 - k;
-            this.scale.set(1 + 0.4 * Easing.OutQuad(k));
-            this.base.visible = this.overlay.visible = true;
-            if (this.number) this.number.visible = false;
-            this.kiai.visible = false;
-            this.flash.alpha = 0;
-            return true;
-        }
-        if (dt >= 800) {
+        if (dt >= 240) {
             this.visible = false;
             return false;
         }
+        const k = clamp01(dt / 240);
         this.visible = true;
-        this.alpha = 1 - clamp01(dt / 800);
-        this.scale.set(1 + 0.5 * Easing.OutQuad(clamp01(dt / 400)));
-        const solid = dt < 40;
+        this.alpha = 1 - k;
+        this.scale.set(1 + 0.4 * Easing.OutQuad(k));
+        this.base.visible = true;
+        if (this.overlay) this.overlay.visible = true;
+        if (this.number) this.number.visible = false;
         this.kiai.visible = false;
-        this.base.visible = this.overlay.visible = solid;
-        if (this.number) this.number.visible = solid;
-        this.flash.alpha = dt < 40 ? 0.8 * (dt / 40) : 0.8 * (1 - clamp01((dt - 40) / 100));
-        this.glow.alpha = 0.6 * (1 - clamp01(dt / 400));
         return true;
     }
 
@@ -255,19 +201,19 @@ export class CirclePiece extends Container {
         this.visible = a > 0.001;
         this.alpha = a;
         this.scale.set(1);
-        this.flash.alpha = 0;
+        this.kiai.visible = false;
         return this.visible;
     }
 }
 
-/** Approach circle: 4× → 1× over the preempt, fading in over 2× fade-in. */
+/** Approach circle: 4× → 1× over the preempt, fading in over 2× fade-in, tinted with the combo colour. */
 export class ApproachCircle extends Sprite {
     private readonly baseScale: number;
 
     constructor(ctx: DrawableContext, color: number) {
-        const own = ctx.beatmapSkin?.texture('approachcircle') ?? null;
-        super(own ? own.texture : ctx.skin.get('approachcircle.png'));
-        this.baseScale = own ? legacyScale(ctx.radius, own) : circleScale(ctx.radius);
+        const t = ctx.skin.texture('approachcircle');
+        super(t?.texture ?? Texture.EMPTY);
+        this.baseScale = legacyScale(ctx.radius, t);
         this.anchor.set(0.5);
         this.tint = color;
         this.eventMode = 'none';

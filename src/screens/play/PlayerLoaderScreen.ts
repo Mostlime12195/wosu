@@ -17,7 +17,7 @@ import { UIComponent } from '../../ui/UIComponent';
 import { modAdjustedStars } from '../select/modStars';
 import { coverFill, formatStars, setBackground } from '../select/visuals';
 import { parseStoryboard, type Storyboard } from '../../beatmap/storyboard';
-import { BeatmapSkin } from '../../skin/BeatmapSkin';
+import { LegacySkin } from '../../skin/LegacySkin';
 import type { OszArchive } from '../../beatmap/archive';
 import { PlayerScreen } from './PlayerScreen';
 
@@ -68,7 +68,7 @@ export class PlayerLoaderScreen extends Screen {
     private shownFor = 0;
     private pushed = false;
     private storyboard: Storyboard | null = null;
-    private beatmapSkin: BeatmapSkin | null = null;
+    private beatmapSkin: LegacySkin | null = null;
     private cancelled = false;
     private retries = 0;
     /** Built and warmed up behind the loader; pushed once ready. */
@@ -190,7 +190,7 @@ export class PlayerLoaderScreen extends Screen {
             if (this.cancelled) return this.handBackTrack();
             // The map's own skin elements and hitsounds (both toggled in the visual/audio settings).
             const customFiles = data.hitObjects.map(h => h.hitSample.filename).filter(Boolean);
-            this.beatmapSkin = await BeatmapSkin.load(archive, g.audio.context, { textures: true, samples: true, customFiles });
+            this.beatmapSkin = await LegacySkin.load(archive, g.audio.context, { ini: false, customSampleFiles: customFiles });
             if (this.cancelled) return this.handBackTrack();
             this.data = data;
             g.library.markPlayed(set.key);
