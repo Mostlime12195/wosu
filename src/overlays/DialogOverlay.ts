@@ -28,6 +28,8 @@ const WIDTH = 440;
  * confirms, Esc / clicking outside cancels. Calls are queued.
  */
 export class DialogOverlay extends Overlay {
+    protected override readonly popInSample = 'UI/dialog-pop-in';
+    protected override readonly popOutSample = 'UI/dialog-pop-out';
     override readonly exclusive = false;
     private readonly card = new Container();
     private queue: Promise<unknown> = Promise.resolve();
@@ -67,7 +69,10 @@ export class DialogOverlay extends Overlay {
         if (this.state.value) this.hide();
     }
 
+    private danger = false;
+
     private build(o: ConfirmOptions): void {
+        this.danger = !!o.danger;
         for (const c of this.card.removeChildren()) c.destroy({ children: true });
         const accent = o.danger ? 0xc23a5a : Colors.purpleDark;
         const pad = 28;
@@ -98,11 +103,11 @@ export class DialogOverlay extends Overlay {
         const footer = new Box({ color: 0x1e1c24, radius: 10, corners: 'bottom' });
         this.card.addChild(footer);
         let y = headerH + 16;
-        const confirm = new Button(o.confirmText ?? 'OK', { color: o.danger ? Colors.red : Colors.pink, width: WIDTH - 32, height: 46, triangles: this.game.skin.tex('triangle'), fontSize: 16 });
+        const confirm = new Button(o.confirmText ?? 'OK', { color: o.danger ? Colors.red : Colors.pink, width: WIDTH - 32, height: 46, triangles: this.game.skin.tex('triangle'), fontSize: 16, selectSample: o.danger ? 'UI/dialog-dangerous-select' : 'UI/dialog-ok-select' });
         confirm.position.set(16, y);
         confirm.onActivate = () => this.settle(true);
         y += 54;
-        const cancel = new Button(o.cancelText ?? 'Cancel', { color: Colors.gray4, width: WIDTH - 32, height: 46, fontSize: 16 });
+        const cancel = new Button(o.cancelText ?? 'Cancel', { color: Colors.gray4, width: WIDTH - 32, height: 46, fontSize: 16, selectSample: 'UI/dialog-cancel-select' });
         cancel.position.set(16, y);
         cancel.onActivate = () => this.settle(false);
         y += 46 + 16;
@@ -137,11 +142,12 @@ export class DialogOverlay extends Overlay {
 
     override onKey(_e: KeyboardEvent, action: Action | null): boolean {
         if (action === 'select') {
+            this.game.uiSounds.play(this.danger ? 'UI/dialog-dangerous-select' : 'UI/dialog-ok-select');
             this.settle(true);
             return true;
         }
         if (action === 'back') {
-            this.game.uiSounds.back();
+            this.game.uiSounds.play('UI/dialog-cancel-select');
             this.settle(false);
             return true;
         }

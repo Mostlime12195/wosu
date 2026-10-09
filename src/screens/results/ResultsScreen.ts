@@ -1,3 +1,4 @@
+import { delay } from '../../core/Tweener';
 import { Container, Rectangle } from 'pixi.js';
 import { Screen } from '../../app/Screen';
 import type { Selection } from '../../app/Game';
@@ -40,7 +41,7 @@ export class ResultsScreen extends Screen {
     override load(): void {
         const g = this.game;
         this.panel = new ScorePanel(g, this.result, this.selection);
-        this.panel.onRankRevealed = () => (this.result.passed ? g.uiSounds.select() : g.uiSounds.error());
+        this.panel.onRankRevealed = () => this.playRankSounds();
         this.stats = new StatisticsPanel(this.result, this.selection);
         this.panelWrap.addChild(this.panel);
         this.statsWrap.addChild(this.stats);
@@ -109,6 +110,23 @@ export class ResultsScreen extends Screen {
         this.applyTime();
     }
 
+    /** lazer's AccuracyCircle: rank impact, then applause for the grade. */
+    private playRankSounds(): void {
+        const s = this.game.uiSounds;
+        const grade = this.result.passed ? this.result.grade : 'F';
+        const impact = grade === 'X' || grade === 'XH' ? 'Results/rank-impact-pass-ss'
+            : grade === 'S' || grade === 'SH' || grade === 'A' ? 'Results/rank-impact-pass'
+                : grade === 'B' || grade === 'C' ? 'Results/rank-impact-fail'
+                    : 'Results/rank-impact-fail-d';
+        s.play(impact);
+        const applause = grade === 'X' || grade === 'XH' || grade === 'S' || grade === 'SH' ? 'Results/applause-s'
+            : grade === 'A' ? 'Results/applause-a'
+                : grade === 'B' ? 'Results/applause-b'
+                    : grade === 'C' ? 'Results/applause-c'
+                        : grade === 'D' ? 'Results/applause-d' : null;
+        if (applause) delay(200, () => { if (!this.destroyed) s.play(applause, { volume: 0.8 }); }, this);
+    }
+
     override onEntering(): void {
         const bg = this.game.background;
         bg.setBlur(0.5, 800);
@@ -117,6 +135,7 @@ export class ResultsScreen extends Screen {
         this.alpha = 0;
         this.fadeIn(300);
         this.clock = 0;
+        this.game.uiSounds.play('Results/swoosh-up', { volume: 0.6 });
         this.applyTime();
     }
 

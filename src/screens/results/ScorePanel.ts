@@ -9,6 +9,7 @@ import { icon } from '../../ui/icons';
 import { counterText, fitText, label } from '../../ui/text';
 import { Colors, starColor, starTextColor } from '../../ui/theme';
 import { UIComponent } from '../../ui/UIComponent';
+import { uiSounds } from '../../ui/UIContext';
 import { AccuracyCircle } from './AccuracyCircle';
 import { ModPill } from './ModPill';
 import { clamp01, easeOutPow, easeOutQuint, formatDate, gaugeTarget } from './resultsMath';
@@ -306,6 +307,8 @@ export class ScorePanel extends UIComponent {
         // The total rolls up alongside the gauge (lazer starts both at 450ms).
         this.scoreWrap.alpha = clamp01((t - T_FILL_START) / 150);
         const shown = Math.round(r.score * kFill);
+        // lazer's score tick: rapid ticks while the gauge fills, rising in pitch.
+        if (kFill > 0 && kFill < 0.995 && t < T_RANK) uiSounds()?.play('Results/score-tick', { rate: 1 + kFill * 0.5, throttle: 45, volume: 0.6 });
         if (shown !== this.lastScoreShown) {
             this.lastScoreShown = shown;
             this.scoreText.text = formatNumber(shown);

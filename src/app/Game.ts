@@ -187,6 +187,7 @@ export class Game {
         MusicTrack.diagnostics.add(msg => this.notifications.warning(msg));
         this.downloads.added.add(task => this.trackDownload(task));
         void this.samples.load().catch(e => console.warn('hitsounds failed to load', e));
+        void this.uiSounds.load();
         await Promise.all([
             this.library.init().catch(e => console.error('library init failed', e)),
             this.scores.init().catch(e => console.error('score store init failed', e)),

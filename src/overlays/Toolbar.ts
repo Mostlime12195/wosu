@@ -28,7 +28,7 @@ class ToolbarButton extends UIComponent {
             this.addChild(this.caption);
         }
         this.tooltip = tooltip;
-        this.makeInteractive();
+        this.makeInteractive({ sounds: 'toolbar' });
         if (active) this.disposer.add(active.bind(v => tween(this.activeBar, { alpha: v ? 1 : 0 }, { duration: 200 }), true));
         this.resize(this.caption ? 48 + this.caption.width : Metrics.toolbarHeight + 4, Metrics.toolbarHeight);
     }

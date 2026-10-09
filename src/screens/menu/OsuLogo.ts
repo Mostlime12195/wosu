@@ -158,7 +158,7 @@ export class OsuLogo extends UIComponent {
     }
 
     protected override onClick(): void {
-        uiSounds()?.select();
+        uiSounds()?.play('Menu/osu-logo-select');
         this.flash.alpha = 0.4;
         tween(this.flash, { alpha: 0 }, { duration: 500, ease: 'OutQuint' });
         this.onClickLogo?.();

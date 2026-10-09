@@ -53,7 +53,7 @@ export class GameSettings {
     readonly keyOverlay = new Bindable(true);
     readonly keyOverlayStyle = new Bindable<KeyOverlayStyle>('lazer');
     readonly progressBar = new Bindable(true);
-    readonly progressGraph = new Bindable(true);
+    readonly progressGraph = new Bindable(false);
     readonly hitLighting = new Bindable(true);
     readonly hideNumbers = new Bindable(false);
     readonly hideGreat = new Bindable(false);

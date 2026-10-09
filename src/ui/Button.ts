@@ -19,6 +19,8 @@ export interface ButtonOptions {
     triangles?: Texture;
     width?: number;
     height?: number;
+    /** Sample played when pressed (default: lazer's button-select). */
+    selectSample?: string;
 }
 
 /**
@@ -66,7 +68,7 @@ export class Button extends UIComponent {
             this.body.addChild(this.iconText);
         }
         this.addChild(this.body);
-        this.makeInteractive();
+        this.makeInteractive({ sounds: 'button', selectSample: opts.selectSample });
         this.resize(opts.width ?? 140, opts.height ?? 40);
     }
 

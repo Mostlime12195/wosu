@@ -3,6 +3,7 @@ import { tween } from '../../core/Tweener';
 import { label } from '../../ui/text';
 import { Fonts, gradeColor, gradeLabel } from '../../ui/theme';
 import { UIComponent } from '../../ui/UIComponent';
+import { uiSounds } from '../../ui/UIContext';
 import type { Grade } from '../../storage/ScoreStore';
 import { GRADE_SPACING, RANK_CUTOFFS, VIRTUAL_SS } from './resultsMath';
 
@@ -221,6 +222,9 @@ export class AccuracyCircle extends UIComponent {
             if (!b.eligible || b.lit) continue;
             if (b.at >= 1 ? p >= 0.9999 : p >= b.at) {
                 b.lit = true;
+                // lazer's badge dinks rise in pitch; the SS badge gets its own.
+                if (b.at >= 1) uiSounds()?.play('Results/badge-dink-max');
+                else uiSounds()?.play('Results/badge-dink', { rate: 1 + b.at * 0.25 });
                 // lazer's RankBadge.Appear: quick fade in with a glow pulse.
                 b.c.alpha = 1;
                 b.c.scale.set(1.35);

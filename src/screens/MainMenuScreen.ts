@@ -4,6 +4,7 @@ import type { NowPlaying } from '../app/MusicController';
 import { tween, delay } from '../core/Tweener';
 import type { Action } from '../input/bindings';
 import { label, fitText } from '../ui/text';
+import { uiSounds } from '../ui/UIContext';
 import { Colors } from '../ui/theme';
 import { MenuButton, MENU_BUTTON_HEIGHT, MENU_WEDGE, type MenuButtonState } from './menu/MenuButton';
 import { OsuLogo } from './menu/OsuLogo';
@@ -92,7 +93,7 @@ export class MainMenuScreen extends Screen {
         imp.onActivate = () => this.game.pickFiles();
         this.playButtons = [solo, imp];
 
-        const play = new MenuButton('play', 'play', 0x6644cc, ['KeyP'], { left: MENU_WEDGE });
+        const play = new MenuButton('play', 'play', 0x6644cc, ['KeyP'], { left: MENU_WEDGE }, 'Menu/button-play-select');
         play.onActivate = () => this.setState('play');
         const browse = new MenuButton('browse', 'download', 0xa5cc00, ['KeyB', 'KeyD']);
         browse.onActivate = () => this.game.listing.show();
@@ -190,6 +191,9 @@ export class MainMenuScreen extends Screen {
         // lazer delays the button area by 150ms when leaving the lone logo,
         // so the logo has started shrinking into place first.
         const delay = prev === 'initial' ? 150 : 0;
+        // lazer's ButtonSystem state sounds.
+        if (s === 'initial' && prev !== 'exit') uiSounds()?.play('Menu/back-to-logo');
+        else if (s === 'top' && prev === 'play') uiSounds()?.play('Menu/back-to-top');
         for (const f of [...this.leftFlow, ...this.rightFlow]) f.button.setState(this.buttonStateFor(f, s), { delay });
         tween(this.area, { alpha: buttonsOn ? 1 : 0 }, { duration: 300, ease: 'None', delay });
         if (buttonsOn) tween(this.band, { scaleY: 1 }, { duration: 400, ease: 'OutQuint', delay });

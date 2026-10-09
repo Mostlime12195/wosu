@@ -5,9 +5,15 @@ import type { Container } from 'pixi.js';
  * every constructor: popup layer (dropdowns must escape scroll masks),
  * tooltips, sounds and the text-entry bridge. Installed once at boot.
  */
+export type UISampleSet = 'default' | 'button' | 'toolbar' | 'tab' | 'submit' | 'sidebar' | 'menu';
+
 export interface UISoundsLike {
-    hover(): void;
-    click(): void;
+    hover(set?: UISampleSet): void;
+    click(set?: UISampleSet): void;
+    denied(): void;
+    typed(): void;
+    tick(normalized: number): void;
+    play(name: string, opts?: { volume?: number; rate?: number; throttle?: number }): boolean;
     select(): void;
     back(): void;
     toggleOn(): void;

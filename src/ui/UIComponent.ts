@@ -2,12 +2,14 @@ import { Container, Rectangle, type DestroyOptions, type FederatedPointerEvent }
 import { Disposer } from '../core/Signal';
 import { tweener, type TweenOptions, type Tween } from '../core/Tweener';
 import { lerpColor } from '../core/math';
-import { gesture, ui, uiSounds } from './UIContext';
+import { gesture, ui, uiSounds, type UISampleSet } from './UIContext';
 import { frame, scene } from '../core/frame';
 
 export interface InteractiveOptions {
-    /** Play hover/click UI sounds (default true). */
-    sounds?: boolean;
+    /** Play hover/click UI sounds (default true), or which lazer sample set to use. */
+    sounds?: boolean | UISampleSet;
+    /** A specific sample to play on activation instead of the set's select sound (null: none). */
+    selectSample?: string | null;
     /** Use a rectangular hit area matching the logical size (default true). */
     rectHitArea?: boolean;
 }
@@ -108,7 +110,7 @@ export class UIComponent extends Container {
     private handleOver(): void {
         if (!this._enabled) return;
         this.hovered = true;
-        if (this.interactiveOpts?.sounds !== false) uiSounds()?.hover();
+        if (this.interactiveOpts?.sounds !== false) uiSounds()?.hover(this.sampleSet);
         if (this._tooltip) ui().tooltips.show(this._tooltip, this);
         this.onHoverChange(true);
     }
@@ -138,8 +140,17 @@ export class UIComponent extends Container {
         if (this.hovered) this.handleOut();
     }
 
+    private get sampleSet(): UISampleSet {
+        const s = this.interactiveOpts?.sounds;
+        return typeof s === 'string' ? s : 'default';
+    }
+
     private handleTap(e: FederatedPointerEvent): void {
-        if (!this._enabled || e.button > 0) return;
+        if (e.button > 0) return;
+        if (!this._enabled) {
+            if (this.interactiveOpts && this.interactiveOpts.sounds !== false) uiSounds()?.denied();
+            return;
+        }
         if (gesture.suppressClicks) return;
         this.activate();
     }
@@ -147,7 +158,11 @@ export class UIComponent extends Container {
     /** Programmatic activation (also used by keyboard navigation). */
     activate(): void {
         if (!this._enabled) return;
-        if (this.interactiveOpts?.sounds !== false) uiSounds()?.click();
+        const o = this.interactiveOpts;
+        if (o?.sounds !== false) {
+            if (o?.selectSample === undefined) uiSounds()?.click(this.sampleSet);
+            else if (o.selectSample) uiSounds()?.play(o.selectSample);
+        }
         this.onClick();
         this.onActivate?.();
     }

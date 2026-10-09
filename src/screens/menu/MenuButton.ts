@@ -60,6 +60,8 @@ export class MenuButton extends UIComponent {
         private readonly color: number,
         hotkeys: string[] = [],
         private readonly pad: { left?: number; right?: number } = {},
+        /** lazer's MainMenuButton sampleName (play uses its own). */
+        selectSample: string = 'Menu/button-default-select',
     ) {
         super();
         this.hotkeys = hotkeys;
@@ -72,7 +74,7 @@ export class MenuButton extends UIComponent {
         this.iconHolder.addChild(this.glyph);
         this.content.addChild(this.iconHolder, this.caption);
         this.addChild(this.shadow, this.slab, this.flash, this.content);
-        this.makeInteractive({ sounds: true });
+        this.makeInteractive({ sounds: 'menu', selectSample });
         this._h = MENU_BUTTON_HEIGHT;
         this.alpha = 0;
         this.visible = false;

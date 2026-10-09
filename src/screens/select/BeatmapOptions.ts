@@ -43,7 +43,7 @@ class OptionButton extends UIComponent {
         this.second.anchor.set(0.5, 0);
         this.body.addChild(this.bg, this.glyph, this.first, this.second);
         this.addChild(this.body);
-        this.makeInteractive();
+        this.makeInteractive({ sounds: 'button' });
         this.resize(BUTTON_W, BUTTON_H);
     }
 
@@ -79,6 +79,8 @@ class OptionButton extends UIComponent {
  * the footer's "options" button. Picking one closes the band first.
  */
 export class BeatmapOptionsOverlay extends Overlay {
+    protected override readonly popInSample = 'SongSelect/options-pop-in';
+    protected override readonly popOutSample = 'SongSelect/options-pop-out';
     override readonly exclusive = false;
     private readonly band = new Container();
     private readonly shade = new Graphics();

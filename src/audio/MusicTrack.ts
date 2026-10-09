@@ -163,6 +163,7 @@ export class MusicTrack {
     private readonly engine: AudioEngine;
     private readonly ctx: BaseAudioContext;
     private readonly gain: GainNode;
+    private failFilters: BiquadFilterNode[] | null = null;
     private decoded: AudioBuffer | null;
     private readonly durationSec: number;
     private channelCount: number;
@@ -378,22 +379,63 @@ export class MusicTrack {
     }
 
     /**
-     * osu!'s fail effect: the song winds down (pitch drops toward zero)
-     * while fading out. The position clock is not adjusted; callers stop
-     * using it once a play has failed.
+     * lazer's fail effect (FailAnimationContainer): the song slows to a
+     * stop (speed and pitch together), its volume halves, a high-pass sits
+     * at 300 Hz and a low-pass sweeps down to 300 Hz (OutCubic), leaving a
+     * thin, muffled wind-down. The position clock is not adjusted; callers
+     * stop using it once a play has failed. Undone by the next playback.
      */
     failSlowdown(ms: number): void {
-        const now = this.ctx.currentTime;
-        // Only a plain buffer source can bend pitch; the stretch worklet just fades.
+        const ctx = this.ctx;
+        const now = ctx.currentTime;
+        const end = now + ms / 1000;
+        // Only a plain buffer source can bend speed; the stretch worklet fades out instead.
         const rate = (this.source as AudioBufferSourceNode | null)?.playbackRate;
         if (rate && typeof rate.linearRampToValueAtTime === 'function') {
             try {
                 rate.cancelScheduledValues(now);
                 rate.setValueAtTime(rate.value, now);
-                rate.linearRampToValueAtTime(0.05, now + ms / 1000);
+                rate.linearRampToValueAtTime(0.001, end);
             } catch { /* ignore */ }
+        } else {
+            void this.fadeTo(0, ms);
         }
-        void this.fadeTo(0, ms);
+        rampParam(this.gain.gain, this._volume * 0.5, now, 0);
+        try {
+            this.clearFailEffect();
+            const hp = ctx.createBiquadFilter();
+            hp.type = 'highpass';
+            hp.frequency.value = 300;
+            const lp = ctx.createBiquadFilter();
+            lp.type = 'lowpass';
+            const from = Math.min(22000, ctx.sampleRate / 2);
+            const curve = new Float32Array(64);
+            for (let i = 0; i < curve.length; i++) {
+                const t = i / (curve.length - 1);
+                const k = 1 - Math.pow(1 - t, 3); // OutCubic
+                curve[i] = from + (300 - from) * k;
+            }
+            lp.frequency.setValueAtTime(from, now);
+            lp.frequency.setValueCurveAtTime(curve, now, ms / 1000);
+            this.gain.disconnect();
+            this.gain.connect(hp);
+            hp.connect(lp);
+            lp.connect(this.engine.musicBus);
+            this.failFilters = [hp, lp];
+        } catch {
+            /* filters are an effect only */
+        }
+    }
+
+    /** Remove the fail filters (a retry or the menu reuses this track). */
+    private clearFailEffect(): void {
+        if (!this.failFilters) return;
+        for (const f of this.failFilters) try { f.disconnect(); } catch { /* ignore */ }
+        this.failFilters = null;
+        try { this.gain.disconnect(); } catch { /* ignore */ }
+        this.gain.connect(this.engine.musicBus);
+        // Undo the halved volume too.
+        rampParam(this.gain.gain, this._volume, this.ctx.currentTime, 0);
     }
 
     dispose(): void {
@@ -495,6 +537,7 @@ export class MusicTrack {
     }
 
     private startSource(when: number, offset: number): void {
+        this.clearFailEffect();
         if (this.stretch) {
             const stretch = this.stretch;
             if (!this.stretchConnected) {

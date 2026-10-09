@@ -129,7 +129,7 @@ export class SongSelectScreen extends Screen {
         const f = this.footer;
         f.back.onActivate = () => this.goBack();
         f.mods.onActivate = () => this.modSelect.toggle();
-        f.random.onActivate = () => (this.shiftHeld ? this.carousel.rewind() : this.carousel.random());
+        f.random.onActivate = () => (this.shiftHeld ? this.carousel.rewind() : this.random());
         f.random.on('rightclick', (e: FederatedPointerEvent) => {
             e.stopPropagation();
             this.carousel.rewind();
@@ -159,7 +159,11 @@ export class SongSelectScreen extends Screen {
         this.filter.search.committed.add(() => this.playSelected());
         this.filter.search.onArrow = d => this.carousel.moveSet(d);
 
-        this.carousel.selectionChanged.add((e, d) => this.onSelected(e.set, d));
+        this.carousel.selectionChanged.add((e, d) => {
+            // lazer's carousel sounds: a new set expands, a new difficulty clicks.
+            if (!this.randomizing) uiSounds()?.play(e.set.key === this.current?.set.key ? 'SongSelect/select-difficulty' : 'SongSelect/select-expand', { throttle: 40 });
+            this.onSelected(e.set, d);
+        });
         this.carousel.activated.add((e, d) => this.startPlay(e.set, d));
 
         const d = this.disposer;
@@ -327,6 +331,19 @@ export class SongSelectScreen extends Screen {
         this.carousel.selectByKey(n.set.key);
     }
 
+    private randomizing = false;
+
+    /** Random pick with lazer's random sound instead of the expand sound. */
+    private random(): void {
+        uiSounds()?.play('SongSelect/select-random');
+        this.randomizing = true;
+        try {
+            this.carousel.random();
+        } finally {
+            this.randomizing = false;
+        }
+    }
+
     private playSelected(): void {
         const e = this.carousel.selectedEntry, d = this.carousel.selectedDiff;
         if (e && d) this.startPlay(e.set, d);
@@ -334,6 +351,7 @@ export class SongSelectScreen extends Screen {
 
     private startPlay(set: LibrarySet, diff: DifficultySummary): void {
         if (!this.isCurrent) return;
+        uiSounds()?.play('SongSelect/confirm-selection');
         if (this.current?.set.key !== set.key || this.current.diff !== diff) this.onSelected(set, diff);
         // Don't start decoding the song now; the player loader loads it.
         this.pending?.cancel();
@@ -626,7 +644,7 @@ export class SongSelectScreen extends Screen {
                 this.carousel.last();
                 return true;
             case 'random':
-                this.carousel.random();
+                this.random();
                 return true;
             case 'randomRewind':
                 this.carousel.rewind();

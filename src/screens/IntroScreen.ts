@@ -111,7 +111,7 @@ export class IntroScreen extends Screen {
         if (!this.waiting || !this.isCurrent) return;
         this.waiting = false;
         void this.game.audio.unlock();
-        this.game.uiSounds.select();
+        this.game.uiSounds.play('Menu/osu-logo-select');
         tween(this.hint, { alpha: 0 }, { duration: 200 });
         tween(this.disclaimer, { alpha: 0 }, { duration: 400 });
         tween(this.tip, { alpha: 0 }, { duration: 400 });

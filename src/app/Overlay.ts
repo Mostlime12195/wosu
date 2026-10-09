@@ -56,7 +56,7 @@ export abstract class Overlay extends UIComponent {
         this.keyOff?.();
         this.keyOff = this.game.input.pushKeyHandler((e, a) => this.onKey(e, a), KeyPriority.overlay);
         if (this.modal) tween(this.backdrop, { alpha: this.backdropAlpha }, { duration: 300 });
-        uiSounds()?.select();
+        if (this.popInSample) uiSounds()?.play(this.popInSample);
         this.popIn();
     }
 
@@ -65,10 +65,15 @@ export abstract class Overlay extends UIComponent {
         this.keyOff = null;
         this.eventMode = 'none';
         tween(this.backdrop, { alpha: 0 }, { duration: 300 });
+        if (this.popOutSample) uiSounds()?.play(this.popOutSample);
         this.popOut().then(() => {
             if (!this.state.value) this.visible = false;
         });
     }
+
+    /** lazer's overlay sounds (null for silence). */
+    protected readonly popInSample: string | null = 'UI/overlay-pop-in';
+    protected readonly popOutSample: string | null = 'UI/overlay-pop-out';
 
     /** Show animation. */
     protected abstract popIn(): void;
@@ -79,7 +84,6 @@ export abstract class Overlay extends UIComponent {
     onKey(_e: KeyboardEvent, action: Action | null): boolean {
         if (action === 'back') {
             this.hide();
-            uiSounds()?.back();
             return true;
         }
         return false;

@@ -35,6 +35,8 @@ const SWALLOWED: ReadonlySet<Action> = new Set<Action>([
  * opens its difficulties. Slides in behind lazer's coloured waves.
  */
 export class BeatmapListingOverlay extends Overlay {
+    protected override readonly popInSample = 'UI/overlay-big-pop-in';
+    protected override readonly popOutSample = 'UI/overlay-big-pop-out';
     private readonly colors = new ColorProvider('blue');
     private readonly waves: Graphics[] = [];
     private readonly panel = new Container();

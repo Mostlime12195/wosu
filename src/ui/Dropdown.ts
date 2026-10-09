@@ -6,7 +6,7 @@ import { icon } from './icons';
 import { label, fitText } from './text';
 import { Colors } from './theme';
 import { UIComponent } from './UIComponent';
-import { ui } from './UIContext';
+import { ui, uiSounds } from './UIContext';
 import { ScrollContainer } from './ScrollContainer';
 import { drawSheared, shearedHitArea } from './ShearedButton';
 
@@ -67,7 +67,8 @@ export class Dropdown<T> extends UIComponent {
             this.header = new Box({ color: 0x000000, alpha: 0.5, radius: 5 });
             this.addChild(this.header, this.valueText, this.chevron);
         }
-        this.makeInteractive();
+        // Opening/closing have their own sounds.
+        this.makeInteractive({ selectSample: null });
         this.disposer.add(bindable.bind(() => this.refresh(), true));
         this.resize(200, 36);
     }
@@ -119,6 +120,7 @@ export class Dropdown<T> extends UIComponent {
             this.closeMenu();
             return;
         }
+        uiSounds()?.play('UI/dropdown-open');
         const menu = new DropdownMenu(this.items, this.bindable.value, v => {
             this.bindable.value = v;
             this.closeMenu();
@@ -151,6 +153,7 @@ export class Dropdown<T> extends UIComponent {
         const m = this.menu;
         if (!m) return;
         this.menu = null;
+        uiSounds()?.play('UI/dropdown-close');
         tween(this.chevron, { rotation: 0 }, { duration: 200 });
         if (Dropdown.popupHook) Dropdown.popupHook.close(m);
         m.fadeOut(150).finished.then(() => m.destroy());

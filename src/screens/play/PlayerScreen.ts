@@ -86,6 +86,9 @@ export class PlayerScreen extends Screen {
     private mode: InputMode = 'normal';
     private readonly root = new Container();
     private readonly fieldWrap = new Container();
+    /** Everything the fail animation shrinks, tilts and greys (lazer's FailAnimationContainer.Content). */
+    private readonly failContent = new Container();
+    private readonly failBacking = new Graphics();
     private readonly flashlight = new Container();
     private flashlightHole!: Sprite;
     private readonly flashlightFill = new Graphics();
@@ -228,7 +231,10 @@ export class PlayerScreen extends Screen {
         this.holdButton.onHeld = () => this.pause();
         this.failFlash.alpha = 0;
         this.retryFade.alpha = 0;
-        this.root.addChild(this.fieldWrap, this.flashlight, this.hud, this.failFlash, this.skip, this.holdButton, this.resume, this.menu, this.retryFade);
+        this.failBacking.visible = false;
+        this.failContent.addChild(this.failBacking, this.fieldWrap, this.flashlight, this.hud);
+        this.failFlash.blendMode = 'add';
+        this.root.addChild(this.failContent, this.failFlash, this.skip, this.holdButton, this.resume, this.menu, this.retryFade);
         this.addChild(this.root);
         this.eventMode = 'passive';
 
@@ -339,7 +345,8 @@ export class PlayerScreen extends Screen {
         this.menu.resize(w, h);
         this.skip.position.set(w - this.skip.w - 24, h - this.skip.h - 130);
         this.holdButton.position.set(w - this.holdButton.w - 16, h - this.holdButton.h - 64);
-        this.failFlash.clear().rect(0, 0, w, h).fill(0xff2a4a);
+        this.failFlash.clear().rect(0, 0, w, h).fill(0xff0000);
+        this.failBacking.clear().rect(0, 0, w, h).fill(0x000000);
         this.retryFade.clear().rect(0, 0, w, h).fill(0x000000);
     }
 
@@ -703,21 +710,31 @@ export class PlayerScreen extends Screen {
         this.hitsounds.stopAll();
         this.clock.freeze();
         this.options.track.failSlowdown(FAIL_DURATION);
+        this.game.uiSounds.play('Gameplay/failsound');
         this.menu.visible = false;
-        this.failFlash.alpha = 0.35;
-        tween(this.failFlash, { alpha: 0 }, { duration: 1000, ease: 'OutQuint' });
+        // lazer: an additive red flash fading from full over 1s.
+        this.failFlash.alpha = 0.6;
+        tween(this.failFlash, { alpha: 0 }, { duration: 1000, ease: 'None' });
+        // The gameplay becomes a black card that shrinks, tilts and greys
+        // out over a background darkened to 30% (lazer's FailAnimationContainer).
+        const w = this._w, h = this._h;
+        this.failBacking.visible = true;
+        this.failContent.pivot.set(w / 2, h / 2);
+        this.failContent.position.set(w / 2, h / 2);
+        tween(this.failContent, { scale: 0.85, rotation: Math.PI / 180 }, { duration: FAIL_DURATION, ease: 'OutQuart' });
+        const s = this.game.settings;
+        this.game.background.setDim(1 - (1 - s.backgroundDim.value) * 0.3, 60);
     }
 
     private updateFail(dt: number): void {
         this.failClock += dt;
         const t = clamp01(this.failClock / FAIL_DURATION);
-        // lazer's FailAnimation: the field sinks, tilts and fades as the song winds down.
-        const f = this.fieldWrap;
-        f.rotation = 0.12 * t * t;
-        f.alpha = 1 - t * 0.85;
-        f.y = this.view.y + 120 * t * t * this.view.scale;
+        // lazer's FailAnimation: objects drop away, everything fades to grey.
+        this.playfield.failDrop(t);
+        const grey = Math.round(255 - (255 - 128) * t);
+        this.failContent.tint = (grey << 16) | (grey << 8) | grey;
         this.hud.alpha = 1 - t;
-        if (this.failClock >= FAIL_DURATION * 0.6 && !this.menu.shown) {
+        if (this.failClock >= FAIL_DURATION && !this.menu.shown) {
             this.menu.show({
                 title: 'failed',
                 description: "you're dead, try again?",

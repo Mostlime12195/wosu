@@ -35,7 +35,7 @@ export class SkipButton extends UIComponent {
             this.content.addChild(c);
         }
         this.addChild(this.bg, this.content, this.bar);
-        this.makeInteractive();
+        this.makeInteractive({ sounds: 'button' });
         this.resize(W, H);
         this.alpha = 0;
         this.visible = false;

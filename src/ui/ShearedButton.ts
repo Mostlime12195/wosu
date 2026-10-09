@@ -74,7 +74,7 @@ export class ShearedButton extends UIComponent {
             this.body.addChild(this.glyph);
         }
         this.addChild(this.body);
-        this.makeInteractive();
+        this.makeInteractive({ sounds: 'button' });
         this.resize(opts.width ?? 200, opts.height ?? 50);
     }
 

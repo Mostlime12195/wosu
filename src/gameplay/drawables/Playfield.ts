@@ -42,6 +42,8 @@ export class Playfield extends Container {
     private readonly approachLayer = new Container();
     private readonly sliderResources: SliderResources;
     private readonly active: Drawable[] = [];
+    /** Per-object fail state: random spin and the transform it started from. */
+    private readonly failState = new Map<Drawable, { spin: number; x: number; y: number }>();
     private next = 0;
 
     constructor(private readonly o: PlayfieldOptions) {
@@ -131,6 +133,35 @@ export class Playfield extends Container {
         }
         this.followPoints?.update(time);
         this.judgements.update(time);
+    }
+
+    /**
+     * lazer's fail animation (FailAnimationContainer.dropOffScreen), `t`
+     * 0..1 over its 2.5s: every object on screen falls 400px, spins to a
+     * random ±90° and halves in size, while the objects fade out in the
+     * first half.
+     */
+    failDrop(t: number): void {
+        for (const d of this.active) {
+            const c = d as unknown as Container;
+            let f = this.failState.get(d);
+            if (!f) {
+                // Spin around the object's own centre without moving it at t = 0.
+                const b = c.getLocalBounds();
+                const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+                c.pivot.set(cx, cy);
+                f = { spin: ((Math.random() * 180 - 90) * Math.PI) / 180, x: c.x + cx, y: c.y + cy };
+                this.failState.set(d, f);
+            }
+            c.position.set(f.x, f.y + 400 * t);
+            c.rotation = f.spin * t;
+            c.scale.set(1 - 0.5 * t);
+        }
+        const a = Math.max(0, 1 - t * 2);
+        this.objectLayer.alpha = a;
+        this.approachLayer.alpha = a;
+        this.judgements.alpha = a;
+        if (this.followPoints) this.followPoints.alpha = a;
     }
 
     private create(index: number): Drawable {

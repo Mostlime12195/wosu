@@ -15,15 +15,11 @@ Scoring and judgement follow osu!'s rules closely, but can still differ from off
 <sub>YOASOBI - Yoru ni Kakeru [Keirelia's Insane], mapped by [Petal](https://osu.ppy.sh/beatmapsets/1238759) (Autoplay).</sub>
 
 ## Features
-
-- **Gameplay**: hit circles, sliders (GPU-rendered bodies with snaking), spinners, follow points, approach circles, judgements and hit lighting; stable's note lock, slider ticks/repeats/tails, spinner bonus, health drain and ScoreV1 scoring. Judgement runs in fixed ≤8 ms steps, so frame drops never cost a slider tick.
-- **Mods**: EZ, NF, HT, DC, HR, SD, PF, DT, NC, HD, FL, RX, AP, SO and Autoplay, with osu!'s incompatibility rules. DT/HT keep the song's pitch (time stretching); NC/DC don't.
-- **Flow**: intro and main menu with lazer's audio visualiser, song select with a virtualized carousel, search filters (`stars>4 ar<9 length>120`), mod-adjusted star ratings and a local leaderboard, mod select, player loader, pause / fail / resume overlays, skip, quick retry (hold `` ` ``) and an animated results screen.
-- **Star ratings**: official ratings from the mirrors for submitted maps, and an offline estimate (osu!'s classic aim/speed strain model) for everything else.
-- **Beatmap listing**: browse, search, preview and download maps without leaving the game; drag and drop `.osz` files anywhere to import them.
-- **HUD**: score, accuracy, combo, health, song progress with a difficulty graph, hit error meter and key overlay. Every piece can be toggled and scaled in Settings → Gameplay, with lazer's HUD visibility modes (Shift+Tab cycles them, hold Ctrl to peek).
-- **Cursors**: lazer's menu cursor and gameplay cursor with its smooth trail, all adjustable in Settings → Skin.
-- **Extras**: background video, background dim/blur, mouse/keyboard/touch input (hold the bottom-right button to pause on touch screens), volume meters (Alt + wheel), notifications, a now-playing panel, and everything saved locally in your browser (IndexedDB).
+- Base osu!std gameplay loop
+- Mods: EZ, NF, HT, DC, HR, SD, PF, DT, NC, HD, FL, RX, AP, SO and Autoplay
+- Download beatmaps in-game, with several default beatmaps and the option to import your own
+- Full HUD with difficulty visualization bars, click counters, and more
+- Extra configuration and features like background video, background dim/blur, mouse/keyboard/touch input, volume meters, notifications, a now-playing panel, and everything saved locally in your browser.
 
 ## Controls
 

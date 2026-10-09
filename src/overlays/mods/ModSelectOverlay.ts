@@ -9,7 +9,6 @@ import { drawSheared, SHEAR, ShearedButton } from '../../ui/ShearedButton';
 import { label } from '../../ui/text';
 import { Metrics } from '../../ui/theme';
 import { tweenTint } from '../../ui/UIComponent';
-import { uiSounds } from '../../ui/UIContext';
 import { ModColumn, MOD_COLUMN_SPAN } from './ModColumn';
 import { modCategoryColor } from './ModIcon';
 import { modColors, ModPanel } from './ModPanel';
@@ -31,6 +30,8 @@ const HOTKEY_ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
  * `game.mods`. Each column's mods also toggle from one keyboard row.
  */
 export class ModSelectOverlay extends Overlay {
+    protected override readonly popInSample = 'SongSelect/mod-column-pop-in';
+    protected override readonly popOutSample = 'SongSelect/mod-select-overlay-pop-out';
     override readonly exclusive = false;
     private readonly headerLayer = new Container();
     private readonly headerBg = new Graphics();
@@ -72,7 +73,6 @@ export class ModSelectOverlay extends Overlay {
         this.columnLayer.eventMode = 'passive';
 
         this.back.onActivate = () => {
-            uiSounds()?.back();
             this.hide();
         };
         this.deselect = new ShearedButton('Deselect All', { color: modColors.background3, height: 38, width: 190, fontSize: 15 });
@@ -196,7 +196,6 @@ export class ModSelectOverlay extends Overlay {
 
     override onKey(e: KeyboardEvent, action: Action | null): boolean {
         if (action === 'back' || action === 'toggleMods' || action === 'select') {
-            uiSounds()?.back();
             this.hide();
             return true;
         }

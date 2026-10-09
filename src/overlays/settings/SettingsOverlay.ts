@@ -38,7 +38,7 @@ class SidebarButton extends UIComponent {
         this.glyph = icon(iconName, 18, 0xffffff);
         this.addChild(this.wash, this.bar, this.glyph);
         this.tooltip = title;
-        this.makeInteractive();
+        this.makeInteractive({ sounds: 'sidebar' });
         this.resize(SIDEBAR, 52);
     }
 
@@ -77,6 +77,8 @@ interface BuiltSection {
  * while it's open searches; rows that don't match collapse.
  */
 export class SettingsOverlay extends Overlay {
+    protected override readonly popInSample = 'UI/settings-pop-in';
+    protected override readonly popOutSample = 'UI/overlay-pop-out';
     override readonly exclusive = false;
     private readonly panel = new Container();
     private readonly sidebarBg = new Graphics();

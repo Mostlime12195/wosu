@@ -102,7 +102,7 @@ export class TabStrip<T> extends UIComponent {
 
     private pick(item: Item<T>): void {
         if (gesture.suppressClicks || Object.is(item.choice.value, this._value)) return;
-        uiSounds()?.click();
+        uiSounds()?.click('tab');
         this._value = item.choice.value;
         this.refresh(true);
         this.changed.emit(this._value);

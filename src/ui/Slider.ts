@@ -89,7 +89,9 @@ export class Slider extends UIComponent {
         const now = performance.now();
         if (now - this.lastTick > 40) {
             this.lastTick = now;
-            uiSounds()?.hover();
+            const b = this.bindable;
+            const range = b.max - b.min;
+            uiSounds()?.tick(Number.isFinite(range) && range > 0 ? (b.value - b.min) / range : 0.5);
         }
     }
 

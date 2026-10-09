@@ -31,7 +31,8 @@ export class FooterButton extends UIComponent {
         this.text.anchor.set(0.5);
         this.light.alpha = 0.6;
         this.addChild(this.wash, this.glow, this.light, this.text);
-        this.makeInteractive();
+        // What they open (mods, options, random) has its own sound.
+        this.makeInteractive({ sounds: 'button', selectSample: null });
         this.resize(BUTTON_WIDTH, FOOTER_HEIGHT);
     }
 

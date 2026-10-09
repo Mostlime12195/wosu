@@ -1,6 +1,7 @@
 import { Bindable } from '../../core/Bindable';
 import { Signal } from '../../core/Signal';
 import type { IconName } from '../../ui/icons';
+import { uiSounds } from '../../ui/UIContext';
 
 export type NotificationKind = 'info' | 'success' | 'warning' | 'error' | 'progress';
 export type ProgressState = 'active' | 'completed' | 'failed' | 'cancelled';
@@ -52,6 +53,7 @@ export class Notification {
         if (text) this.text.value = text;
         if (onClick) this.onClick = onClick;
         this.progress.value = 1;
+        if (this.state.value === 'active') uiSounds()?.play('UI/notification-done');
         this.state.value = 'completed';
     }
 
@@ -59,12 +61,14 @@ export class Notification {
         if (text) this.text.value = text;
         // A cancelled task reports its abort as a failure afterwards: stay cancelled.
         if (this.state.value === 'cancelled') return;
+        if (this.state.value === 'active') uiSounds()?.error();
         this.state.value = 'failed';
     }
 
     cancel(): void {
         if (this.state.value !== 'active') return;
         this.state.value = 'cancelled';
+        uiSounds()?.play('UI/notification-cancel');
         this.onCancel?.();
     }
 

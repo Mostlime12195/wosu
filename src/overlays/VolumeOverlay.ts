@@ -181,7 +181,7 @@ export class VolumeOverlay extends UIComponent {
         const b = meter.bindable;
         const before = b.value;
         b.value = before + delta;
-        if (b.value !== before) this.game.uiSounds.hover();
+        if (b.value !== before) this.game.uiSounds.play('UI/osd-change', { rate: 0.85 + b.value * 0.3, throttle: 30 });
         this.popUp();
     }
 

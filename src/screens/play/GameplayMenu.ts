@@ -254,7 +254,7 @@ class DialogButton extends UIComponent {
         this.caption.style = style;
         this.caption.anchor.set(0.5);
         this.addChild(this.glow, this.bar, this.tris, this.triMask, this.flash, this.caption);
-        this.makeInteractive();
+        this.makeInteractive({ sounds: 'button' });
         this.on('pointermove', () => {
             if (!this.selected) this.onPointerSelect?.(true);
         });

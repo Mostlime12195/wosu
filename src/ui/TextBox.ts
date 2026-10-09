@@ -122,7 +122,7 @@ export class TextBox extends UIComponent implements TextSink {
     applyInput(value: string, caret: number, anchor: number): void {
         if (this.opts.maxLength && value.length > this.opts.maxLength) value = value.slice(0, this.opts.maxLength);
         const changed = value !== this._value;
-        if (changed && value.length > this._value.length) uiSounds()?.hover();
+        this.inputSound(value, clamp(caret, 0, value.length), clamp(anchor, 0, value.length));
         this._value = value;
         this.caretPos = clamp(caret, 0, value.length);
         this.anchor = clamp(anchor, 0, value.length);
@@ -131,8 +131,26 @@ export class TextBox extends UIComponent implements TextSink {
         if (changed) this.changed.emit(value);
     }
 
+    /** lazer's OsuTextBox feedback: typing, deleting, caret moves and selections each sound different. */
+    private inputSound(value: string, caret: number, anchor: number): void {
+        const s = uiSounds();
+        if (!s) return;
+        if (value !== this._value) {
+            if (value.length >= this._value.length) s.typed();
+            else s.play('Keyboard/key-delete', { throttle: 15 });
+            return;
+        }
+        const hadSel = this.anchor !== this.caretPos;
+        const hasSel = anchor !== caret;
+        if (hasSel && Math.abs(anchor - caret) === value.length && value.length > 1) s.play('Keyboard/select-all');
+        else if (hasSel) s.play('Keyboard/select-char', { throttle: 15 });
+        else if (hadSel) s.play('Keyboard/deselect');
+        else if (caret !== this.caretPos) s.play('Keyboard/key-movement', { throttle: 15 });
+    }
+
     onSpecialKey(e: KeyboardEvent): boolean {
         if (e.key === 'Enter') {
+            uiSounds()?.play('Keyboard/key-confirm');
             this.committed.emit(this._value);
             if (!this.opts.keepFocusOnCommit) this.blur();
             return true;
