@@ -1,6 +1,6 @@
 # wosu!
 
-**Play it: [wosu.dino.icu](https://wosu.dino.icu)**
+**Play at: [wosu.dino.icu](https://wosu.dino.icu)**
 
 osu! is a rhythm game in which you click circles on the screen, following the rhythm of the music.
 
