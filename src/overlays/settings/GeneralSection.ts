@@ -28,7 +28,7 @@ export function generalSection(game: Game): SectionDef {
                 title: 'About',
                 rows: [
                     textRow(`wosu! · build ${__BUILD_INFO__} · rendering with ${renderer}`, { color: Colors.white, size: 14, keywords: 'version build' }).row,
-                    textRow('An unofficial, open-source osu!standard client that runs entirely in your browser, drawn with PixiJS.', { keywords: 'about' }).row,
+                    textRow('An unofficial, open-source osu!std client that runs entirely in your browser.', { keywords: 'about' }).row,
                     buttonRow('View source on GitHub', () => window.open(REPO, '_blank', 'noopener'), { icon: 'codeBranch', color: Colors.gray4, keywords: 'github source code' }),
                     textRow('osu! is a trademark of ppy Pty Ltd. Beatmaps come from community mirrors (SayoBot, Mino, NeriNyan). PixiJS (MIT), Exo 2 (OFL), Font Awesome Free (CC BY 4.0 / OFL), Signalsmith Stretch (MIT).', { color: Colors.gray9, size: 12, keywords: 'credits licences licenses' }).row,
                 ],

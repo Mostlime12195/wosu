@@ -17,7 +17,7 @@ export function onlineSection(game: Game): SectionDef {
                 rows: [
                     dropdownRow('Browse beatmaps with', items(browseProviders()), s.browseProvider, { keywords: 'provider sayobot mino search listing' }),
                     dropdownRow('Download beatmaps with', items(downloadProviders()), s.downloadProvider, { keywords: 'provider mino nerinyan mirror' }),
-                    textRow('Covers and audio previews always come from SayoBot, the only mirror whose images can be drawn by the GPU (it sends CORS headers).', { color: Colors.gray9, size: 12 }).row,
+                    textRow('Covers and audio previews always come from SayoBot.', { color: Colors.gray9, size: 12 }).row,
                 ],
             },
             {
