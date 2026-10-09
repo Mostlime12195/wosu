@@ -221,7 +221,7 @@ export class SongSelectScreen extends Screen {
             this.leaderboard.setBeatmap(null, null);
             this.filter.search.blur();
         }
-        // The empty state keeps the menu's online previews cycling.
+        // Song select loops its selection's preview point; the empty state has none.
         if (this.isCurrent) this.game.music.loopFromPreview = !empty;
         this.empty.visible = true;
         tween(this.empty, { alpha: empty ? 1 : 0 }, { duration: 300 }).finished.then(() => {

@@ -22,6 +22,7 @@ import { TextInputProxy } from '../input/TextInputProxy';
 import { BeatmapApi } from '../online/BeatmapApi';
 import { DownloadManager, type DownloadTask } from '../online/Downloader';
 import { coverUrl, resolveProviders, type OnlineSet } from '../online/providers';
+import { bundledSelection } from '../online/bundled';
 import { BeatmapListingOverlay } from '../overlays/BeatmapListingOverlay';
 import { DialogOverlay } from '../overlays/DialogOverlay';
 import { NotificationManager } from '../overlays/notifications/Notifications';
@@ -185,15 +186,6 @@ export class Game {
         }
         MusicTrack.diagnostics.add(msg => this.notifications.warning(msg));
         this.downloads.added.add(task => this.trackDownload(task));
-        this.music.onlineSource = async () => {
-            try {
-                const r = await this.api.list('popular', { limit: 20, offset: Math.floor(Math.random() * 3) * 20 });
-                const sets = r.sets;
-                return sets.length ? sets[Math.floor(Math.random() * sets.length)] : null;
-            } catch {
-                return null;
-            }
-        };
         void this.samples.load().catch(e => console.warn('hitsounds failed to load', e));
         await Promise.all([
             this.library.init().catch(e => console.error('library init failed', e)),
@@ -206,6 +198,28 @@ export class Game {
         this.handleLaunchParams();
         this.library.imported.add(set => this.queueStarLookup(set));
         for (const set of this.library.sets) this.queueStarLookup(set);
+        void this.fetchBundledBeatmaps();
+    }
+
+    /**
+     * First launch (or an empty library): download a few Featured Artist
+     * sets, like osu!lazer, so menus have real songs to play. Sets already
+     * in the library are skipped; one at a time, so the first is ready fast.
+     */
+    private async fetchBundledBeatmaps(): Promise<void> {
+        const s = this.settings;
+        if (s.bundledBeatmapsFetched.value && this.library.sets.length > 0) return;
+        let any = false;
+        for (const set of bundledSelection()) {
+            const lib = await this.downloadSet(set, { video: false });
+            if (!lib) continue;
+            any = true;
+            // Nothing playing yet (empty library until now): start this one.
+            if (!this.music.current.value && s.menuMusic.value && this.screens.current?.showMenuCursor) {
+                void this.music.playSet(lib, { fromPreview: true, fadeInMs: 1000 });
+            }
+        }
+        if (any) s.bundledBeatmapsFetched.value = true;
     }
 
     // ------------------------------------------------------------------
@@ -505,12 +519,12 @@ export class Game {
      * Download an online set into the library (deduped). Resolves with the
      * imported set, or null on failure/cancel.
      */
-    async downloadSet(set: Pick<OnlineSet, 'sid' | 'title' | 'artist'>): Promise<LibrarySet | null> {
+    async downloadSet(set: Pick<OnlineSet, 'sid' | 'title' | 'artist'>, opts: { video?: boolean } = {}): Promise<LibrarySet | null> {
         const existing = this.library.get(`osu-${set.sid}`);
         if (existing) return existing;
         const pending = this.imports.get(set.sid);
         if (pending) return pending;
-        const task = this.downloads.download(set.sid, { title: set.title, artist: set.artist }, { withVideo: this.settings.backgroundVideo.value });
+        const task = this.downloads.download(set.sid, { title: set.title, artist: set.artist }, { withVideo: opts.video ?? this.settings.backgroundVideo.value });
         const p = task.result
             .then(blob => this.library.importOsz(blob, { onlineSetId: set.sid }))
             .catch(e => {

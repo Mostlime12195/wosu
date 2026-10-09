@@ -96,6 +96,8 @@ export class GameSettings {
     readonly playerName = new Bindable('Guest');
     readonly songSort = new Bindable<SongSort>('title');
     readonly lastBeatmap = new Bindable<string>('');
+    /** First-launch beatmaps were downloaded (lazer's bundled beatmaps). */
+    readonly bundledBeatmapsFetched = new Bindable(false);
 
     private readonly registry = new Map<string, Bindable<unknown>>();
     private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -161,7 +163,7 @@ export class GameSettings {
 
     resetAll(): void {
         for (const [k, b] of this.registry) {
-            if (k === 'selectedMods' || k === 'lastBeatmap' || k === 'playerName') continue;
+            if (k === 'selectedMods' || k === 'lastBeatmap' || k === 'playerName' || k === 'bundledBeatmapsFetched') continue;
             b.setDefault();
         }
     }

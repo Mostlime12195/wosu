@@ -42,8 +42,6 @@ export class MusicController {
     private lent = false;
     /** In song select the selected song loops from its preview point. */
     loopFromPreview = false;
-    /** Called to fetch a random online set when the library is empty. */
-    onlineSource: (() => Promise<OnlineSet | null>) | null = null;
     enabled = true;
 
     constructor(
@@ -181,10 +179,7 @@ export class MusicController {
             if (sets.length > 1 && pick.key === currentKey) pick = sets[(sets.indexOf(pick) + 1) % sets.length];
             return this.playSet(pick, { restart: true });
         }
-        if (this.onlineSource) {
-            const set = await this.onlineSource();
-            if (set) return this.playOnline(set);
-        }
+        // Empty library: stay silent (the first-launch download starts music).
     }
 
     togglePause(): void {
