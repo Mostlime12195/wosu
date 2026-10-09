@@ -4,12 +4,14 @@ import type { Game, Selection } from '../../app/Game';
 import type { MusicTrack } from '../../audio/MusicTrack';
 import { calculateDifficulty } from '../../beatmap/difficulty';
 import { buildPlayableBeatmap } from '../../beatmap/processing';
+import type { Storyboard } from '../../beatmap/storyboard';
 import type { BeatmapData, PlayableBeatmap, PlayableSlider } from '../../beatmap/types';
 import { clamp01, damp } from '../../core/math';
 import { tween } from '../../core/Tweener';
 import { comboColor } from '../../gameplay/drawables/context';
 import { PLAYFIELD_H, PLAYFIELD_W, Playfield } from '../../gameplay/drawables/Playfield';
 import { BackgroundVideo } from '../../gameplay/BackgroundVideo';
+import { StoryboardView } from '../../gameplay/StoryboardView';
 import { GameplayClock } from '../../gameplay/GameplayClock';
 import { GameplayRules, type CursorState, type SliderState, type SpinnerState } from '../../gameplay/GameplayRules';
 import { HitsoundPlayer } from '../../gameplay/HitsoundPlayer';
@@ -39,6 +41,8 @@ export interface PlayerOptions {
     track: MusicTrack;
     /** Retries so far for this beatmap (shown in the pause menu). */
     retryCount?: number;
+    /** Parsed storyboard (.osb + this difficulty's events), if the map has one. */
+    storyboard?: Storyboard | null;
 }
 
 /** How a Player ended, read by the loader when it resumes. */
@@ -126,6 +130,12 @@ export class PlayerScreen extends Screen {
     private built = false;
     private entered = false;
     private video: BackgroundVideo | null = null;
+    private storyboard: StoryboardView | null = null;
+    private storyboardLoad: Promise<void> | null = null;
+    private storyboardLoaded = false;
+    /** What the background layer shows instead of the plain image: backing, video, storyboard. */
+    private readonly bgCustom = new Container();
+    private readonly bgBacking = new Graphics();
     private videoReady = false;
     /** Gameplay time from which lazer counts the user as playing (first object's approach). */
     private playStart = 0;
@@ -239,7 +249,44 @@ export class PlayerScreen extends Screen {
         this.eventMode = 'passive';
 
         this.wireEvents();
-        if (g.settings.backgroundVideo.value && o.data.events.video) void this.loadVideo(o.data.events.video);
+        // Video and storyboard sit in the background layer (dimmed with it):
+        // black backing (when the storyboard replaces the image), video, storyboard.
+        this.bgBacking.visible = false;
+        this.bgCustom.addChild(this.bgBacking);
+        if (o.storyboard?.sprites.length || o.storyboard?.samples.length) {
+            const sb = (this.storyboard = new StoryboardView(o.storyboard, o.data.general.widescreenStoryboard));
+            this.bgCustom.addChild(sb.back);
+            this.failContent.addChildAt(sb.front, this.failContent.getChildIndex(this.fieldWrap) + 1);
+        }
+        const s = g.settings;
+        this.offs.push(s.storyboard.bind(on => {
+            if (on && this.storyboard && !this.storyboardLoad) this.storyboardLoad = this.loadStoryboard();
+            this.updateBackgroundLayers();
+        }, true));
+        this.offs.push(s.backgroundVideo.bind(on => {
+            if (on && o.data.events.video && !this.video) void this.loadVideo(o.data.events.video);
+            this.updateBackgroundLayers();
+        }, true));
+    }
+
+    /** Ready to show: storyboard images (when shown) are decoded. The loader waits on this. */
+    get assetsReady(): boolean {
+        return !this.game.settings.storyboard.value || !this.storyboard || this.storyboardLoaded;
+    }
+
+    private async loadStoryboard(): Promise<void> {
+        const sb = this.storyboard;
+        if (!sb) return;
+        try {
+            const archive = await this.game.library.openArchive(this.options.selection.set.key);
+            if (this.released) return;
+            await sb.load(archive, this.game.audio);
+        } catch (e) {
+            console.warn('storyboard failed to load', e);
+        }
+        if (this.released) return;
+        this.storyboardLoaded = true;
+        this.updateBackgroundLayers();
     }
 
     private async loadVideo(info: { filename: string; offset: number }): Promise<void> {
@@ -249,11 +296,29 @@ export class PlayerScreen extends Screen {
             if (!(await video.load(archive, info.filename)) || this.released) return;
             video.cover(this._w, this._h);
             this.videoReady = true;
-            // Prepared behind the loader: the video appears once gameplay is shown.
-            if (this.entered) this.game.background.setCustom(video.sprite);
+            this.bgCustom.addChildAt(video.sprite, 1);
+            this.updateBackgroundLayers();
         } catch (e) {
             console.warn('background video failed', e);
         }
+    }
+
+    /** Which background pieces show, from the settings and what has loaded. */
+    private updateBackgroundLayers(): void {
+        if (this.released) return;
+        const s = this.game.settings;
+        const showVideo = !!this.video && this.videoReady && s.backgroundVideo.value;
+        if (this.video) this.video.sprite.renderable = showVideo;
+        const sb = this.storyboard;
+        const showSb = !!sb && this.storyboardLoaded && s.storyboard.value;
+        if (sb) sb.back.visible = sb.front.visible = showSb;
+        // osu! hides the plain background when the storyboard draws that image
+        // itself, and shows black (not our default art) when the map has none.
+        const bgFile = this.options.data.events.backgroundFile;
+        this.bgBacking.visible = showSb && !showVideo && (!bgFile || !!sb?.usesImage(bgFile));
+        const any = showVideo || showSb;
+        // Prepared behind the loader: these appear once gameplay is shown.
+        if (this.entered) this.game.background.setCustom(any ? this.bgCustom : null);
     }
 
     private wireEvents(): void {
@@ -342,6 +407,8 @@ export class PlayerScreen extends Screen {
         this.playfield.setPixelsPerUnit(scale * this.game.app.uiScale * this.game.app.renderer.resolution);
         this.hud.layout(w, h);
         this.video?.cover(w, h);
+        this.storyboard?.layout(w, h);
+        this.bgBacking.clear().rect(0, 0, w, h).fill(0x000000);
         this.menu.resize(w, h);
         this.skip.position.set(w - this.skip.w - 24, h - this.skip.h - 130);
         this.holdButton.position.set(w - this.holdButton.w - 16, h - this.holdButton.h - 64);
@@ -370,7 +437,7 @@ export class PlayerScreen extends Screen {
         this.entered = true;
         // lazer's Player has no background parallax (the loader already turned it off).
         this.game.background.suppressParallax(this);
-        if (this.video && this.videoReady) this.game.background.setCustom(this.video.sprite);
+        this.updateBackgroundLayers();
         const cursor = this.game.cursor;
         cursor.external = true;
         this.game.updateCursorVisibility();
@@ -416,11 +483,13 @@ export class PlayerScreen extends Screen {
         const cursor = this.game.cursor;
         cursor.external = false;
         this.game.updateCursorVisibility();
+        if (this.entered) this.game.background.setCustom(null);
         if (this.video) {
-            if (this.entered && this.videoReady) this.game.background.setCustom(null);
             this.video.dispose();
             this.video = null;
         }
+        this.storyboard?.destroy();
+        this.storyboard = null;
     }
 
     // ------------------------------------------------------------------
@@ -455,6 +524,7 @@ export class PlayerScreen extends Screen {
     private renderState(time: number, dt: number): void {
         this.playfield.update(this.phase === 'failed' ? this.failedAtTime : time);
         this.video?.sync(time, this.phase === 'playing' || this.phase === 'completed', this.clock.rate);
+        this.storyboard?.update(this.phase === 'failed' ? this.failedAtTime : time, this.phase === 'playing', this.game.audio);
         this.updateBreakDim(time);
         this.hud.update(dt, {
             time,
@@ -710,6 +780,7 @@ export class PlayerScreen extends Screen {
         this.hitsounds.stopAll();
         this.clock.freeze();
         this.options.track.failSlowdown(FAIL_DURATION);
+        this.storyboard?.setFailed(true);
         this.game.uiSounds.play('Gameplay/failsound');
         this.menu.visible = false;
         // lazer: an additive red flash fading from full over 1s.

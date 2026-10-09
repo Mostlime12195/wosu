@@ -19,7 +19,7 @@ Scoring and judgement follow osu!'s rules closely, but can still differ from off
 - Mods: EZ, NF, HT, DC, HR, SD, PF, DT, NC, HD, FL, RX, AP, SO and Autoplay
 - Download beatmaps in-game, with several default beatmaps and the option to import your own
 - Full HUD with difficulty visualization bars, click counters, and more
-- Extra configuration and features like background video, background dim/blur, mouse/keyboard/touch input, volume meters, notifications, a now-playing panel, and everything saved locally in your browser.
+- Extra configuration and features like storyboards, background video, background dim/blur, mouse/keyboard/touch input, volume meters, notifications, a now-playing panel, and everything saved locally in your browser.
 
 ## Controls
 

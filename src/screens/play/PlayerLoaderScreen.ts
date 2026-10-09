@@ -16,6 +16,8 @@ import { ColorProvider, Colors, starColor, starTextColor } from '../../ui/theme'
 import { UIComponent } from '../../ui/UIComponent';
 import { modAdjustedStars } from '../select/modStars';
 import { coverFill, formatStars, setBackground } from '../select/visuals';
+import { parseStoryboard, type Storyboard } from '../../beatmap/storyboard';
+import type { OszArchive } from '../../beatmap/archive';
 import { PlayerScreen } from './PlayerScreen';
 
 /** The loader shows at least this long so the metadata can be read (lazer: PlayerPushDelay). */
@@ -64,6 +66,7 @@ export class PlayerLoaderScreen extends Screen {
     private mods!: ModSet;
     private shownFor = 0;
     private pushed = false;
+    private storyboard: Storyboard | null = null;
     private cancelled = false;
     private retries = 0;
     /** Built and warmed up behind the loader; pushed once ready. */
@@ -174,6 +177,8 @@ export class PlayerLoaderScreen extends Screen {
             this.disposer.add(g.settings.audioOffset.bind(v => {
                 if (this.track) this.track.userOffsetMs = v;
             }));
+            this.storyboard = await this.readStoryboard(archive, diff.file);
+            if (this.cancelled) return this.handBackTrack();
             this.data = data;
             g.library.markPlayed(set.key);
         } catch (e) {
@@ -181,6 +186,21 @@ export class PlayerLoaderScreen extends Screen {
             if (this.cancelled) return;
             g.notifications.error(`Couldn't load ${set.title} [${diff.version}]: ${e instanceof Error ? e.message : String(e)}`);
             this.cancel();
+        }
+    }
+
+    /** The set's .osb plus this difficulty's own events (either may be absent). */
+    private async readStoryboard(archive: OszArchive, osuFile: string): Promise<Storyboard | null> {
+        try {
+            const osb = archive.files.find(f => /\.osb$/i.test(f));
+            const [osbText, osuText] = await Promise.all([
+                osb ? archive.readText(osb) : Promise.resolve(''),
+                archive.readText(osuFile).catch(() => ''),
+            ]);
+            return parseStoryboard(osbText, osuText);
+        } catch (e) {
+            console.warn('storyboard parse failed', e);
+            return null;
         }
     }
 
@@ -283,7 +303,8 @@ export class PlayerLoaderScreen extends Screen {
         if (!this.isCurrent || this.pushed || this.cancelled) return;
         this.shownFor += dt;
         if (this.ready && !this.player && this.shownFor > 300) this.preparePlayer();
-        const loaded = !!this.player;
+        // Storyboard images decode while this screen covers everything.
+        const loaded = !!this.player && this.player.assetsReady;
         const busy = this.panel.visible && this.panel.isPointerOver(this.game.input.pointer);
         if (loaded && this.shownFor >= MIN_DISPLAY && !busy && !this.panel.dragging) this.startPlayer();
         this.thumbShade.alpha = loaded ? Math.max(0, this.thumbShade.alpha - dt / 300) : Math.min(1, this.thumbShade.alpha + dt / 300);
@@ -300,6 +321,7 @@ export class PlayerLoaderScreen extends Screen {
             mods: this.mods,
             track: this.track,
             retryCount: this.retries,
+            storyboard: this.storyboard,
         });
         try {
             player.prepare(this.game, this._w, this._h);
@@ -424,6 +446,8 @@ class SettingsPanel extends UIComponent {
                 rows: [
                     slider('Background dim', s.backgroundDim, pct),
                     slider('Background blur', s.backgroundBlur, pct),
+                    new Checkbox('Storyboard', s.storyboard),
+                    new Checkbox('Background video', s.backgroundVideo),
                     new Checkbox('Kiai flashes on hit objects', s.kiaiFlash),
                 ],
             },

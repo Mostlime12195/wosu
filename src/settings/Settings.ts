@@ -59,6 +59,7 @@ export class GameSettings {
     readonly hideGreat = new Bindable(false);
     readonly hideFollowPoints = new Bindable(false);
     readonly backgroundVideo = new Bindable(false);
+    readonly storyboard = new Bindable(true);
     readonly fullscreenOnPlay = new Bindable(false);
 
     // Audio

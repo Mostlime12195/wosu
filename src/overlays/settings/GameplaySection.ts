@@ -15,7 +15,6 @@ export function gameplaySection(game: Game): SectionDef {
                 rows: [
                     sliderRow('Background dim', s.backgroundDim, pct, { keywords: 'dark' }),
                     sliderRow('Background blur', s.backgroundBlur, pct),
-                    checkboxRow('Background video', s.backgroundVideo, { description: 'Plays map videos behind the playfield. Affects maps downloaded after enabling (SayoBot downloads never include video).', keywords: 'storyboard' }),
                 ],
             },
             {
