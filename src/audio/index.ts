@@ -1,0 +1,11 @@
+export { AudioEngine } from './AudioEngine';
+export type { AudioLevels, AudioVolumes } from './AudioEngine';
+export { MusicTrack } from './MusicTrack';
+export type { StretchFactory, StretchNode } from './MusicTrack';
+export { PreviewPlayer } from './PreviewPlayer';
+export type { PreviewPlayOptions } from './PreviewPlayer';
+export { SampleBank, sampleSetName, sampleManifest } from './SampleBank';
+export type { SampleName, SampleSetName, HitsoundName, PlayOptions, LoopHandle } from './SampleBank';
+export { UISounds } from './UISounds';
+export { analyzeAudio, readMp3Tags, predictMp3Offset, parseFrameHeader } from './mp3Info';
+export type { AudioAnalysis, Mp3Tag, FrameHeader } from './mp3Info';

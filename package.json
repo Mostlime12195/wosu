@@ -1,0 +1,39 @@
+{
+  "name": "wosu",
+  "version": "1.0.0",
+  "description": "wosu! — a browser osu!standard client rendered entirely with PixiJS (WebGL/WebGPU).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mostlime12195/wosu.git"
+  },
+  "author": "wosu! contributors",
+  "license": "MIT",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/mostlime12195/wosu/issues"
+  },
+  "homepage": "https://github.com/mostlime12195/wosu#readme",
+  "dependencies": {
+    "@fortawesome/fontawesome-free": "^6.7.2",
+    "fflate": "^0.8.3",
+    "pixi.js": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  }
+}

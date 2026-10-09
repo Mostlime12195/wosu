@@ -1,30 +1,81 @@
-# WebOsu 2
+# wosu!
 
-[![CodeFactor](https://www.codefactor.io/repository/github/webosu-2/webosu-2.github.io/badge)](https://www.codefactor.io/repository/github/webosu-2/webosu-2.github.io)
+**Play it: [wosu.dino.icu](https://wosu.dino.icu)**
 
+osu! is a rhythm game in which you click circles on the screen, following the rhythm of the music.
 
-Osu! is a rhythm game in which you click circles on the screen, following the rhythm of the music.
+wosu! is an unofficial osu!standard client that runs entirely in your browser, with nothing to install. The whole game, menus included, is a single [PixiJS](https://pixijs.com) app rendered with WebGL (or WebGPU, opt-in from Settings → Graphics), modelled closely on osu!lazer's look and behaviour. Beatmaps come from community mirrors ([Sayobot](https://osu.sayobot.cn), [Mino](https://catboy.best), [NeriNyan](https://nerinyan.moe)) or from your own `.osz` files.
 
+wosu! is the successor to [WebOsu 2](https://github.com/WebOsu-2/webosu-2.github.io), itself a continuation of [the original WebOsu](https://github.com/111116/webosu). The classic WebOsu 2 is still online at [webosu-2.github.io](https://webosu-2.github.io) if your device struggles with wosu! or you just prefer it. Scoring and judgement follow osu!stable's rules closely, but can still differ from official osu!; modes other than osu!standard are not supported.
 
-Powered by [PixiJS](https://www.pixijs.com) and [Sayobot](https://osu.sayobot.cn). This project is a fork & continuation of [the original WebOsu.](https://github.com/111116/webosu)
+![Gameplay](screenshots/gameplay.jpg)
 
-**(This project is not complete is under continuous development)**
+| Main menu | Song select |
+| --- | --- |
+| ![Main menu](screenshots/menu.jpg) | ![Song select](screenshots/song-select.jpg) |
+| **Beatmap listing** | **Results** |
+| ![Beatmap listing](screenshots/beatmap-listing.jpg) | ![Results](screenshots/results.jpg) |
 
-This is an unofficial implementation of [Osu!](https://osu.ppy.sh). Scoring and judgement rules can differ from that of official Osu! and modes other than Osu!std are unsupported.
+## Features
 
-## Footage
+- **Gameplay**: hit circles, sliders (GPU-rendered bodies with snaking), spinners, follow points, approach circles, judgements and hit lighting; stable's note lock, slider ticks/repeats/tails, spinner bonus, health drain and ScoreV1 scoring. Judgement runs in fixed ≤8 ms steps, so frame drops never cost a slider tick.
+- **Mods**: EZ, NF, HT, DC, HR, SD, PF, DT, NC, HD, FL, RX, AP, SO and Autoplay, with osu!'s incompatibility rules. DT/HT keep the song's pitch (time stretching); NC/DC don't.
+- **Flow**: intro and main menu with lazer's audio visualiser, song select with a virtualized carousel, search filters (`stars>4 ar<9 length>120`), mod-adjusted star ratings and a local leaderboard, mod select, player loader, pause / fail / resume overlays, skip, quick retry (hold `` ` ``) and an animated results screen.
+- **Star ratings**: official ratings from the mirrors for submitted maps, and an offline estimate (osu!'s classic aim/speed strain model) for everything else.
+- **Beatmap listing**: browse, search, preview and download maps without leaving the game; drag and drop `.osz` files anywhere to import them.
+- **HUD**: score, accuracy, combo, health, song progress with a difficulty graph, hit error meter and key overlay. Every piece can be toggled and scaled in Settings → Gameplay, with lazer's HUD visibility modes (Shift+Tab cycles them, hold Ctrl to peek).
+- **Cursors**: lazer's menu cursor and gameplay cursor with its smooth trail, all adjustable in Settings → Skin.
+- **Extras**: background video, background dim/blur, mouse/keyboard/touch input (hold the bottom-right button to pause on touch screens), volume meters (Alt + wheel), notifications, a now-playing panel, and everything saved locally in your browser (IndexedDB).
 
-game in action:
+## Controls
 
-![webpage](screenshots/clip3.gif)
+| Action | Default |
+| --- | --- |
+| Hit | `Z` / `X`, mouse buttons, or tap |
+| Pause | `Esc` (or hold the bottom-right button) |
+| Skip intro | `Space` |
+| Quick retry | hold `` ` `` |
+| Cycle HUD visibility / peek at HUD | `Shift` + `Tab` / hold `Ctrl` |
+| Mods / random beatmap (song select) | `F1` / `F2` |
+| Settings / beatmap listing / notifications | `Ctrl+O` / `Ctrl+D` / `Ctrl+N` |
+| Volume | `Alt` + mouse wheel, `Alt` + `↑`/`↓` |
 
-## Todo list
+Gameplay keys can be rebound in Settings → Input.
 
-- [x] Update from outdated PixiJS v6 to v7
-- [ ] Update from outdated PixiJS v7 to v8
-- [ ] Uploadable skins
-- [ ] Switch between beatmap providers
+## Development
 
-## License Notes
+Requires Node.js 22 or newer.
 
-Some media files are copyrighted by [ppy](https://github.com/ppy/) and others. Check their respective license before you use them.
+```bash
+npm install
+npm run dev        # dev server with hot reload
+npm test           # unit tests (Vitest)
+npm run typecheck  # TypeScript
+npm run build      # typecheck + production build into dist/
+```
+
+Every push and pull request runs CI (typecheck, tests, build). The site is hosted on [Vercel](https://vercel.com): pushes to `main` deploy to production, and pull requests get preview deployments. `dist/` is plain static files with relative paths, so it can be served from any host or sub-path.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report bugs and send changes.
+
+### Layout
+
+| Path | What lives there |
+| --- | --- |
+| `src/app` | The Pixi application, layer stack, screen stack, overlays, music controller, background, cursors |
+| `src/beatmap` | `.osu` parsing, slider curves, mod processing (stacking, combos, slider events), `.osz` archives, the local library, star ratings |
+| `src/gameplay` | Rules and judgement (headless and unit tested), score/health processors, autoplay, input, hitsounds, playfield drawables and HUD |
+| `src/graphics` | GPU slider renderer (shaders for WebGL and WebGPU) and texture helpers |
+| `src/screens` | Intro, main menu, song select, player loader, player, results |
+| `src/overlays` | Toolbar, settings, beatmap listing, mod select, notifications, now playing, volume, dialogs |
+| `src/ui` | The small UI framework every screen is built from (buttons, text boxes, sliders, dropdowns, scroll containers, tooltips, triangles) |
+| `src/audio`, `src/online`, `src/storage` | Web Audio engine, mirror APIs and downloads, IndexedDB storage |
+| `public/assets` | Skin atlas, cursor textures, hitsounds and fonts; `art/sprites` holds the source sprites of the atlas |
+
+## License notes
+
+The code is MIT licensed. Some media files are copyrighted by [ppy](https://github.com/ppy/) and others; check their respective licenses before you use them. Exo 2 is licensed under the SIL Open Font License (see `public/assets/fonts/Exo2-OFL.txt`).
+
+The menu cursor and cursor trail textures in `public/assets/skin/cursor/` come from [ppy/osu-resources](https://github.com/ppy/osu-resources) and are licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
+
+wosu! is not affiliated with or endorsed by ppy. osu! is a trademark of ppy Pty Ltd.

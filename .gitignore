@@ -3,3 +3,11 @@ _site/
 env.sh
 defaultskin
 lazerskin
+node_modules/
+dist/
+coverage/
+.vite/
+test-results/
+.DS_Store
+.claude/
+.vercel/
