@@ -5,8 +5,8 @@ import { icon, type IconName } from '../../ui/icons';
 import { label } from '../../ui/text';
 import { UIComponent } from '../../ui/UIComponent';
 
-/** lazer ButtonSystem.BUTTON_WIDTH. */
-export const MENU_BUTTON_WIDTH = 140;
+/** lazer's ButtonSystem.BUTTON_WIDTH is 140; a little wider so the bar breathes. */
+export const MENU_BUTTON_WIDTH = 160;
 /** lazer ButtonArea.BUTTON_AREA_HEIGHT. */
 export const MENU_BUTTON_HEIGHT = 100;
 /** lazer ButtonSystem.WEDGE_WIDTH: horizontal shear offset, and the (negative) flow spacing. */
@@ -159,8 +159,10 @@ export class MenuButton extends UIComponent {
         this.flash.clear();
         if (w <= 0) return;
         // lazer's EdgeEffect shadow (black 0.2, radius 8), as stacked soft layers.
+        // Spread sideways only: the band is exactly button height, so a shadow
+        // above or below it would show as dark tabs over the background.
         for (const d of [8, 5, 2]) {
-            this.shadow.poly([half - d, -d, w + half + d, -d, w - half + d, h + d, -half - d, h + d]).fill({ color: 0x000000, alpha: 0.07 });
+            this.shadow.poly([half - d, 0, w + half + d, 0, w - half + d, h, -half - d, h]).fill({ color: 0x000000, alpha: 0.07 });
         }
         this.slab.poly(pts).fill(this.color);
         // Faint top highlight.

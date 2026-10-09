@@ -1,3 +1,4 @@
+import { inject } from '@vercel/analytics';
 import { Game } from './app/Game';
 
 /**
@@ -5,6 +6,8 @@ import { Game } from './app/Game';
  * rendered into #app. See src/app/Game.ts for the service wiring.
  */
 async function main(): Promise<void> {
+    // Vercel Web Analytics (page views only; a no-op in development).
+    inject();
     const host = document.getElementById('app');
     if (!host) throw new Error('#app host element missing');
     try {

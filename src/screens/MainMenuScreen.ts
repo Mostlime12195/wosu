@@ -114,7 +114,8 @@ export class MainMenuScreen extends Screen {
             ...this.playButtons.map(button => ({ button, min: 'play' as const, max: 'play' as const })),
             ...this.topButtons.map(button => ({ button, min: 'top' as const, max: 'top' as const })),
         ];
-        for (const { button } of [...this.leftFlow, ...this.rightFlow]) {
+        // Outer buttons first, so each button (and its shadow) sits above the next one out.
+        for (const { button } of [...this.leftFlow, ...this.rightFlow].reverse()) {
             button.beatSource = () => g.music.beat();
             this.buttonLayer.addChild(button);
         }

@@ -482,7 +482,7 @@ export class SongSelectScreen extends Screen {
 
     override onEntering(): void {
         const bg = this.game.background;
-        bg.setBlur(0.2, 800);
+        bg.setBlur(0.32, 800);
         bg.setDim(0.28, 800);
         this.current = this.restoreTarget();
         this.refilter();
@@ -503,7 +503,7 @@ export class SongSelectScreen extends Screen {
         this.eventMode = 'passive';
         // Gameplay hands the track back at rate 1; re-apply on the next frame.
         this.rateTrack = null;
-        this.game.background.setBlur(0.2, 600);
+        this.game.background.setBlur(0.32, 600);
         this.game.background.setDim(0.28, 600);
         if (this.filterDirty) this.refilter();
         const sel = this.game.selection.value;
