@@ -1,6 +1,7 @@
-import type { LoopHandle, SampleBank } from '../audio/SampleBank';
+import type { HitsoundName, LoopHandle, SampleBank, SampleName } from '../audio/SampleBank';
 import { sampleSetName } from '../audio/SampleBank';
 import type { PlayableBeatmap, PlayableHitObject, PlayableSlider, SampleSet } from '../beatmap/types';
+import type { BeatmapSkin } from '../skin/BeatmapSkin';
 
 /** Stereo spread by horizontal position (lazer's balance adjust). */
 const PAN_AMOUNT = 0.8;
@@ -16,10 +17,59 @@ export class HitsoundPlayer {
     private readonly slides = new Map<number, LoopHandle[]>();
     private spin: LoopHandle | null = null;
     private spinIndex = -1;
-    /** Ignore the map's sample sets (Settings → Audio → beatmap hitsounds off). */
-    useBeatmapSets = true;
+    /**
+     * Use the beatmap's own hitsound files (lazer's "Beatmap hitsounds").
+     * Sample sets (normal/soft/drum) always follow the map, as in osu!.
+     */
+    useBeatmapSamples = true;
 
-    constructor(private readonly samples: SampleBank, private readonly beatmap: PlayableBeatmap) {}
+    constructor(
+        private readonly samples: SampleBank,
+        private readonly beatmap: PlayableBeatmap,
+        private readonly custom: BeatmapSkin | null = null,
+    ) {}
+
+    /** osu!'s sample index: the object's own, else its timing point's (0 = the game's samples). */
+    private indexAt(time: number, own = 0): number {
+        return own || this.beatmap.controlPoints.at(time).sampleIndex;
+    }
+
+    /** The map's override for a sample (null = silenced), or undefined to use ours. */
+    private override(set: number, name: HitsoundName, index: number): AudioBuffer | null | undefined {
+        if (!this.custom || !this.useBeatmapSamples || index === 0) return undefined;
+        return this.custom.sample(`${sampleSetName(set)}-${name}`, index);
+    }
+
+    private playOne(set: number, name: HitsoundName, index: number, volume: number, pan: number): void {
+        const o = this.override(set, name, index);
+        if (o === undefined) this.samples.play(`${sampleSetName(set)}-${name}` as SampleName, volume, { pan });
+        else if (o) this.samples.playBuffer(o, volume, { pan });
+    }
+
+    private loop(set: number, name: HitsoundName, index: number, volume: number): LoopHandle {
+        const o = this.override(set, name, index);
+        if (o === undefined) return this.samples.startLoop(`${sampleSetName(set)}-${name}` as SampleName, volume);
+        return this.samples.startLoopBuffer(o, volume);
+    }
+
+    /**
+     * osu! hit sound layering: hitnormal always plays (normal set), then
+     * whistle/finish/clap from the addition set. A hit object that names
+     * its own sample file plays just that file instead.
+     */
+    private playHit(bits: number, normal: number, addition: number, index: number, volume: number, pan: number, filename = ''): void {
+        if (filename && this.custom && this.useBeatmapSamples) {
+            const f = this.custom.file(filename);
+            if (f !== undefined) {
+                if (f) this.samples.playBuffer(f, volume, { pan });
+                return;
+            }
+        }
+        this.playOne(normal, 'hitnormal', index, volume, pan);
+        if (bits & 2) this.playOne(addition, 'hitwhistle', index, volume, pan);
+        if (bits & 4) this.playOne(addition, 'hitfinish', index, volume, pan);
+        if (bits & 8) this.playOne(addition, 'hitclap', index, volume, pan);
+    }
 
     private pan(x: number): number {
         return (x / 512 - 0.5) * PAN_AMOUNT;
@@ -27,7 +77,6 @@ export class HitsoundPlayer {
 
     private sets(time: number, normal: SampleSet, addition: SampleSet): { normal: number; addition: number; volume: number } {
         const cp = this.beatmap.controlPoints.at(time);
-        if (!this.useBeatmapSets) return { normal: 1, addition: 1, volume: cp.volume / 100 };
         const n = normal || cp.sampleSet || 1;
         const a = addition || n;
         return { normal: n, addition: a, volume: cp.volume / 100 };
@@ -41,7 +90,7 @@ export class HitsoundPlayer {
     hit(h: PlayableHitObject): void {
         const time = h.kind === 'spinner' ? h.endTime : h.time;
         const s = this.sets(time, h.hitSample.normalSet, h.hitSample.additionSet);
-        this.samples.playHit(h.hitSound, s.normal, s.addition, this.volumeFor(h, s.volume), this.pan(h.x));
+        this.playHit(h.hitSound, s.normal, s.addition, this.indexAt(time, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(h.x), h.hitSample.filename);
     }
 
     /** Slider head (edge 0), repeats and tail. */
@@ -50,12 +99,12 @@ export class HitsoundPlayer {
         const sets = h.edgeSets[edge] ?? { normalSet: 0 as SampleSet, additionSet: 0 as SampleSet };
         const s = this.sets(time, sets.normalSet || h.hitSample.normalSet, sets.additionSet || h.hitSample.additionSet);
         const bits = h.edgeSounds[edge] ?? h.hitSound;
-        this.samples.playHit(bits, s.normal, s.addition, this.volumeFor(h, s.volume), this.pan(x));
+        this.playHit(bits, s.normal, s.addition, this.indexAt(time, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(x));
     }
 
     tick(h: PlayableSlider, time: number, x: number): void {
         const s = this.sets(time, h.hitSample.normalSet, h.hitSample.additionSet);
-        this.samples.playTick(s.normal, this.volumeFor(h, s.volume), this.pan(x));
+        this.playOne(s.normal, 'slidertick', this.indexAt(time, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(x));
     }
 
     /** Slider slide loop (and whistle loop when the slider whistles) while tracking. */
@@ -69,8 +118,9 @@ export class HitsoundPlayer {
         }
         const s = this.sets(h.time, h.hitSample.normalSet, h.hitSample.additionSet);
         const vol = this.volumeFor(h, s.volume) * 0.6;
-        const loops = [this.samples.startLoop(`${sampleSetName(s.normal)}-sliderslide`, vol)];
-        if (h.hitSound & 2) loops.push(this.samples.startLoop(`${sampleSetName(s.addition)}-sliderwhistle`, vol));
+        const index = this.indexAt(h.time, h.hitSample.index);
+        const loops = [this.loop(s.normal, 'sliderslide', index, vol)];
+        if (h.hitSound & 2) loops.push(this.loop(s.addition, 'sliderwhistle', index, vol));
         this.slides.set(h.index, loops);
     }
 
@@ -83,7 +133,7 @@ export class HitsoundPlayer {
         if (this.spinIndex !== h.index) {
             this.stopSpin();
             const s = this.sets(h.time, h.hitSample.normalSet, h.hitSample.additionSet);
-            this.spin = this.samples.startLoop(`${sampleSetName(s.normal)}-spinnerspin`, this.volumeFor(h, s.volume) * 0.5);
+            this.spin = this.loop(s.normal, 'spinnerspin', this.indexAt(h.time, h.hitSample.index), this.volumeFor(h, s.volume) * 0.5);
             this.spinIndex = h.index;
         }
         this.spin?.setVolume(0.25 + 0.25 * Math.min(1, progress));
@@ -91,7 +141,7 @@ export class HitsoundPlayer {
 
     spinnerBonus(h: PlayableHitObject): void {
         const s = this.sets(h.endTime, h.hitSample.normalSet, h.hitSample.additionSet);
-        this.samples.play(`${sampleSetName(s.normal)}-spinnerbonus`, this.volumeFor(h, s.volume), { pan: this.pan(h.x) });
+        this.playOne(s.normal, 'spinnerbonus', this.indexAt(h.endTime, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(h.x));
     }
 
     comboBreak(): void {

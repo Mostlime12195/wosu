@@ -5,6 +5,7 @@ import type { MusicTrack } from '../../audio/MusicTrack';
 import { calculateDifficulty } from '../../beatmap/difficulty';
 import { buildPlayableBeatmap } from '../../beatmap/processing';
 import type { Storyboard } from '../../beatmap/storyboard';
+import type { BeatmapSkin } from '../../skin/BeatmapSkin';
 import type { BeatmapData, PlayableBeatmap, PlayableSlider } from '../../beatmap/types';
 import { clamp01, damp } from '../../core/math';
 import { tween } from '../../core/Tweener';
@@ -43,6 +44,8 @@ export interface PlayerOptions {
     retryCount?: number;
     /** Parsed storyboard (.osb + this difficulty's events), if the map has one. */
     storyboard?: Storyboard | null;
+    /** The map's own skin elements and hitsounds (owned by the loader). */
+    beatmapSkin?: BeatmapSkin | null;
 }
 
 /** How a Player ended, read by the loader when it resumes. */
@@ -173,7 +176,10 @@ export class PlayerScreen extends Screen {
         const o = this.options;
         const mods = o.mods;
         this.mode = inputMode(mods);
-        const beatmap = (this.beatmap = buildPlayableBeatmap(o.data, mods));
+        // "Beatmap skins" off: the map's colours go too (lazer treats them as part of its skin).
+        const useSkin = g.settings.beatmapSkin.value;
+        const data = useSkin ? o.data : { ...o.data, comboColors: [], sliderTrackOverride: null, sliderBorder: null };
+        const beatmap = (this.beatmap = buildPlayableBeatmap(data, mods));
         const d = o.data.difficulty;
         const objectCount = beatmap.hitObjects.length;
         const breakTime = beatmap.breaks.reduce((t, b) => t + Math.max(0, b.endTime - b.startTime), 0);
@@ -205,8 +211,8 @@ export class PlayerScreen extends Screen {
         this.input = new GameplayInput(g.app, g.settings, () => this.clock.now, { x: g.input.pointer.x, y: g.input.pointer.y });
         this.input.ignorePointer = (x, y) => this.holdButton.containsPoint(x, y) ||
             (this.skip.available && x >= this.skip.x && y >= this.skip.y && x <= this.skip.x + this.skip.w && y <= this.skip.y + this.skip.h);
-        this.hitsounds = new HitsoundPlayer(g.samples, beatmap);
-        this.hitsounds.useBeatmapSets = g.settings.beatmapHitsounds.value;
+        this.hitsounds = new HitsoundPlayer(g.samples, beatmap, o.beatmapSkin ?? null);
+        this.hitsounds.useBeatmapSamples = g.settings.beatmapHitsounds.value;
 
         this.playfield = new Playfield({
             renderer: g.app.renderer,
@@ -219,6 +225,7 @@ export class PlayerScreen extends Screen {
             snakingIn: g.settings.snakingIn.value,
             snakingOut: g.settings.snakingOut.value,
             kiaiFlashes: g.settings.kiaiFlash.value,
+            beatmapSkin: useSkin ? o.beatmapSkin ?? null : null,
         });
         this.playfield.judgements.hideGreat = g.settings.hideGreat.value;
         this.playfield.judgements.hitLighting = g.settings.hitLighting.value;
@@ -387,7 +394,7 @@ export class PlayerScreen extends Screen {
         this.offs.push(s.backgroundDim.bind(() => this.applyBackground(400)));
         this.offs.push(s.backgroundBlur.bind(() => this.applyBackground(400)));
         this.offs.push(s.kiaiFlash.bind(v => (this.playfield.kiaiFlashes = v)));
-        this.offs.push(s.beatmapHitsounds.bind(v => (this.hitsounds.useBeatmapSets = v)));
+        this.offs.push(s.beatmapHitsounds.bind(v => (this.hitsounds.useBeatmapSamples = v)));
     }
 
     // ------------------------------------------------------------------

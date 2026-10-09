@@ -10,6 +10,15 @@ export function skinSection(game: Game): SectionDef {
         icon: 'brush',
         subsections: [
             {
+                title: 'Beatmap',
+                rows: [
+                    checkboxRow('Beatmap skins', s.beatmapSkin, {
+                        description: "Use the hit circles, numbers, slider and judgement images and the colours that a beatmap ships with. Its own hitsounds are under Audio → Beatmap hitsounds.",
+                        keywords: 'skin custom colours colors',
+                    }),
+                ],
+            },
+            {
                 title: 'Cursor',
                 rows: [
                     sliderRow('Menu cursor size', s.menuCursorSize, mult, { keywords: 'cursor scale' }),

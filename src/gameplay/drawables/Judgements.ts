@@ -1,4 +1,5 @@
 import { BitmapText, Container, type Sprite, type Texture } from 'pixi.js';
+import type { SkinTexture } from '../../skin/BeatmapSkin';
 import { Colors, Fonts } from '../../ui/theme';
 import type { HitResult } from '../scoring/ScoreProcessor';
 import { clamp01, ease, sprite } from './context';
@@ -8,6 +9,18 @@ const LIGHTING_LIFETIME = 600;
 
 const TEXT: Record<HitResult, string> = { great: 'GREAT', ok: 'OK', meh: 'MEH', miss: 'MISS' };
 const COLOR: Record<HitResult, number> = { great: Colors.great, ok: Colors.ok, meh: Colors.meh, miss: Colors.miss };
+
+/** A beatmap skin's hit300/hit100/hit50/hit0 (each possibly animated). */
+export type LegacyJudgements = Partial<Record<HitResult, SkinTexture[]>>;
+
+interface SpriteEntry {
+    sprite: Sprite;
+    frames: SkinTexture[];
+    result: HitResult;
+    y: number;
+    time: number;
+    spin: number;
+}
 
 interface Entry {
     text: BitmapText;
@@ -37,21 +50,79 @@ export class Judgements extends Container {
     private readonly freeLights: Sprite[] = [];
     hideGreat = false;
     hitLighting = true;
+    /** The map's judgement images replace our text (osu!'s legacy judgement animation). */
+    legacy: LegacyJudgements = {};
+    private readonly sprites = new Container();
+    private readonly activeSprites: SpriteEntry[] = [];
+    private readonly freeSprites: Sprite[] = [];
 
     constructor(private readonly glow: Texture, private readonly radius: number) {
         super();
         this.eventMode = 'none';
-        this.addChild(this.lights, this.texts);
+        this.addChild(this.lights, this.texts, this.sprites);
     }
 
     add(result: HitResult, x: number, y: number, time: number, color: number): void {
         if (result !== 'miss' && this.hitLighting) this.addLight(x, y, time, color);
         if (result === 'great' && this.hideGreat) return;
+        const frames = this.legacy[result];
+        if (frames?.length) {
+            const s = this.freeSprites.pop() ?? this.makeSprite();
+            s.visible = true;
+            s.texture = frames[0].texture;
+            s.position.set(x, y);
+            this.activeSprites.push({ sprite: s, frames, result, y, time, spin: (Math.random() * 2 - 1) * 0.2 });
+            return;
+        }
         const text = this.free.pop() ?? this.makeText();
         text.visible = true;
         text.text = TEXT[result];
         text.tint = COLOR[result];
         this.active.push({ text, result, x, y, time, spin: Math.random() < 0.5 ? -1 : 1 });
+    }
+
+    private makeSprite(): Sprite {
+        const s = sprite(this.glow);
+        this.sprites.addChild(s);
+        return s;
+    }
+
+    /**
+     * lazer's LegacyJudgementPieceOld: pop 0.6 → 1.1 → 0.9 → 1 while fading
+     * in over 120ms, hold, fade out by 800ms; misses drop and tilt.
+     * Animated judgements play their frames once over their lifetime.
+     */
+    private updateSprites(time: number): void {
+        const base = this.radius / 64;
+        for (let i = this.activeSprites.length - 1; i >= 0; i--) {
+            const e = this.activeSprites[i];
+            const dt = time - e.time;
+            if (dt > LIFETIME || dt < -50) {
+                e.sprite.visible = false;
+                this.freeSprites.push(e.sprite);
+                this.activeSprites.splice(i, 1);
+                continue;
+            }
+            const n = e.frames.length;
+            const f = e.frames[Math.min(n - 1, Math.floor((clamp01(dt / LIFETIME) * n)))];
+            if (e.sprite.texture !== f.texture) e.sprite.texture = f.texture;
+            e.sprite.alpha = Math.min(clamp01(dt / 120), 1 - clamp01((dt - 600) / 200));
+            let pop: number;
+            if (e.result === 'miss') {
+                pop = 1.6 - 0.6 * ease.OutQuad(clamp01(dt / 100));
+                e.sprite.rotation = e.spin * clamp01(dt / LIFETIME);
+                e.sprite.y = e.y + 20 * ease.InQuad(clamp01(dt / LIFETIME));
+            } else if (n > 1) {
+                pop = 1;
+            } else if (dt < 96) {
+                pop = 0.6 + 0.5 * ease.OutQuad(dt / 96);
+            } else if (dt < 120) {
+                pop = 1.1 - 0.2 * ((dt - 96) / 24);
+            } else {
+                pop = 0.9 + 0.1 * clamp01((dt - 120) / 100);
+            }
+            e.sprite.scale.set(base * f.scale * pop);
+        }
     }
 
     private makeText(): BitmapText {
@@ -77,6 +148,7 @@ export class Judgements extends Container {
     }
 
     update(time: number): void {
+        this.updateSprites(time);
         const scale = this.radius / 48;
         for (let i = this.active.length - 1; i >= 0; i--) {
             const e = this.active[i];
@@ -120,6 +192,11 @@ export class Judgements extends Container {
     }
 
     clear(): void {
+        for (const e of this.activeSprites) {
+            e.sprite.visible = false;
+            this.freeSprites.push(e.sprite);
+        }
+        this.activeSprites.length = 0;
         for (const e of this.active) {
             e.text.visible = false;
             this.free.push(e.text);

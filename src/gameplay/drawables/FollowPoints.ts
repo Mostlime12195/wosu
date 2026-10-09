@@ -26,10 +26,10 @@ export class FollowPoints extends Container {
     private first = 0;
     private readonly scaleBase: number;
 
-    constructor(beatmap: PlayableBeatmap, private readonly texture: Texture, preempt: number, private readonly fadeInTime: number, radius: number) {
+    constructor(beatmap: PlayableBeatmap, private readonly texture: Texture, preempt: number, private readonly fadeInTime: number, radius: number, scaleBase?: number) {
         super();
         this.eventMode = 'none';
-        this.scaleBase = (radius / 120) * 0.9;
+        this.scaleBase = scaleBase ?? (radius / 120) * 0.9;
         const objs = beatmap.hitObjects;
         for (let i = 0; i + 1 < objs.length; i++) {
             const a = objs[i], b = objs[i + 1];

@@ -99,7 +99,12 @@ export class SampleBank {
 
     play(name: SampleName, volume: number, opts: PlayOptions = {}): void {
         const buffer = this.buffers.get(name);
-        if (!buffer || !(volume > 0)) return;
+        if (buffer) this.playBuffer(buffer, volume, opts);
+    }
+
+    /** Play any decoded buffer (e.g. a beatmap's own hitsound) like a bank sample. */
+    playBuffer(buffer: AudioBuffer, volume: number, opts: PlayOptions = {}): void {
+        if (!(volume > 0)) return;
         const ctx = this.engine.context;
         try {
             const src = ctx.createBufferSource();
@@ -116,7 +121,7 @@ export class SampleBank {
             };
             src.start();
         } catch (e) {
-            console.warn('sample playback failed', name, e);
+            console.warn('sample playback failed', e);
         }
     }
 
@@ -140,7 +145,11 @@ export class SampleBank {
 
     /** Looping sample (slider slide, spinner spin); stop() ends it. */
     startLoop(name: SampleName, volume: number, opts: PlayOptions = {}): LoopHandle {
-        const buffer = this.buffers.get(name);
+        return this.startLoopBuffer(this.buffers.get(name) ?? null, volume, opts);
+    }
+
+    /** Loop any decoded buffer; null gives a silent handle. */
+    startLoopBuffer(buffer: AudioBuffer | null, volume: number, opts: PlayOptions = {}): LoopHandle {
         const ctx = this.engine.context;
         if (!buffer) return { setVolume() { /* no sample */ }, stop() { /* no sample */ } };
         const src = ctx.createBufferSource();

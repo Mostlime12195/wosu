@@ -17,6 +17,7 @@ import { UIComponent } from '../../ui/UIComponent';
 import { modAdjustedStars } from '../select/modStars';
 import { coverFill, formatStars, setBackground } from '../select/visuals';
 import { parseStoryboard, type Storyboard } from '../../beatmap/storyboard';
+import { BeatmapSkin } from '../../skin/BeatmapSkin';
 import type { OszArchive } from '../../beatmap/archive';
 import { PlayerScreen } from './PlayerScreen';
 
@@ -67,6 +68,7 @@ export class PlayerLoaderScreen extends Screen {
     private shownFor = 0;
     private pushed = false;
     private storyboard: Storyboard | null = null;
+    private beatmapSkin: BeatmapSkin | null = null;
     private cancelled = false;
     private retries = 0;
     /** Built and warmed up behind the loader; pushed once ready. */
@@ -108,6 +110,13 @@ export class PlayerLoaderScreen extends Screen {
             this.drawThumb();
         });
         void this.prepare();
+        // Beatmap skins change how the Player is built: rebuild one that was prepared but not started.
+        this.disposer.add(g.settings.beatmapSkin.bind(() => {
+            if (this.player && !this.pushed) {
+                this.player.destroy();
+                this.player = null;
+            }
+        }));
         void modAdjustedStars(g, set, diff, this.mods).then(stars => {
             if (this.destroyed || stars === this.stars) return;
             this.stars = stars;
@@ -178,6 +187,10 @@ export class PlayerLoaderScreen extends Screen {
                 if (this.track) this.track.userOffsetMs = v;
             }));
             this.storyboard = await this.readStoryboard(archive, diff.file);
+            if (this.cancelled) return this.handBackTrack();
+            // The map's own skin elements and hitsounds (both toggled in the visual/audio settings).
+            const customFiles = data.hitObjects.map(h => h.hitSample.filename).filter(Boolean);
+            this.beatmapSkin = await BeatmapSkin.load(archive, g.audio.context, { textures: true, samples: true, customFiles });
             if (this.cancelled) return this.handBackTrack();
             this.data = data;
             g.library.markPlayed(set.key);
@@ -322,6 +335,7 @@ export class PlayerLoaderScreen extends Screen {
             track: this.track,
             retryCount: this.retries,
             storyboard: this.storyboard,
+            beatmapSkin: this.beatmapSkin,
         });
         try {
             player.prepare(this.game, this._w, this._h);
@@ -375,6 +389,10 @@ export class PlayerLoaderScreen extends Screen {
         // A prepared Player that never got pushed is ours to dispose.
         if (this.player && !this.pushed) this.player.destroy();
         this.player = null;
+        // Shared by every retry; gone with this screen.
+        const skin = this.beatmapSkin;
+        this.beatmapSkin = null;
+        if (skin) setTimeout(() => skin.destroy(), 1000);
         this.game.background.releaseParallax(this);
         this.handBackTrack();
         this.contentOut();
@@ -447,6 +465,7 @@ class SettingsPanel extends UIComponent {
                     slider('Background dim', s.backgroundDim, pct),
                     slider('Background blur', s.backgroundBlur, pct),
                     new Checkbox('Storyboard', s.storyboard),
+                    new Checkbox('Beatmap skins', s.beatmapSkin),
                     new Checkbox('Background video', s.backgroundVideo),
                     new Checkbox('Kiai flashes on hit objects', s.kiaiFlash),
                 ],
