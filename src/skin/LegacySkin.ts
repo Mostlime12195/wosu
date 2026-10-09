@@ -81,8 +81,12 @@ export class LegacySkin {
     }
 
     static async load(source: SkinFiles, ctx: BaseAudioContext | null, opts: LegacySkinOptions = {}): Promise<LegacySkin> {
-        const files = rootFiles(source.files);
-        const lookup = new Map(files.map(f => [basename(f).toLowerCase(), f]));
+        // Paths relative to the skin's root ("hitcircle.png", "fonts/score-0.png").
+        const { root, files } = skinRoot(source.files);
+        const rel = (f: string) => f.slice(root.length);
+        // Elements and sounds sit at the root; only font glyphs may live in subfolders.
+        const rootLevel = files.filter(f => !rel(f).includes('/'));
+        const lookup = new Map(rootLevel.map(f => [rel(f).toLowerCase(), f]));
         let config: SkinConfig = {};
         if (opts.ini ?? true) {
             const ini = lookup.get('skin.ini');
@@ -101,14 +105,15 @@ export class LegacySkin {
                 .map(p => p.toLowerCase());
             const wanted = (stem: string): boolean => {
                 const base = stem.replace(/(-?\d+)$/, '');
-                if (ELEMENTS.includes(stem) || ELEMENTS.includes(base)) return true;
+                if (!stem.includes('/') && (ELEMENTS.includes(stem) || ELEMENTS.includes(base))) return true;
                 return fonts.some(p => GLYPHS.some(g => stem === `${p}-${g}`));
             };
             // Group by element: prefer the @2x image over the 1x one.
             const picks = new Map<string, { file: string; hi: boolean }>();
             for (const f of files) {
                 if (!IMAGE_RE.test(f)) continue;
-                let stem = stripExt(f).toLowerCase();
+                const r = rel(f);
+                let stem = (r.includes('/') ? r.slice(0, r.lastIndexOf('.')) : stripExt(r)).toLowerCase();
                 const hi = stem.endsWith('@2x');
                 if (hi) stem = stem.slice(0, -3);
                 if (!wanted(stem)) continue;
@@ -130,7 +135,7 @@ export class LegacySkin {
                 const cur = picks.get(stem);
                 if (!cur || rank(f) < rank(cur)) picks.set(stem, f);
             };
-            for (const f of files) {
+            for (const f of rootLevel) {
                 if (!AUDIO_RE.test(f)) continue;
                 const stem = stripExt(f).toLowerCase();
                 if (HITSOUND_RE.test(stem) || OTHER_SAMPLES.has(stem)) consider(f);
@@ -199,19 +204,18 @@ export class LegacySkin {
  * Files at the skin's root, with paths relative to it. Exported skins are
  * sometimes zipped inside one folder: then that folder is the root.
  */
-function rootFiles(all: readonly string[]): string[] {
-    const norm = all.map(f => f.replace(/\\/g, '/'));
+function skinRoot(all: readonly string[]): { root: string; files: string[] } {
+    const norm = all.map(f => f.replace(/\\/g, '/')).filter(f => !f.endsWith('/'));
     const top = norm.filter(f => !f.includes('/'));
     const looksLikeSkin = (fs: string[]) => fs.some(f => /^skin\.ini$/i.test(f) || IMAGE_RE.test(f) || AUDIO_RE.test(f));
-    if (looksLikeSkin(top)) return top.filter(f => !f.endsWith('/'));
-    const dirs = new Set(norm.filter(f => f.includes('/')).map(f => f.split('/')[0]));
-    if (dirs.size === 1) {
-        const [dir] = dirs;
-        const inner = norm.filter(f => f.startsWith(`${dir}/`)).map(f => f.slice(dir.length + 1));
-        const files = inner.filter(f => f && !f.includes('/')).map(f => `${dir}/${f}`);
-        if (files.length) return files;
+    if (!looksLikeSkin(top)) {
+        const dirs = new Set(norm.filter(f => f.includes('/')).map(f => f.split('/')[0]));
+        if (dirs.size === 1) {
+            const [dir] = dirs;
+            return { root: `${dir}/`, files: norm.filter(f => f.startsWith(`${dir}/`)) };
+        }
     }
-    return top;
+    return { root: '', files: norm };
 }
 
 function basename(p: string): string {

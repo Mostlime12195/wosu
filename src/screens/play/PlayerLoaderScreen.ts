@@ -315,7 +315,8 @@ export class PlayerLoaderScreen extends Screen {
     override update(dt: number): void {
         if (!this.isCurrent || this.pushed || this.cancelled) return;
         this.shownFor += dt;
-        if (this.ready && !this.player && this.shownFor > 300) this.preparePlayer();
+        // Wait for a selected skin that's still loading (e.g. right after startup).
+        if (this.ready && !this.player && this.shownFor > 300 && !this.game.skins.loading.value) this.preparePlayer();
         // Storyboard images decode while this screen covers everything.
         const loaded = !!this.player && this.player.assetsReady;
         const busy = this.panel.visible && this.panel.isPointerOver(this.game.input.pointer);

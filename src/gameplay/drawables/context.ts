@@ -3,7 +3,6 @@ import type { PlayableBeatmap, PlayableHitObject } from '../../beatmap/types';
 import { Easing } from '../../core/easing';
 import type { SliderResources } from '../../graphics/slider/SliderRenderer';
 import type { SkinTexture } from '../../skin/LegacySkin';
-import type { Skin } from '../../skin/Skin';
 import type { SkinChain } from '../../skin/SkinChain';
 import type { GameplayRules } from '../GameplayRules';
 
@@ -16,8 +15,6 @@ import type { GameplayRules } from '../GameplayRules';
 export interface DrawableContext {
     /** The skins in effect (beatmap → selected → default); every element comes from here. */
     readonly skin: SkinChain;
-    /** The game's own UI atlas (non-skin textures). */
-    readonly ui: Skin;
     readonly beatmap: PlayableBeatmap;
     readonly rules: GameplayRules;
     readonly sliders: SliderResources;

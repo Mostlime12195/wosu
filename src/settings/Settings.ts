@@ -82,6 +82,8 @@ export class GameSettings {
     readonly wheelVolumeInGameplay = new Bindable(true);
 
     // Skin / cursor (defaults and ranges are lazer's)
+    /** Selected imported skin's id ('' = wosu!'s default skin); lazer's OsuSetting.Skin. */
+    readonly skin = new Bindable<string>('');
     readonly menuCursorSize = new BindableNumber(1, 0.5, 2, 0.01);
     /** Gameplay cursor size (lazer's GameplayCursorSize). */
     readonly cursorSize = new BindableNumber(1, 0.1, 2, 0.01);

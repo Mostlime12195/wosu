@@ -1,7 +1,6 @@
 import { Container, type Renderer } from 'pixi.js';
 import type { PlayableBeatmap } from '../../beatmap/types';
 import { SliderResources } from '../../graphics/slider/SliderRenderer';
-import type { Skin } from '../../skin/Skin';
 import type { SkinChain } from '../../skin/SkinChain';
 import type { GameplayRules } from '../GameplayRules';
 import { legacyScale, makeKiaiFlash, type DrawableContext } from './context';
@@ -15,8 +14,6 @@ export interface PlayfieldOptions {
     renderer: Renderer;
     /** The skins in effect (beatmap → selected → default). */
     skin: SkinChain;
-    /** The game's own UI atlas. */
-    ui: Skin;
     beatmap: PlayableBeatmap;
     rules: GameplayRules;
     hidden: boolean;
@@ -58,7 +55,6 @@ export class Playfield extends Container {
         this.sliderResources = new SliderResources(o.renderer, b.comboColors, b.data.sliderTrackOverride, b.data.sliderBorder);
         this.ctx = {
             skin: o.skin,
-            ui: o.ui,
             beatmap: b,
             rules: o.rules,
             sliders: this.sliderResources,

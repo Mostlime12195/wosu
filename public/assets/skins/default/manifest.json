@@ -4,6 +4,9 @@
   "approachcircle@2x.png",
   "combobreak.ogg",
   "combobreak.wav",
+  "cursor@2x.png",
+  "cursormiddle@2x.png",
+  "cursortrail@2x.png",
   "default-0@2x.png",
   "default-1@2x.png",
   "default-2@2x.png",
@@ -69,6 +72,12 @@
   "score-dot@2x.png",
   "score-percent@2x.png",
   "score-x@2x.png",
+  "scorebar-bg@2x.png",
+  "scorebar-colour@2x.png",
+  "scorebar-ki@2x.png",
+  "scorebar-kidanger2@2x.png",
+  "scorebar-kidanger@2x.png",
+  "scorebar-marker@2x.png",
   "skin.ini",
   "sliderb@2x.png",
   "sliderfollowcircle@2x.png",
@@ -88,6 +97,13 @@
   "soft-sliderwhistle.ogg",
   "soft-sliderwhistle.wav",
   "soft-spinnerbonus.wav",
-  "soft-spinnerspin.wav"
+  "soft-spinnerspin.wav",
+  "spinner-approachcircle@2x.png",
+  "spinner-bottom@2x.png",
+  "spinner-clear@2x.png",
+  "spinner-glow@2x.png",
+  "spinner-rpm@2x.png",
+  "spinner-spin@2x.png",
+  "spinner-top@2x.png"
  ]
 }

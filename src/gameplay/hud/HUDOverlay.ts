@@ -2,13 +2,13 @@ import { Container } from 'pixi.js';
 import type { PlayableBeatmap } from '../../beatmap/types';
 import { tween } from '../../core/Tweener';
 import type { GameSettings, HudVisibility } from '../../settings/Settings';
-import type { Skin } from '../../skin/Skin';
+import type { SkinChain } from '../../skin/SkinChain';
 import type { Grade } from '../../storage/ScoreStore';
 import type { GameplayButton } from '../input/GameplayInput';
 import { BreakOverlay } from './BreakOverlay';
 import { HealthBar } from './HealthBar';
 import { HitErrorMeter } from './HitErrorMeter';
-import { KeyCounter } from './KeyCounter';
+import { KeyCounter, LegacyKeyCounter, type KeyOverlay } from './KeyCounter';
 import { ComboCounter, ScoreCounter } from './ScoreDisplay';
 import { SongProgress } from './SongProgress';
 
@@ -44,8 +44,12 @@ const NEXT_MODE: Record<HudVisibility, HudVisibility> = { never: 'hideDuringGame
  * Everything drawn over the playfield in screen space: score/accuracy
  * (top-right), health (top-left), combo (bottom-left), key overlay
  * (right), hit error meter and song progress (bottom), break info.
- * Visibility follows lazer's HUD visibility mode (fading as a whole), each
- * element has its own toggle, and every setting applies live.
+ * Score, accuracy, combo and health are lazer's legacy-skin components,
+ * drawn from the skin chain in lazer's 1024×768 HUD units (so they size
+ * like lazer with any osu! skin); the key overlay is the skin's when it
+ * has inputoverlay images. Visibility follows lazer's HUD visibility mode
+ * (fading as a whole), each element has its own toggle, and every
+ * setting applies live.
  */
 export class HUDOverlay extends Container {
     readonly errorMeter: HitErrorMeter;
@@ -53,31 +57,35 @@ export class HUDOverlay extends Container {
     private readonly content = new Container();
     private readonly score: ScoreCounter;
     private readonly combo: ComboCounter;
-    private readonly health = new HealthBar();
+    private readonly health: HealthBar;
     private readonly progress: SongProgress;
-    private readonly keys: KeyCounter;
+    private readonly keys: KeyOverlay;
     private readonly breakInfo: BreakOverlay;
     /** Ctrl held: show the HUD whatever the mode (lazer's HoldForHUD). */
     private holding = false;
     private playing = false;
     private shown: boolean | null = null;
     private unit = 1;
+    /** lazer's HUD unit: 1024×768 fitted inside the screen, times the HUD scale. */
+    private legacyUnit = 1;
     private w = 0;
     private h = 0;
     private readonly offs: (() => void)[] = [];
 
-    constructor(skin: Skin, beatmap: PlayableBeatmap, private readonly settings: GameSettings, private readonly opts: HUDOptions = { canFail: true }) {
+    constructor(chain: SkinChain, beatmap: PlayableBeatmap, private readonly settings: GameSettings, private readonly opts: HUDOptions = { canFail: true }) {
         super();
         this.eventMode = 'none';
         this.content.eventMode = 'none';
         const d = beatmap.difficulty;
-        this.score = new ScoreCounter(skin);
-        this.combo = new ComboCounter(skin);
+        this.score = new ScoreCounter(chain);
+        this.combo = new ComboCounter(chain);
+        this.health = new HealthBar(chain);
         this.progress = new SongProgress(beatmap);
-        this.keys = new KeyCounter(settings.keyOverlayStyle.value);
+        this.keys = LegacyKeyCounter.create(chain, settings.keyOverlayStyle.value) ?? new KeyCounter(settings.keyOverlayStyle.value);
         this.errorMeter = new HitErrorMeter(d.window300, d.window100, d.window50);
         this.breakInfo = new BreakOverlay(beatmap.breaks);
-        this.content.addChild(this.progress, this.errorMeter, this.keys, this.health, this.score, this.combo);
+        // lazer: health bars in front of everything else (for full-screen health bar skins).
+        this.content.addChild(this.progress, this.errorMeter, this.keys, this.score, this.combo, this.health);
         this.addChild(this.breakInfo, this.content);
         const s = settings;
         const apply = () => this.applySettings();
@@ -162,18 +170,20 @@ export class HUDOverlay extends Container {
         this.h = h;
         const base = Math.max(0.6, Math.min(1.6, h / 720));
         const unit = (this.unit = base * this.settings.hudScale.value);
-        this.score.position.set(w - 14 * unit, 8 * unit);
-        this.combo.position.set(12 * unit, h - this.bottomInset());
-        this.health.position.set(14 * unit, 14 * unit);
-        this.health.layout(Math.min(w * 0.42, 560 * unit), 9 * unit);
+        const lu = (this.legacyUnit = Math.min(w / 1024, h / 768) * this.settings.hudScale.value);
+        this.score.position.set(w, 0);
+        this.score.scale.set(lu);
+        this.health.position.set(0, 0);
+        this.health.scale.set(lu);
+        // lazer: bottom-left, 10 units margin, scale 1.28.
+        this.combo.scale.set(1.28 * lu);
+        this.combo.position.set(10 * lu, h - this.comboInset());
         this.progress.scale.set(unit);
         this.progress.position.set(0, h);
         this.progress.layout(w / unit);
         this.errorMeter.position.set(w / 2, h - this.bottomInset() - 14 * unit);
         this.errorMeter.layout(220 * unit, unit);
-        const keyScale = Math.min(1, unit);
-        this.keys.scale.set(keyScale);
-        this.keys.position.set(w - KeyCounter.width * keyScale - 8 * unit, h / 2 - (this.keys.stackHeight * keyScale) / 2);
+        this.keys.place(w, h, unit, lu);
         this.breakInfo.position.set(w / 2, h / 2);
         this.breakInfo.layout(w);
     }
@@ -183,8 +193,18 @@ export class HUDOverlay extends Container {
         return (this.progress.visible ? this.progress.blockHeight + 6 : 10) * this.unit;
     }
 
+    /** lazer's margin under the combo counter, raised above the song progress block while it shows. */
+    private comboInset(): number {
+        return this.progress.visible ? this.bottomInset() : 10 * this.legacyUnit;
+    }
+
     onHit(error: number): void {
         this.errorMeter.add(error);
+    }
+
+    /** A successful judgement (any hit result, ticks included): the health bar flashes. */
+    onJudgement(): void {
+        this.health.onJudgement();
     }
 
     update(dt: number, s: HUDState): void {
@@ -194,16 +214,16 @@ export class HUDOverlay extends Container {
             this.updateVisibility();
         }
         this.score.set(s.score, s.accuracy);
-        this.score.update(dt, this.unit);
+        this.score.update(dt);
         this.combo.set(s.combo);
-        this.combo.update(dt, this.unit);
+        this.combo.update(dt);
         this.health.update(s.hp, dt);
         if (this.progress.visible) this.progress.update(s.time, s.rate);
         this.errorMeter.update(dt);
         if (this.keys.visible) this.keys.update(dt, s.down, s.counts);
         this.breakInfo.update(s.time, s.accuracy, s.grade);
         // Combo sits above the progress graph when that is shown.
-        this.combo.y = this.h - this.bottomInset();
+        this.combo.y = this.h - this.comboInset();
     }
 
     isBreak(time: number): boolean {

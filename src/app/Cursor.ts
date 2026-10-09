@@ -1,4 +1,7 @@
 import { Assets, Container, type Texture } from 'pixi.js';
+import type { SkinChain } from '../skin/SkinChain';
+import type { SkinManager } from '../skin/SkinManager';
+import { resolveCursorSkin } from './cursor/CursorSkin';
 import { GameplayCursor } from './cursor/GameplayCursor';
 import { MenuCursor } from './cursor/MenuCursor';
 
@@ -10,7 +13,6 @@ const IDLE_MS = 6000;
 export interface CursorTextures {
     menu: Texture;
     menuAdditive: Texture;
-    trail: Texture;
 }
 
 /**
@@ -20,9 +22,12 @@ export interface CursorTextures {
  * - `menu`: lazer's arrow MenuCursor, shown everywhere except active
  *   gameplay (also over the pause / fail menus, and over autoplay, where
  *   lazer keeps the user's own cursor visible).
- * - `gameplay`: the osu! cursor with its trail. The player owns it
- *   (`external`), positions it with `moveTo` and reports held buttons with
- *   `setDownCount`.
+ * - `gameplay`: the osu! cursor with its trail, from the skins in effect:
+ *   the player's chain while playing (`useSkin`, so beatmap skins can
+ *   override it), the selected skin's otherwise; it follows skin changes
+ *   live. The player owns it (`external`), positions it with `moveTo` and
+ *   reports held buttons with `setDownCount`. The menu cursor is never
+ *   skinned, as in lazer.
  *
  * Game decides which one the current screen wants (`menuStateVisible`,
  * `gameplayShown`); this class adds lazer's own rules on top: idle and
@@ -54,30 +59,47 @@ export class Cursor extends Container {
     private lastInteraction = performance.now();
     /** Primary-pointer samples (logical px) since the last frame, for a smooth trail. */
     private readonly samples: number[] = [];
+    /** The player's skin chain while a play is up. */
+    private playerChain: SkinChain | null = null;
 
     static async loadTextures(): Promise<CursorTextures> {
         const load = (name: string) =>
             Assets.load<Texture>({ src: `${BASE}assets/skin/cursor/${name}.png`, data: { autoGenerateMipmaps: true } });
-        const [menu, menuAdditive, trail] = await Promise.all([
-            load('menu-cursor'),
-            load('menu-cursor-additive'),
-            load('cursortrail'),
-        ]);
-        return { menu, menuAdditive, trail };
+        const [menu, menuAdditive] = await Promise.all([load('menu-cursor'), load('menu-cursor-additive')]);
+        return { menu, menuAdditive };
     }
 
     constructor(
         textures: CursorTextures,
-        gameplayTexture: Texture,
+        private readonly skins: SkinManager,
         private readonly toLogical: (clientX: number, clientY: number) => { x: number; y: number },
     ) {
         super();
         this.eventMode = 'none';
-        this.gameplay = new GameplayCursor(gameplayTexture, textures.trail);
+        this.gameplay = new GameplayCursor();
         this.gameplay.visible = false;
         this.menu = new MenuCursor(textures.menu, textures.menuAdditive);
         this.addChild(this.gameplay, this.menu);
+        skins.current.bind(() => {
+            // A running play keeps its skin (like its playfield); the switch shows from the next play.
+            if (!this.playerChain) this.applySkin();
+        });
+        this.applySkin();
         this.listen();
+    }
+
+    /**
+     * The skin chain the gameplay cursor draws from: the player's (with the
+     * beatmap's skin) while a play is up, `null` for the selected skin's.
+     */
+    useSkin(chain: SkinChain | null): void {
+        this.playerChain = chain;
+        this.applySkin();
+    }
+
+    private applySkin(): void {
+        if (!this.skins.loaded) return;
+        this.gameplay.setSkin(resolveCursorSkin(this.playerChain ?? this.skins.chain(), this.skins.default));
     }
 
     /** The player owns the gameplay cursor while this is set. */

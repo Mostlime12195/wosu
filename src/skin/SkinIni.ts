@@ -56,7 +56,7 @@ export const SKIN_DEFAULTS: Required<Omit<SkinConfig, 'sliderTrackOverride' | 's
         cursorRotate: true,
         cursorExpand: true,
         cursorCentre: true,
-        cursorTrailRotate: false,
+        cursorTrailRotate: true,
         hitCircleOverlayAboveNumber: true,
         layeredHitSounds: true,
         spinnerFadePlayfield: false,

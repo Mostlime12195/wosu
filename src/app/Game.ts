@@ -144,7 +144,8 @@ export class Game {
         this.background = new BackgroundManager(app.renderer, () => skin.defaultBackground);
         this.screens = new ScreenStack(this);
         this.tooltips = new TooltipLayer(() => this.input.pointer, () => ({ width: app.width, height: app.height }));
-        this.cursor = new Cursor(cursorTextures, skin.get('cursor.png'), (x, y) => app.toLogical(x, y));
+        // The gameplay cursor and trail come from the osu! skins (selected → default).
+        this.cursor = new Cursor(cursorTextures, skins, (x, y) => app.toLogical(x, y));
         this.fps = new FpsCounter();
 
         installUIContext({
@@ -179,6 +180,8 @@ export class Game {
         this.toolbar = new Toolbar(this);
         app.toolbarLayer.addChild(this.toolbar);
         this.toasts = new ToastTray(this.notifications);
+        // Gameplay screens draw their own cursor; lazer shows no notification toasts over them.
+        this.toasts.suppressed = () => this.screens.current?.showMenuCursor === false;
         app.toastLayer.addChild(this.toasts, this.volume);
 
         this.bindSettings();
@@ -206,6 +209,8 @@ export class Game {
             this.favourites.init().catch(e => console.error('favourites init failed', e)),
             this.knownVideos.init().catch(e => console.error('video registry init failed', e)),
         ]);
+        // Imported skins and the selected one load in the background (applies from the next play).
+        void this.skins.attach(this).catch(e => console.error('skin store init failed', e));
         this.background.setDefault();
         this.screens.push(new IntroScreen());
         this.handleLaunchParams();
@@ -365,7 +370,7 @@ export class Game {
             e.preventDefault();
             this.volume.adjust(e.deltaY < 0 ? 0.05 : -0.05);
         }, { passive: false });
-        // Drag & drop .osz import, anywhere in the game.
+        // Drag & drop .osz / .osk import, anywhere in the game.
         window.addEventListener('dragover', e => {
             e.preventDefault();
             if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
@@ -494,9 +499,11 @@ export class Game {
     }
 
     async importFiles(files: File[]): Promise<LibrarySet[]> {
-        const osz = files.filter(f => /\.(osz|zip)$/i.test(f.name));
+        // .osk (or a zip holding a skin.ini and no .osu) goes to the skins.
+        const { skins, beatmaps: osz } = await this.skins.partition(files);
+        if (skins.length) void this.skins.importFiles(skins);
         if (!osz.length) {
-            this.notifications.error('Drop .osz beatmap files to import them.');
+            if (!skins.length) this.notifications.error('Drop .osz beatmaps or .osk skins to import them.');
             return [];
         }
         const n = this.notifications.progress(`Importing ${osz.length} beatmap${osz.length > 1 ? 's' : ''}…`);
@@ -516,10 +523,10 @@ export class Game {
     }
 
     /** Pick a file with the browser's file dialog (programmatic, never shown in-page). */
-    pickFiles(): void {
+    pickFiles(accept = '.osz,.osk,.zip'): void {
         const el = document.createElement('input');
         el.type = 'file';
-        el.accept = '.osz,.zip';
+        el.accept = accept;
         el.multiple = true;
         el.onchange = () => {
             const files = Array.from(el.files ?? []);

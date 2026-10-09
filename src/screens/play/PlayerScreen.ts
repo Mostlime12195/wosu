@@ -234,7 +234,6 @@ export class PlayerScreen extends Screen {
         this.playfield = new Playfield({
             renderer: g.app.renderer,
             skin: chain,
-            ui: g.skin,
             beatmap,
             rules: this.rules,
             hidden: mods.has('HD'),
@@ -256,7 +255,7 @@ export class PlayerScreen extends Screen {
             this.flashlight.visible = false;
         }
 
-        this.hud = new HUDOverlay(g.skin, beatmap, g.settings, { canFail: !noFail });
+        this.hud = new HUDOverlay(chain, beatmap, g.settings, { canFail: !noFail });
         this.menu = new GameplayMenu(g.skin.tex('triangle'));
         this.skip = new SkipButton();
         this.skip.onActivate = () => this.doSkip();
@@ -364,6 +363,10 @@ export class PlayerScreen extends Screen {
             else this.hitsounds.sliderEdge(h, h.slides, ev.x);
         });
         rules.headHit.add((_i, _t, error) => this.hud.onHit(error));
+        // lazer's HealthDisplay flashes on every successful judgement (ticks and spins too).
+        rules.objectJudged.add(info => { if (info.result !== 'miss') this.hud.onJudgement(); });
+        rules.nestedJudged.add((_i, _e, hit) => { if (hit) this.hud.onJudgement(); });
+        rules.spun.add(() => this.hud.onJudgement());
         rules.spun.add((index, bonus) => {
             if (bonus) this.hitsounds.spinnerBonus(objs[index]);
         });
@@ -463,6 +466,8 @@ export class PlayerScreen extends Screen {
         this.game.background.suppressParallax(this);
         this.updateBackgroundLayers();
         const cursor = this.game.cursor;
+        // The gameplay cursor follows this play's skins (beatmap skin included).
+        cursor.useSkin(this.skinChain);
         cursor.external = true;
         this.game.updateCursorVisibility();
         this.applyBackground(800);
@@ -506,6 +511,7 @@ export class PlayerScreen extends Screen {
         this.game.background.releaseParallax(this);
         const cursor = this.game.cursor;
         cursor.external = false;
+        cursor.useSkin(null);
         this.game.updateCursorVisibility();
         if (this.entered) this.game.background.setCustom(null);
         if (this.video) {
@@ -805,7 +811,11 @@ export class PlayerScreen extends Screen {
         this.clock.freeze();
         this.options.track.failSlowdown(FAIL_DURATION);
         this.storyboard?.setFailed(true);
-        this.game.uiSounds.play('Gameplay/failsound');
+        // A skin (or the map, with beatmap hitsounds on) may bring its own failsound.
+        const fromMap = this.game.settings.beatmapHitsounds.value ? this.options.beatmapSkin?.sample('failsound') : undefined;
+        const own = fromMap !== undefined ? fromMap : this.skinChain.sample('failsound');
+        if (own) this.game.samples.playBuffer(own, 1);
+        else if (own === undefined) this.game.uiSounds.play('Gameplay/failsound');
         this.menu.visible = false;
         // lazer: an additive red flash fading from full over 1s.
         this.failFlash.alpha = 0.6;

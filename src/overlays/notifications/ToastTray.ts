@@ -118,13 +118,15 @@ class Toast extends UIComponent {
 export class ToastTray extends Container {
     private readonly toasts: Toast[] = [];
     topOffset = 48;
+    /** True while toasts must stay hidden (gameplay, like lazer); they still land in the panel. */
+    suppressed: () => boolean = () => false;
     private viewportW = 0;
 
     constructor(private readonly manager: NotificationManager) {
         super();
         manager.posted.add(n => {
             // With the panel open, notifications go straight into it.
-            if (n.silent || manager.panelOpen.value) return;
+            if (n.silent || manager.panelOpen.value || this.suppressed()) return;
             this.add(n);
         });
         manager.panelOpen.bind(open => {
