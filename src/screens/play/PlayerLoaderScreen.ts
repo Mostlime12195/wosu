@@ -363,7 +363,8 @@ export class PlayerLoaderScreen extends Screen {
     }
 
     override onResuming(previous: Screen): void {
-        const outcome = previous.constructor.name === 'PlayerScreen' ? (previous as PlayerScreen).outcome : 'quit';
+        // instanceof, not constructor.name: production builds minify class names.
+        const outcome = previous instanceof PlayerScreen ? previous.outcome : 'quit';
         this.player = null;
         if (outcome === 'retry' && !this.cancelled) {
             this.retries++;

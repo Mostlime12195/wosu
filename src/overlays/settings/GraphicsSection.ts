@@ -17,9 +17,9 @@ export function graphicsSection(game: Game): SectionDef {
                 title: 'Renderer',
                 rows: [
                     dropdownRow<RendererPreference>('Renderer', [
-                        { value: 'auto', label: 'Automatic (WebGL)' },
+                        { value: 'auto', label: 'Automatic (WebGPU, else WebGL)' },
                         { value: 'webgl', label: 'WebGL' },
-                        { value: 'webgpu', label: 'WebGPU (experimental)' },
+                        { value: 'webgpu', label: 'WebGPU' },
                     ], s.renderer, { keywords: 'webgpu webgl gpu' }),
                     textRow(`Currently rendering with ${kind}${fallback}.`, { color: Colors.grayA, size: 12 }).row,
                     noticeRow('Some graphics changes take effect after a restart.', Colors.yellow, 'warning', {

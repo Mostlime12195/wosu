@@ -1,7 +1,8 @@
 /**
  * Beatmaps downloaded on first launch, like osu!lazer's bundled beatmaps:
  * all Featured Artist sets (licensed for use in osu!) with a spread of
- * osu!standard difficulties. cYsmix - triangles always comes first; the
+ * osu!standard difficulties. lazer's tutorial (nekodex - new beginnings,
+ * mapped by pishifat) and cYsmix - triangles always come first; the
  * rest is a weekly-seeded pick, so new players in the same week get the
  * same selection (lazer does the same).
  */
@@ -11,7 +12,10 @@ export interface BundledSet {
     title: string;
 }
 
-const ALWAYS: BundledSet = { sid: 1841885, artist: 'cYsmix', title: 'triangles' };
+export const ALWAYS_BUNDLED: readonly BundledSet[] = [
+    { sid: 1841885, artist: 'cYsmix', title: 'triangles' },
+    { sid: 1011011, artist: 'nekodex', title: 'new beginnings' },
+];
 
 const POOL: readonly BundledSet[] = [
     { sid: 2412232, artist: 'Will Stetson', title: 'Of Our Time' },
@@ -28,8 +32,8 @@ const POOL: readonly BundledSet[] = [
     { sid: 123593, artist: 'Rostik', title: 'Liquid (Paul Rosenthal Remix)' },
 ];
 
-/** How many sets a first launch downloads (triangles included). */
-export const BUNDLED_COUNT = 4;
+/** How many sets a first launch downloads (the always-included ones counted). */
+export const BUNDLED_COUNT = 5;
 
 /** The sets to download, in order. `now` only picks the week. */
 export function bundledSelection(now: Date = new Date(), count = BUNDLED_COUNT): BundledSet[] {
@@ -41,7 +45,7 @@ export function bundledSelection(now: Date = new Date(), count = BUNDLED_COUNT):
         const j = Math.floor(rand() * (i + 1));
         [pool[i], pool[j]] = [pool[j], pool[i]];
     }
-    return [ALWAYS, ...pool.slice(0, Math.max(0, count - 1))];
+    return [...ALWAYS_BUNDLED, ...pool.slice(0, Math.max(0, count - ALWAYS_BUNDLED.length))];
 }
 
 function mulberry32(seed: number): () => number {

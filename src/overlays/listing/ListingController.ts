@@ -175,6 +175,9 @@ export class ListingController {
             this.changed.emit(set.sid);
             return;
         }
+        // Remember whether music was playing before the first preview (switching previews keeps it).
+        const music = this.game.music;
+        if (music.current.value?.kind !== 'online') music.resumeAfterPreview = music.isPlaying;
         this.previewPending = set.sid;
         this.previewSid = set.sid;
         void this.game.music.playOnline(set).finally(() => {
@@ -202,7 +205,7 @@ export class ListingController {
         setTimeout(() => {
             const now = music.current.value;
             const silent = !now || (now.kind === 'online' && now.sid === sid && !music.isPlaying);
-            if (!silent || !this.game.settings.menuMusic.value || this.isActive()) return;
+            if (!silent || !music.resumeAfterPreview || !this.game.settings.menuMusic.value || this.isActive()) return;
             const sel = this.game.selection.value;
             if (music.loopFromPreview && sel) void music.playSet(sel.set, { fromPreview: true });
             else void music.next();

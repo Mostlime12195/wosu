@@ -35,6 +35,8 @@ export class GameSettings {
 
     // Gameplay
     readonly backgroundDim = new BindableNumber(0.7, 0, 1, 0.01);
+    /** lazer's "Hold-to-confirm activation time" (ms): hold to pause / quick retry. */
+    readonly holdToConfirmMs = new BindableNumber(200, 0, 1000, 50);
     readonly backgroundBlur = new BindableNumber(0, 0, 1, 0.01);
     readonly snakingIn = new Bindable(true);
     readonly snakingOut = new Bindable(true);
@@ -105,6 +107,8 @@ export class GameSettings {
     readonly lastBeatmap = new Bindable<string>('');
     /** First-launch beatmaps were downloaded (lazer's bundled beatmaps). */
     readonly bundledBeatmapsFetched = new Bindable(false);
+    /** Always-included first-launch maps already offered (set ids). */
+    readonly bundledSeen = new Bindable<number[]>([]);
 
     private readonly registry = new Map<string, Bindable<unknown>>();
     private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -170,7 +174,7 @@ export class GameSettings {
 
     resetAll(): void {
         for (const [k, b] of this.registry) {
-            if (k === 'selectedMods' || k === 'lastBeatmap' || k === 'playerName' || k === 'bundledBeatmapsFetched') continue;
+            if (k === 'selectedMods' || k === 'lastBeatmap' || k === 'playerName' || k === 'bundledBeatmapsFetched' || k === 'bundledSeen') continue;
             b.setDefault();
         }
     }

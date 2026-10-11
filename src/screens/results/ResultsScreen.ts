@@ -27,7 +27,6 @@ export class ResultsScreen extends Screen {
     private readonly statsWrap = new Container();
     private readonly buttons = new Container();
     private retryButton!: Button;
-    private doneButton!: Button;
     private backButton!: BackButton;
     private clock = 0;
     private panelScale = 1;
@@ -49,9 +48,8 @@ export class ResultsScreen extends Screen {
         const triangles = g.skin.tex('triangle');
         this.retryButton = new Button('Retry', { color: Colors.pink, icon: 'retry', triangles, width: 170, height: 44 });
         this.retryButton.onActivate = () => this.retry();
-        this.doneButton = new Button('Back to song select', { color: 0x4a4a5a, icon: 'list', triangles, width: 220, height: 44 });
-        this.doneButton.onActivate = () => this.goBack();
-        this.buttons.addChild(this.retryButton, this.doneButton);
+        // The footer's back button already returns to song select (lazer has just Retry here).
+        this.buttons.addChild(this.retryButton);
         this.buttons.alpha = 0;
         this.backButton = new BackButton();
         this.backButton.onActivate = () => this.goBack();
@@ -70,13 +68,13 @@ export class ResultsScreen extends Screen {
         if (!this.panel) return;
         const toolbar = this.game.toolbarVisible.value ? this.game.toolbar.h : 0;
         const groupW = PANEL_W + GAP + STATS_W;
-        const retry = this.retryButton, done = this.doneButton;
+        const retry = this.retryButton;
         const back = this.backButton;
-        const rowW = retry.w + 16 + done.w;
+        const rowW = retry.w;
         // Short landscape screens (phones): a button row under the panels
         // shrinks them a lot, so the buttons stack in a column on the right
         // (clear of the back button) and the panels use the full height.
-        const colW = Math.max(retry.w, done.w);
+        const colW = retry.w;
         const normalTop = toolbar + 16;
         const normalScale = Math.max(0.3, Math.min(MAX_SCALE, (h - normalTop - 76) / PANEL_H, (w - 32) / groupW));
         const compactTop = toolbar + 8;
@@ -90,15 +88,13 @@ export class ResultsScreen extends Screen {
             const used = groupW * compactScale + 16 + colW;
             x0 = Math.max(left, Math.round((w - used) / 2));
             retry.position.set(0, 0);
-            done.position.set(0, retry.h + 12);
-            const stackH = retry.h + 12 + done.h;
+            const stackH = retry.h;
             this.buttons.position.set(Math.round(x0 + groupW * compactScale + 16), Math.round(this.top + (PANEL_H * compactScale - stackH) / 2));
         } else {
             this.top = normalTop;
             this.panelScale = normalScale;
             x0 = (w - groupW * normalScale) / 2;
             retry.position.set(0, 0);
-            done.position.set(retry.w + 16, 0);
             this.buttons.position.set(Math.round((w - rowW) / 2), h - 60);
         }
         const s = this.panelScale;

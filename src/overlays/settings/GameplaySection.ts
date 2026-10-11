@@ -62,7 +62,13 @@ export function gameplaySection(game: Game): SectionDef {
             },
             {
                 title: 'General',
-                rows: [checkboxRow('Fullscreen when playing', s.fullscreenOnPlay)],
+                rows: [
+                    checkboxRow('Fullscreen when playing', s.fullscreenOnPlay),
+                    sliderRow('Hold-to-confirm activation time', s.holdToConfirmMs, v => `${Math.round(v)} ms`, {
+                        description: 'How long to hold the pause button or the quick retry key before it acts.',
+                        keywords: 'hold pause retry delay confirm',
+                    }),
+                ],
             },
         ],
     };

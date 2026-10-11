@@ -22,7 +22,7 @@ import { TextInputProxy } from '../input/TextInputProxy';
 import { BeatmapApi } from '../online/BeatmapApi';
 import { DownloadManager, type DownloadTask } from '../online/Downloader';
 import { coverUrl, resolveProviders, type OnlineSet } from '../online/providers';
-import { bundledSelection } from '../online/bundled';
+import { ALWAYS_BUNDLED, bundledSelection } from '../online/bundled';
 import { BeatmapListingOverlay } from '../overlays/BeatmapListingOverlay';
 import { DialogOverlay } from '../overlays/DialogOverlay';
 import { NotificationManager } from '../overlays/notifications/Notifications';
@@ -226,9 +226,12 @@ export class Game {
      */
     private async fetchBundledBeatmaps(): Promise<void> {
         const s = this.settings;
-        if (s.bundledBeatmapsFetched.value && this.library.sets.length > 0) return;
+        // Already fetched: still pick up always-included maps added since (once each).
+        const sets = s.bundledBeatmapsFetched.value && this.library.sets.length > 0
+            ? ALWAYS_BUNDLED.filter(b => !s.bundledSeen.value.includes(b.sid) && !this.library.get(`osu-${b.sid}`))
+            : bundledSelection();
         let any = false;
-        for (const set of bundledSelection()) {
+        for (const set of sets) {
             const lib = await this.downloadSet(set, { video: false });
             if (!lib) continue;
             any = true;
@@ -238,6 +241,8 @@ export class Game {
             }
         }
         if (any) s.bundledBeatmapsFetched.value = true;
+        // Remember what was offered, so deleting a map doesn't make it come back.
+        s.bundledSeen.value = [...new Set([...s.bundledSeen.value, ...ALWAYS_BUNDLED.map(b => b.sid)])];
     }
 
     // ------------------------------------------------------------------
@@ -318,8 +323,7 @@ export class Game {
         s.gameplayCursorDuringTouch.bind(() => this.updateCursorVisibility());
         s.menuMusic.bind(v => (this.music.enabled = v), true);
         s.renderer.bind(v => {
-            this.settings.restartRequired.value = v !== 'auto' && v !== this.app.rendererKind ||
-                (v === 'auto' && this.app.rendererKind !== 'webgl');
+            this.settings.restartRequired.value = v !== this.app.bootPreference;
         });
         s.antialias.bind(() => (this.settings.restartRequired.value = true));
         this.mods.value = sanitizeMods(s.selectedMods.value);

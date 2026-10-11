@@ -43,6 +43,11 @@ export class MusicController {
     /** In song select the selected song loops from its preview point. */
     loopFromPreview = false;
     enabled = true;
+    /**
+     * Whether music carries on after a beatmap-listing preview ends. False
+     * when the preview interrupted paused music (it stays paused).
+     */
+    resumeAfterPreview = true;
 
     constructor(
         private readonly engine: AudioEngine,
@@ -51,7 +56,8 @@ export class MusicController {
     ) {
         preview.ended.add(() => {
             if (this.current.value?.kind !== 'online') return;
-            if (this.enabled && !this.loopFromPreview) void this.next();
+            // A listing preview started while the music was paused leaves it paused.
+            if (this.enabled && !this.loopFromPreview && this.resumeAfterPreview) void this.next();
             else this.playingState.value = false;
         });
         library.changed.add(() => {
@@ -92,6 +98,7 @@ export class MusicController {
 
     /** Play a library set. `fromPreview` starts at the map's preview point. */
     async playSet(set: LibrarySet, opts: { fromPreview?: boolean; restart?: boolean; fadeInMs?: number } = {}): Promise<void> {
+        this.resumeAfterPreview = true;
         const now = this.current.value;
         if (!opts.restart && now?.kind === 'library' && now.set.key === set.key && this.track && this.trackSetKey === set.key && !this.lent) {
             if (!this.track.isPlaying) this.track.play();
@@ -183,6 +190,7 @@ export class MusicController {
     }
 
     togglePause(): void {
+        this.resumeAfterPreview = true;
         if (this.track && !this.lent) {
             if (this.track.isPlaying) this.track.pause();
             else this.track.play();

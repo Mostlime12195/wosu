@@ -9,7 +9,7 @@ import type { LegacySkin } from '../../skin/LegacySkin';
 import type { SkinChain } from '../../skin/SkinChain';
 import type { BeatmapData, PlayableBeatmap, PlayableSlider } from '../../beatmap/types';
 import { clamp01, damp } from '../../core/math';
-import { tween } from '../../core/Tweener';
+import { tween, tweener } from '../../core/Tweener';
 import { comboColor } from '../../gameplay/drawables/context';
 import { PLAYFIELD_H, PLAYFIELD_W, Playfield } from '../../gameplay/drawables/Playfield';
 import { BackgroundVideo } from '../../gameplay/BackgroundVideo';
@@ -57,7 +57,6 @@ type Phase = 'loading' | 'playing' | 'paused' | 'resuming' | 'failed' | 'complet
 /** Results appear this long after the last judgement (lazer). */
 const RESULTS_DELAY = 1000;
 const FAIL_DURATION = 2500;
-const QUICK_RETRY_HOLD = 500;
 /** Sample HP this often for the results graph. */
 const HEALTH_SAMPLE_MS = 250;
 /**
@@ -261,6 +260,7 @@ export class PlayerScreen extends Screen {
         this.skip.onActivate = () => this.doSkip();
         this.resume = new ResumeOverlay();
         this.holdButton = new HoldForMenuButton();
+        this.offs.push(this.game.settings.holdToConfirmMs.bind(v => (this.holdButton.holdMs = v), true));
         this.holdButton.onHeld = () => this.pause();
         this.failFlash.alpha = 0;
         this.retryFade.alpha = 0;
@@ -375,7 +375,9 @@ export class PlayerScreen extends Screen {
         });
         this.health.failedSignal.add(() => this.startFail());
         this.input.pressed.add((time, x, y) => {
-            if (this.phase !== 'playing' || this.mode === 'autoplay') return;
+            // Autoplay and Relax hit for you; like lazer (AllowUserPresses = false), your own clicks
+            // must not reach the rules (they'd early-click, shake and notelock the auto-hits).
+            if (this.phase !== 'playing' || this.mode === 'autoplay' || this.mode === 'relax') return;
             const p = this.toPlayfield(x, y);
             if (this.mode === 'autopilot' && this.auto) {
                 // Autopilot moves the cursor; the player only taps.
@@ -831,6 +833,16 @@ export class PlayerScreen extends Screen {
         this.game.background.setDim(1 - (1 - s.backgroundDim.value) * 0.3, 60);
     }
 
+    /** Back during the fail animation jumps to its end: the retry/quit menu at once (lazer). */
+    private skipFailAnimation(): void {
+        this.options.track.pause();
+        tweener.kill(this.failContent);
+        this.failContent.scale.set(0.85);
+        this.failContent.rotation = Math.PI / 180;
+        this.failClock = FAIL_DURATION;
+        this.updateFail(0);
+    }
+
     private updateFail(dt: number): void {
         this.failClock += dt;
         const t = clamp01(this.failClock / FAIL_DURATION);
@@ -995,6 +1007,7 @@ export class PlayerScreen extends Screen {
         switch (action) {
             case 'back':
                 if (this.phase === 'playing' || this.phase === 'resuming') this.pause();
+                else if (this.phase === 'failed' && !this.menu.shown) this.skipFailAnimation();
                 return true;
             case 'skip':
                 this.doSkip();
@@ -1014,8 +1027,9 @@ export class PlayerScreen extends Screen {
     private updateQuickRetry(dt: number): void {
         if (this.quickRetryActive) this.quickRetryHeld += dt;
         else this.quickRetryHeld = Math.max(0, this.quickRetryHeld - dt * 2);
-        this.retryFade.alpha = clamp01(this.quickRetryHeld / QUICK_RETRY_HOLD);
-        if (this.quickRetryHeld >= QUICK_RETRY_HOLD && this.outcome === 'none') {
+        const hold = this.game.settings.holdToConfirmMs.value;
+        this.retryFade.alpha = hold > 0 ? clamp01(this.quickRetryHeld / hold) : 0;
+        if ((this.quickRetryHeld >= hold || (hold === 0 && this.quickRetryActive)) && this.outcome === 'none') {
             this.quickRetryActive = false;
             this.retry();
         }

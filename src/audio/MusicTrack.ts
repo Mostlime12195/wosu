@@ -538,7 +538,9 @@ export class MusicTrack {
 
     private startSource(when: number, offset: number): void {
         this.clearFailEffect();
-        if (this.stretch) {
+        // The worklet only keeps pitch; NC/DC (pitch follows speed) play the buffer directly,
+        // so a DT → NC switch really changes pitch even though the worklet already exists.
+        if (this.stretch && (this.preservePitch || this.rate === 1)) {
             const stretch = this.stretch;
             if (!this.stretchConnected) {
                 stretch.connect(this.gain);
@@ -548,12 +550,7 @@ export class MusicTrack {
             // Signalsmith's start(duration) path can drop the active segment
             // when the context clock already passed `when`; schedule our own
             // wall-clock stop instead (pause/seek can cancel it safely).
-            if (this.preservePitch || this.rate === 1) {
-                void stretch.start(when, offset, undefined, this.rate);
-            } else {
-                // NC/DC through the worklet: shift pitch with the tempo.
-                void stretch.start(when, offset, undefined, this.rate, 12 * Math.log2(this.rate));
-            }
+            void stretch.start(when, offset, undefined, this.rate);
             if (Number.isFinite(this.durationSec)) {
                 const remaining = Math.max(0, this.durationSec - offset) / this.rate;
                 const delay = Math.max(0, when - this.ctx.currentTime) + remaining;

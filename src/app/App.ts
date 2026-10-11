@@ -46,6 +46,8 @@ export class App {
     private resizeQueued = false;
     /** Set when WebGPU was requested but we had to fall back. */
     fellBackFrom: RendererKind | null = null;
+    /** The renderer setting this session started with. */
+    bootPreference: RendererPreference = 'auto';
 
     get renderer(): Renderer {
         return this.pixi.renderer;
@@ -57,13 +59,16 @@ export class App {
 
     async init(opts: AppOptions): Promise<void> {
         this.resolutionScale = opts.resolutionScale;
-        // "auto" stays on WebGL: it is the most battle-tested path across
-        // browsers and drivers; WebGPU is opt-in from Settings → Graphics.
-        const order: RendererKind[] = opts.preference === 'webgpu' ? ['webgpu', 'webgl'] : ['webgl'];
+        // "auto" prefers WebGPU where the browser has it: on some systems (notably
+        // Windows, where WebGL is translated to Direct3D) WebGL blocks the main thread
+        // enough to delay input and hitsounds. It falls back to WebGL quietly.
+        this.bootPreference = opts.preference;
+        const order: RendererKind[] = opts.preference === 'webgl' ? ['webgl'] : ['webgpu', 'webgl'];
+        const explicit = opts.preference === 'webgpu';
         let lastError: unknown = null;
         for (const kind of order) {
             if (kind === 'webgpu' && !(await webGpuAvailable())) {
-                this.fellBackFrom = 'webgpu';
+                if (explicit) this.fellBackFrom = 'webgpu';
                 continue;
             }
             try {
@@ -83,13 +88,13 @@ export class App {
                     autoStart: true,
                 });
                 this.rendererKind = this.pixi.renderer.name === 'webgpu' ? 'webgpu' : 'webgl';
-                if (kind === 'webgpu' && this.rendererKind !== 'webgpu') this.fellBackFrom = 'webgpu';
+                if (explicit && kind === 'webgpu' && this.rendererKind !== 'webgpu') this.fellBackFrom = 'webgpu';
                 lastError = null;
                 break;
             } catch (e) {
                 console.error(`${kind} renderer failed to initialise`, e);
                 lastError = e;
-                if (kind === 'webgpu') this.fellBackFrom = 'webgpu';
+                if (explicit && kind === 'webgpu') this.fellBackFrom = 'webgpu';
             }
         }
         if (lastError || !this.pixi.renderer) throw lastError ?? new Error('No renderer available');

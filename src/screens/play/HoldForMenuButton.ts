@@ -4,7 +4,6 @@ import { icon } from '../../ui/icons';
 import { label } from '../../ui/text';
 import { UIComponent } from '../../ui/UIComponent';
 
-const HOLD_MS = 600;
 const SIZE = 44;
 
 /**
@@ -17,6 +16,8 @@ export class HoldForMenuButton extends UIComponent {
     private readonly caption: Text;
     private readonly glyph: Text;
     private held = 0;
+    /** Hold time before it pauses (Settings → Gameplay → hold-to-confirm). */
+    holdMs = 200;
     private holding = false;
     private fired = false;
     /** Faint until the pointer comes near (or always shown on touch). */
@@ -54,7 +55,7 @@ export class HoldForMenuButton extends UIComponent {
     update(dt: number, pointer: { x: number; y: number }, touch: boolean): void {
         if (this.holding && !this.fired) {
             this.held += dt;
-            if (this.held >= HOLD_MS) {
+            if (this.held >= this.holdMs) {
                 this.fired = true;
                 this.held = 0;
                 this.onHeld?.();
@@ -67,7 +68,7 @@ export class HoldForMenuButton extends UIComponent {
         this.alpha = this.shown;
         this.caption.alpha = Math.max(0, (this.shown - 0.4) / 0.6);
         const r = SIZE / 2 - 3;
-        const p = Math.min(1, this.held / HOLD_MS);
+        const p = this.holdMs > 0 ? Math.min(1, this.held / this.holdMs) : 0;
         this.ring.clear()
             .circle(SIZE / 2, SIZE / 2, r).fill({ color: 0x000000, alpha: 0.4 })
             .circle(SIZE / 2, SIZE / 2, r).stroke({ width: 2, color: 0xffffff, alpha: 0.35 });

@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { BUNDLED_COUNT, bundledSelection } from '../../src/online/bundled';
 
 describe('bundled beatmaps', () => {
-    it('always starts with triangles and picks distinct sets', () => {
+    it('always starts with triangles and new beginnings, and picks distinct sets', () => {
         const sel = bundledSelection(new Date(Date.UTC(2026, 9, 9)));
         expect(sel).toHaveLength(BUNDLED_COUNT);
         expect(sel[0].sid).toBe(1841885);
+        expect(sel[1].sid).toBe(1011011);
         expect(new Set(sel.map(s => s.sid)).size).toBe(sel.length);
     });
 
