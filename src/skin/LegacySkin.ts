@@ -53,7 +53,7 @@ const ELEMENTS = [
     'cursor', 'cursormiddle', 'cursortrail',
     // HUD
     'scorebar-bg', 'scorebar-colour', 'scorebar-ki', 'scorebar-kidanger', 'scorebar-kidanger2', 'scorebar-marker',
-    'inputoverlay-key', 'inputoverlay-background', 'play-skip',
+    'inputoverlay-key', 'inputoverlay-background', 'play-skip', 'comboburst',
 ];
 /** Font glyph suffixes (prefix-0 … prefix-x). */
 const GLYPHS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'comma', 'dot', 'percent', 'x'];
@@ -62,6 +62,8 @@ const IMAGE_RE = /\.(png|jpe?g)$/i;
 const AUDIO_RE = /\.(wav|ogg|mp3)$/i;
 const HITSOUND_RE = /^(normal|soft|drum)-(hitnormal|hitwhistle|hitfinish|hitclap|slidertick|sliderslide|sliderwhistle|spinnerspin|spinnerbonus)(\d*)$/;
 const OTHER_SAMPLES = new Set(['combobreak', 'spinnerspin', 'spinnerbonus', 'failsound', 'sectionpass', 'sectionfail', 'applause', 'comboburst']);
+/** comboburst-0, comboburst-1… and the Nightcore mod's beat samples. */
+const NUMBERED_SAMPLES_RE = /^(comboburst-\d+|nightcore-(kick|clap|hat|finish))$/;
 
 export class LegacySkin {
     readonly config: SkinConfig;
@@ -139,7 +141,7 @@ export class LegacySkin {
             for (const f of rootLevel) {
                 if (!AUDIO_RE.test(f)) continue;
                 const stem = stripExt(f).toLowerCase();
-                if (HITSOUND_RE.test(stem) || OTHER_SAMPLES.has(stem)) consider(f);
+                if (HITSOUND_RE.test(stem) || OTHER_SAMPLES.has(stem) || NUMBERED_SAMPLES_RE.test(stem)) consider(f);
             }
             for (const f of opts.customSampleFiles ?? []) {
                 const hit = lookup.get(basename(f.replace(/\\/g, '/')).toLowerCase());

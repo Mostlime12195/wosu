@@ -34,6 +34,12 @@ export interface SkinConfig {
     layeredHitSounds?: boolean;
     spinnerFadePlayfield?: boolean;
     spinnerNoBlink?: boolean;
+    /** The spinner spin sound rises in pitch with spin progress (stable's default). */
+    spinnerFrequencyModulate?: boolean;
+    /** Combo burst images in a random order instead of in turn. */
+    comboBurstRandom?: boolean;
+    /** Combos at which the comboburst sounds play instead of at the burst milestones. */
+    customComboBurstSounds?: number[];
 }
 
 /** What a skin chain falls back to when no layer sets a value (osu!'s defaults). */
@@ -61,6 +67,9 @@ export const SKIN_DEFAULTS: Required<Omit<SkinConfig, 'sliderTrackOverride' | 's
         layeredHitSounds: true,
         spinnerFadePlayfield: false,
         spinnerNoBlink: false,
+        spinnerFrequencyModulate: true,
+        comboBurstRandom: false,
+        customComboBurstSounds: [],
     };
 
 export function parseSkinIni(text: string): SkinConfig {
@@ -101,6 +110,13 @@ export function parseSkinIni(text: string): SkinConfig {
                 case 'layeredhitsounds': out.layeredHitSounds = bool(value); break;
                 case 'spinnerfadeplayfield': out.spinnerFadePlayfield = bool(value); break;
                 case 'spinnernoblink': out.spinnerNoBlink = bool(value); break;
+                case 'spinnerfrequencymodulate': out.spinnerFrequencyModulate = bool(value); break;
+                case 'comboburstrandom': out.comboBurstRandom = bool(value); break;
+                case 'customcomboburstsounds': {
+                    const list = value.split(',').map(v => Number(v.trim())).filter(n => Number.isInteger(n) && n > 0);
+                    if (list.length) out.customComboBurstSounds = list;
+                    break;
+                }
             }
         } else if (section === 'colours') {
             const c = colour(value);

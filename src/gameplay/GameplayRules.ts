@@ -2,6 +2,7 @@ import type { PlayableBeatmap, PlayableHitObject, PlayableSlider, SliderEvent } 
 import { Signal } from '../core/Signal';
 import type { ModSet } from './mods';
 import type { HealthProcessor } from './scoring/HealthProcessor';
+import { ComboEndTracker, type ComboEndVariant } from './scoring/comboEnd';
 import {
     DEFAULT_MECHANICS, MISS_WINDOW, TAIL_LENIENCY, BONUS_SPINS_GAP,
     lazerSpinnerSpins, stableHalfSpinAward, stableSpinnerHalfSpins, type GameplayMechanics,
@@ -80,6 +81,8 @@ export interface HitEventInfo {
     y: number;
     /** Hit error in ms for timed hits (circle/slider head), else null. */
     error: number | null;
+    /** stable's geki / katu, when this object ends its combo (see comboEnd). */
+    variant: ComboEndVariant | null;
 }
 
 /** Per-spinner counting state (not shown to drawables). */
@@ -133,6 +136,7 @@ export class GameplayRules {
     /** stable: clicks must land within this of the object (LegacyHitPolicy hittableRange). */
     private readonly hittableRange: number;
     private readonly spinCounters: (SpinCounter | null)[];
+    private readonly comboEnds: ComboEndTracker;
     /** First object that may still need judging (all before are done). */
     private firstPending = 0;
     autoSpin = false;
@@ -165,6 +169,7 @@ export class GameplayRules {
         this.autoSpinRate = mods.has('AT') ? MAX_SPIN_RAD_PER_MS : SPUN_OUT_RAD_PER_MS;
         this.spinCounters = beatmap.hitObjects.map(h => (h.kind === 'spinner' ? this.spinCounter(h, d.od) : null));
         this.states = beatmap.hitObjects.map((h, i) => this.initialState(h, i));
+        this.comboEnds = ComboEndTracker.forObjects(beatmap.hitObjects);
         score.comboBroken.add(() => {
             if (this.suddenDeath || this.perfect) health.fail();
         });
@@ -387,10 +392,11 @@ export class GameplayRules {
         const s = this.states[i];
         s.result = result;
         s.judgedAt = time;
-        this.score.applyMain(result, affectsCombo);
+        const variant = this.comboEnds.apply(i, result);
+        this.score.applyMain(result, affectsCombo, variant);
         this.health.applyMain(result, i);
         if (this.perfect && result !== 'great') this.health.fail();
-        this.objectJudged.emit({ index: i, result, time, x, y, error });
+        this.objectJudged.emit({ index: i, result, time, x, y, error, variant });
     }
 
     // -----------------------------------------------------------------------

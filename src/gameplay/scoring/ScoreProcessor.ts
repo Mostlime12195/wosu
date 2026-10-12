@@ -1,5 +1,6 @@
 import { Signal } from '../../core/Signal';
 import type { Grade } from '../../storage/ScoreStore';
+import type { ComboEndVariant } from './comboEnd';
 
 /** Main judgements (circles, slider ends, spinners). */
 export type HitResult = 'great' | 'ok' | 'meh' | 'miss';
@@ -33,11 +34,16 @@ export class ScoreProcessor {
     count100 = 0;
     count50 = 0;
     countMiss = 0;
+    /** stable's combo-end judgements (see comboEnd): gekis, and katus (hit300k + hit100k). */
+    countGeki = 0;
+    countKatu = 0;
     sliderTicksHit = 0;
     sliderTicksTotal = 0;
     readonly changed = new Signal<[]>();
     /** Emitted when a combo ≥ 1 breaks, with the combo that was lost. */
     readonly comboBroken = new Signal<[previous: number]>();
+    /** Emitted whenever the combo goes up, with the new combo (combo bursts). */
+    readonly comboIncreased = new Signal<[combo: number]>();
     readonly judged = new Signal<[result: HitResult]>();
 
     constructor(private readonly opts: ScoreOptions) {}
@@ -52,8 +58,8 @@ export class ScoreProcessor {
         return (300 * this.count300 + 100 * this.count100 + 50 * this.count50) / (300 * n);
     }
 
-    /** Circle / slider final / spinner final judgement. */
-    applyMain(result: HitResult, affectsCombo: boolean): void {
+    /** Circle / slider final / spinner final judgement; `variant`: stable's geki / katu for a combo's last object. */
+    applyMain(result: HitResult, affectsCombo: boolean, variant: ComboEndVariant | null = null): void {
         const value = RESULT_VALUE[result];
         const comboBefore = this.combo;
         this.score += value + (value * Math.max(comboBefore - 1, 0) * this.opts.difficultyMultiplier * this.opts.modMultiplier) / 25;
@@ -63,6 +69,8 @@ export class ScoreProcessor {
             case 'meh': this.count50++; break;
             case 'miss': this.countMiss++; break;
         }
+        if (variant === 'geki') this.countGeki++;
+        else if (variant === 'katu') this.countKatu++;
         if (affectsCombo) {
             if (result === 'miss') this.breakCombo();
             else this.incrementCombo();
@@ -95,6 +103,7 @@ export class ScoreProcessor {
     private incrementCombo(): void {
         this.combo++;
         if (this.combo > this.maxCombo) this.maxCombo = this.combo;
+        this.comboIncreased.emit(this.combo);
     }
 
     private breakCombo(): void {

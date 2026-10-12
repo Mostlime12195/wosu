@@ -215,9 +215,16 @@ export class HUDOverlay extends Container {
         };
     }
 
-    layout(w: number, h: number): void {
-        this.w = w;
+    layout(fullWidth: number, h: number): void {
+        this.w = fullWidth;
         this.h = h;
+        this.breakInfo.position.set(fullWidth / 2, h / 2);
+        this.breakInfo.layout(fullWidth);
+        // osu! skins are drawn for screens up to 16:9 (full-screen frames in
+        // scorebar-bg, scores meant to sit inside them): on wider screens the
+        // legacy HUD keeps to a centred 16:9 area, as on a 16:9 monitor.
+        const w = this.legacy ? Math.min(fullWidth, h * 16 / 9) : fullWidth;
+        this.content.x = (fullWidth - w) / 2;
         const base = Math.max(0.6, Math.min(1.6, h / 720));
         const unit = (this.unit = base * this.settings.hudScale.value);
         const lu = (this.legacyUnit = Math.min(w / 1024, h / 768) * this.settings.hudScale.value);
@@ -249,8 +256,6 @@ export class HUDOverlay extends Container {
         }
         this.keys.place(w, h, unit, lu);
         this.placeLeaderboard();
-        this.breakInfo.position.set(w / 2, h / 2);
-        this.breakInfo.layout(w);
     }
 
     /**
