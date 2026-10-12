@@ -3,18 +3,25 @@ import type { RendererPreference } from '../app/App';
 import { isModAcronym, sanitizeMods, sortedMods, type ModAcronym } from '../gameplay/mods';
 import type { ProviderId } from '../online/providers';
 import { DEFAULT_MECHANICS, type GameplayMechanics } from '../gameplay/scoring/mechanics';
+import { SENSITIVITY_MAX, SENSITIVITY_MIN } from '../input/RelativePointer';
 
 export type SongSort = 'title' | 'artist' | 'creator' | 'difficulty' | 'length' | 'bpm' | 'dateAdded' | 'lastPlayed';
 /** lazer's HUDVisibilityMode. */
 export type HudVisibility = 'always' | 'hideDuringGameplay' | 'never';
 /** lazer: one counter per action (keyboard + mouse combined); stable: K1 K2 M1 M2. */
 export type KeyOverlayStyle = 'lazer' | 'stable';
+/**
+ * lazer's OsuConfineMouseMode. A browser can only confine through pointer
+ * lock, which needs gameplay to own the cursor, so there is no "Always".
+ */
+export type ConfineMouseMode = 'never' | 'duringGameplay';
 
 /** String settings restricted to a fixed set of values. */
 const ENUM_VALUES: Record<string, readonly string[]> = {
     hudVisibility: ['always', 'hideDuringGameplay', 'never'],
     keyOverlayStyle: ['lazer', 'stable'],
     gameplayMechanics: ['lazer', 'stable'],
+    confineMouse: ['never', 'duringGameplay'],
 };
 
 const STORAGE_KEY = 'webosu.settings.v2';
@@ -60,6 +67,8 @@ export class GameSettings {
     readonly keyOverlayStyle = new Bindable<KeyOverlayStyle>('lazer');
     readonly progressBar = new Bindable(true);
     readonly progressGraph = new Bindable(false);
+    /** lazer's OsuSetting.GameplayLeaderboard ("Always show gameplay leaderboard"; Tab in game). */
+    readonly gameplayLeaderboard = new Bindable(true);
     readonly hitLighting = new Bindable(true);
     readonly hideNumbers = new Bindable(false);
     readonly hideGreat = new Bindable(false);
@@ -86,6 +95,12 @@ export class GameSettings {
     readonly keyRight = new Bindable('KeyX');
     readonly mouseButtons = new Bindable(true);
     readonly wheelVolumeInGameplay = new Bindable(true);
+    /** lazer's "High precision mouse": pointer lock with raw (unaccelerated) movement during gameplay. */
+    readonly highPrecisionMouse = new Bindable(false);
+    /** lazer's "Cursor sensitivity" (only applies with high precision mouse). */
+    readonly cursorSensitivity = new BindableNumber(1, SENSITIVITY_MIN, SENSITIVITY_MAX, 0.01);
+    /** lazer's "Confine mouse cursor to window" (pointer lock during gameplay). */
+    readonly confineMouse = new Bindable<ConfineMouseMode>('never');
 
     // Skin / cursor (defaults and ranges are lazer's)
     /** Selected imported skin's id ('' = wosu!'s default skin); lazer's OsuSetting.Skin. */

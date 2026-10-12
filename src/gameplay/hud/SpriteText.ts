@@ -75,6 +75,22 @@ export class LegacySpriteText extends Container {
         this.fixed = opts.fixedWidth ? font.width('5') : 0;
     }
 
+    /** Size `s` would have, without changing the text. */
+    measure(s: string): { width: number; height: number } {
+        const overlap = this.font.overlap;
+        let x = 0;
+        let h = 0;
+        let n = 0;
+        for (const ch of s) {
+            const g = this.font.glyph(ch);
+            if (!g) continue;
+            if (n++ > 0) x -= overlap;
+            x += this.fixed && !FIXED_WIDTH_EXCLUDE.has(ch) ? this.fixed : g.texture.width * g.scale;
+            h = Math.max(h, g.texture.height * g.scale);
+        }
+        return { width: Math.max(0, x), height: h };
+    }
+
     set text(s: string) {
         if (s === this.current) return;
         this.current = s;

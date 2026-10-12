@@ -11,6 +11,10 @@ import { audioPitch, playbackRate, preservesPitch } from '../../gameplay/mods';
 import type { Action } from '../../input/bindings';
 import { ModSelectOverlay } from '../../overlays/mods/ModSelectOverlay';
 import { collections } from '../../storage/Collections';
+import { md5Hex } from '../../core/md5';
+import { decodeReplay } from '../../gameplay/replay/Replay';
+import { encodeOsr } from '../../gameplay/replay/osr';
+import type { ScoreRecord } from '../../storage/ScoreStore';
 import { ContextMenu } from '../../ui/ContextMenu';
 import { SHEAR } from '../../ui/ShearedButton';
 import { label } from '../../ui/text';
@@ -84,6 +88,9 @@ export class SongSelectScreen extends Screen {
         const g = this.game;
         this.wedge = new BeatmapInfoWedge(g);
         this.leaderboard = new LocalLeaderboard(g);
+        this.leaderboard.onWatchReplay = r => this.watchReplay(r);
+        this.leaderboard.onExport = r => void this.exportReplay(r);
+        this.leaderboard.onDelete = r => void this.confirmDeleteScore(r);
         this.leftArea.addChild(this.wedge, this.leaderboard);
         this.leftArea.eventMode = 'passive';
 
@@ -385,6 +392,70 @@ export class SongSelectScreen extends Screen {
         this.wedge.setBeatmap(set, diff);
         this.leaderboard.setBeatmap(set, diff);
         this.game.play(this.current!);
+    }
+
+    /** A local score's replay (lazer: from the leaderboard score's results / context menu). */
+    private watchReplay(r: ScoreRecord): void {
+        const sel = this.current;
+        if (!this.isCurrent || !sel || scoreKeyFor(sel.set, sel.diff) !== r.beatmapKey) return;
+        uiSounds()?.play('SongSelect/confirm-selection');
+        this.pending?.cancel();
+        this.pending = null;
+        void this.game.watchScore(sel, r);
+    }
+
+    /** lazer's "Export" (LegacyScoreExporter): the score as an osu! .osr replay. */
+    private async exportReplay(r: ScoreRecord): Promise<void> {
+        const sel = this.current;
+        if (!sel || r.id === undefined || scoreKeyFor(sel.set, sel.diff) !== r.beatmapKey) return;
+        try {
+            const data = await this.game.scores.replay(r.id);
+            if (!data) throw new Error('this score has no replay');
+            const archive = await this.game.library.openArchive(sel.set.key);
+            // osu! finds the beatmap by the .osu file's MD5.
+            const osu = await archive.readBytes(sel.diff.file);
+            const osr = encodeOsr({
+                beatmapMd5: md5Hex(osu),
+                player: r.player || 'Guest',
+                count300: r.count300,
+                count100: r.count100,
+                count50: r.count50,
+                countMiss: r.countMiss,
+                score: r.score,
+                maxCombo: r.maxCombo,
+                perfect: r.countMiss === 0 && r.maxCombo >= sel.diff.maxCombo,
+                mods: r.mods,
+                date: r.date,
+                events: decodeReplay(data),
+            });
+            const d = new Date(r.date);
+            const pad = (n: number) => String(n).padStart(2, '0');
+            const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}`;
+            const name = `${r.player || 'Guest'} - ${sel.set.artist} - ${sel.set.title} [${sel.diff.version}] (${stamp}).osr`.replace(/[\\/:*?"<>|]/g, '_');
+            const url = URL.createObjectURL(new Blob([osr], { type: 'application/octet-stream' }));
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = name;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        } catch (e) {
+            console.warn('replay export failed', e);
+            this.game.notifications.error(`Couldn't export the replay: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    /** lazer's LocalScoreDeleteDialog. */
+    private async confirmDeleteScore(r: ScoreRecord): Promise<void> {
+        if (r.id === undefined) return;
+        const ok = await this.game.dialog.confirm({
+            title: 'Delete this score?',
+            text: `${r.player || 'Guest'}'s ${(r.accuracy * 100).toFixed(2)}% play on ${r.title} [${r.version}] will be deleted, along with its replay.`,
+            confirmText: 'Yes, delete it',
+            cancelText: 'No, keep it',
+            danger: true,
+            icon: 'trash',
+        });
+        if (ok) await this.game.scores.delete(r.id);
     }
 
     // ------------------------------------------------------------------

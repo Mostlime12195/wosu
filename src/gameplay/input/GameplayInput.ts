@@ -32,6 +32,11 @@ export class GameplayInput {
     enabled = false;
     /** Pointer presses on on-screen controls (hold-for-menu, skip) aren't gameplay input. */
     ignorePointer: ((x: number, y: number) => boolean) | null = null;
+    /**
+     * Pointer lock (high precision mouse): while `locked`, mouse positions
+     * come from its virtual cursor (a locked pointer's client position is frozen).
+     */
+    relative: { readonly locked: boolean; readonly pointer: { readonly x: number; readonly y: number } } | null = null;
     private readonly touches = new Map<number, GameplayButton>();
     private readonly listeners: [string, EventListener][] = [];
 
@@ -80,13 +85,20 @@ export class GameplayInput {
     private onMove(e: PointerEvent): void {
         // Only the primary pointer steers (a second finger shouldn't teleport mid-slider).
         if (e.pointerType === 'touch' && this.touches.size > 0 && !this.touches.has(e.pointerId)) return;
-        const p = this.app.toLogical(e.clientX, e.clientY);
+        const p = this.position(e);
         this.x = p.x;
         this.y = p.y;
     }
 
+    /** Logical position of a pointer event (the virtual cursor for a locked mouse). */
+    private position(e: PointerEvent): { x: number; y: number } {
+        const r = this.relative;
+        if (r?.locked && e.pointerType === 'mouse') return { x: r.pointer.x, y: r.pointer.y };
+        return this.app.toLogical(e.clientX, e.clientY);
+    }
+
     private onDown(e: PointerEvent): void {
-        const p = this.app.toLogical(e.clientX, e.clientY);
+        const p = this.position(e);
         if (this.ignorePointer?.(p.x, p.y)) return;
         if (e.pointerType === 'touch' || e.pointerType === 'pen') {
             this.x = p.x;

@@ -2,6 +2,7 @@ import { Bindable } from '../core/Bindable';
 import { Signal } from '../core/Signal';
 import type { App } from '../app/App';
 import { actionFor, DEFAULT_BINDINGS, type Action } from './bindings';
+import { PointerLockController, type PointerLockTarget } from './PointerLock';
 import type { TextInputProxy } from './TextInputProxy';
 
 export type KeyHandler = (e: KeyboardEvent, action: Action | null) => boolean;
@@ -43,11 +44,22 @@ export class InputManager {
     /** False until the first pointer event (keeps the cursor hidden at 0,0). */
     pointerSeen = false;
     bindings: Record<Action, string[]> = DEFAULT_BINDINGS;
+    /** Gameplay pointer lock (high precision mouse / confine); while locked, mouse positions are its virtual cursor. */
+    readonly pointerLock: PointerLockController;
 
     private entries: Entry[] = [];
     private order = 0;
 
     constructor(private readonly app: App, private readonly textInput: TextInputProxy) {
+        // Its listeners capture on window, so the virtual cursor is current before any listener below runs.
+        this.pointerLock = new PointerLockController(app.canvas as unknown as PointerLockTarget, {
+            doc: document,
+            win: window,
+            userActivation: (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation ?? null,
+            now: () => performance.now(),
+            toLogical: (x, y) => app.toLogical(x, y),
+            view: () => ({ width: app.width, height: app.height, uiScale: app.uiScale }),
+        });
         const opts = { passive: true } as const;
         window.addEventListener('pointermove', e => this.onPointer(e), opts);
         window.addEventListener('pointerdown', e => {
@@ -82,7 +94,9 @@ export class InputManager {
 
     private onPointer(e: PointerEvent): void {
         this.pointerSeen = true;
-        const p = this.app.toLogical(e.clientX, e.clientY);
+        const lock = this.pointerLock;
+        // A locked pointer's client position is frozen; the virtual cursor stands in.
+        const p = lock.locked && e.pointerType === 'mouse' ? lock.pointer : this.app.toLogical(e.clientX, e.clientY);
         this.pointer.x = p.x;
         this.pointer.y = p.y;
         this.pointer.clientX = e.clientX;

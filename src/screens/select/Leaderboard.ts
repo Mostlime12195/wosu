@@ -1,11 +1,13 @@
-import { Container, Graphics, type Text } from 'pixi.js';
+import { Container, Graphics, type FederatedPointerEvent, type Text } from 'pixi.js';
 import type { Game } from '../../app/Game';
 import type { LibrarySet } from '../../beatmap/Library';
 import type { DifficultySummary } from '../../beatmap/types';
 import { tween } from '../../core/Tweener';
 import { formatNumber } from '../../core/math';
+import { sanitizeMods } from '../../gameplay/mods';
 import { ModIconRow } from '../../overlays/mods/ModIcon';
 import { beatmapKeyOf, type ScoreRecord } from '../../storage/ScoreStore';
+import { ContextMenu, MENU_SPACER, type MenuEntry } from '../../ui/ContextMenu';
 import { icon } from '../../ui/icons';
 import { LoadingSpinner } from '../../ui/LoadingSpinner';
 import { ScrollContainer } from '../../ui/ScrollContainer';
@@ -38,7 +40,10 @@ class ScoreRow extends UIComponent {
     private readonly date: Text;
     private readonly score: Text;
     private readonly mods = new ModIconRow(17, 2);
+    private readonly replayGlyph: Text;
     private record: ScoreRecord | null = null;
+    /** Right-click / long-press on the row: (record, global x, y). */
+    onMenu: ((r: ScoreRecord, x: number, y: number) => void) | null = null;
 
     constructor() {
         super();
@@ -52,8 +57,22 @@ class ScoreRow extends UIComponent {
         this.date.anchor.set(1, 0);
         this.score = label('', { size: 22, weight: '600' });
         this.score.anchor.set(1, 0);
-        this.addChild(this.bg, this.position_, this.badge, this.grade, this.player, this.stats, this.date, this.score, this.mods);
-        this.eventMode = 'none';
+        this.replayGlyph = icon('circlePlay', 12, Colors.grayC);
+        this.replayGlyph.anchor.set(0, 0.5);
+        this.addChild(this.bg, this.position_, this.badge, this.grade, this.player, this.replayGlyph, this.stats, this.date, this.score, this.mods);
+        // lazer's LeaderboardScore: click to view the score (here: watch its replay), right-click for its menu.
+        this.makeInteractive();
+        this.on('rightclick', (e: FederatedPointerEvent) => {
+            if (this.record) this.onMenu?.(this.record, e.global.x, e.global.y);
+        });
+    }
+
+    get scoreRecord(): ScoreRecord | null {
+        return this.record;
+    }
+
+    protected override onHoverChange(): void {
+        this.relayout();
     }
 
     assign(r: ScoreRecord, rank: number): void {
@@ -65,6 +84,7 @@ class ScoreRow extends UIComponent {
         this.stats.text = `${(r.accuracy * 100).toFixed(2)}%  ·  ${formatNumber(r.maxCombo)}x${r.passed ? '' : '  ·  failed'}`;
         this.date.text = r.date ? relativeDate(r.date) : '';
         this.mods.setMods(r.mods, r.modSettings);
+        this.replayGlyph.visible = !!r.hasReplay;
         this.relayout();
     }
 
@@ -72,7 +92,7 @@ class ScoreRow extends UIComponent {
         const r = this.record;
         if (!r) return;
         const boxX = 36;
-        this.bg.clear().roundRect(boxX, 0, w - boxX, h, 6).fill({ color: 0x000000, alpha: 0.5 });
+        this.bg.clear().roundRect(boxX, 0, w - boxX, h, 6).fill({ color: 0x000000, alpha: this.hovered && r.hasReplay ? 0.7 : 0.5 });
         this.position_.position.set(boxX / 2, h / 2);
         // Grade: a pill in the grade colour (lazer's DrawableRank).
         const gc = gradeColor(r.grade);
@@ -83,8 +103,10 @@ class ScoreRow extends UIComponent {
         this.score.position.set(w - 12, 6);
         this.mods.position.set(w - 12 - this.mods.rowWidth, h - 24);
         const rightW = Math.max(this.score.width, this.mods.rowWidth) + 24;
-        fitText(this.player, Math.max(40, w - textX - rightW), r.player || 'Guest');
+        const glyphW = r.hasReplay ? 18 : 0;
+        fitText(this.player, Math.max(40, w - textX - rightW - glyphW), r.player || 'Guest');
         this.player.position.set(textX, 8);
+        this.replayGlyph.position.set(textX + this.player.width + 6, 8 + this.player.height / 2);
         this.stats.position.set(textX, 33);
         this.date.position.set(w - 12 - this.mods.rowWidth - (this.mods.rowWidth ? 10 : 0), h - 22);
         this.date.visible = this.date.x - this.date.width > this.stats.x + this.stats.width + 8;
@@ -109,6 +131,12 @@ export class LocalLeaderboard extends UIComponent {
     private key: string | null = null;
     private token = 0;
     private records: ScoreRecord[] = [];
+    /** Watch a score's replay (song select checks it's still current). */
+    onWatchReplay: ((r: ScoreRecord) => void) | null = null;
+    /** Download a score's replay as .osr. */
+    onExport: ((r: ScoreRecord) => void) | null = null;
+    /** Delete one score (song select confirms first). */
+    onDelete: ((r: ScoreRecord) => void) | null = null;
 
     constructor(private readonly game: Game) {
         super();
@@ -171,6 +199,11 @@ export class LocalLeaderboard extends UIComponent {
         const shown = list.slice(0, MAX_ROWS);
         while (this.rows.length < shown.length) {
             const row = new ScoreRow();
+            row.onActivate = () => {
+                const r = row.scoreRecord;
+                if (r?.hasReplay) this.onWatchReplay?.(r);
+            };
+            row.onMenu = (r, x, y) => ContextMenu.open(this.menuFor(r), x, y);
             this.rows.push(row);
             this.scroll.content.addChild(row);
         }
@@ -193,6 +226,19 @@ export class LocalLeaderboard extends UIComponent {
             this.empty.alpha = 0;
             tween(this.empty, { alpha: 1 }, { duration: 300 });
         }
+    }
+
+    /** lazer's LeaderboardScore.ContextMenuItems. */
+    private menuFor(r: ScoreRecord): MenuEntry[] {
+        const entries: MenuEntry[] = [];
+        if (r.hasReplay) entries.push({ text: 'Watch replay', type: 'highlighted', action: () => this.onWatchReplay?.(r) });
+        if (r.mods.length) entries.push({ text: 'Use these mods', action: () => (this.game.mods.value = sanitizeMods(r.mods, r.modSettings)) });
+        if (r.hasReplay) entries.push({ text: 'Export replay (.osr)', action: () => this.onExport?.(r) });
+        if (r.id !== undefined) {
+            if (entries.length) entries.push(MENU_SPACER);
+            entries.push({ text: 'Delete', type: 'destructive', action: () => this.onDelete?.(r) });
+        }
+        return entries;
     }
 
     private layoutRows(): void {

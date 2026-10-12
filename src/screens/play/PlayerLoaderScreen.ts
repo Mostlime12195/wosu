@@ -5,7 +5,8 @@ import { MusicTrack } from '../../audio/MusicTrack';
 import type { BeatmapData } from '../../beatmap/types';
 import { Bindable } from '../../core/Bindable';
 import { tween } from '../../core/Tweener';
-import { audioPitch, playbackRate, preservesPitch, sortedMods, type ModSet } from '../../gameplay/mods';
+import { audioPitch, playbackRate, preservesPitch, sortedMods, withSettings, type ModSet } from '../../gameplay/mods';
+import type { ReplayInfo } from '../../gameplay/replay/Replay';
 import type { Action } from '../../input/bindings';
 import { ModIconRow } from '../../overlays/mods/ModIcon';
 import { Checkbox } from '../../ui/Checkbox';
@@ -74,14 +75,15 @@ export class PlayerLoaderScreen extends Screen {
     /** Built and warmed up behind the loader; pushed once ready. */
     private player: PlayerScreen | null = null;
 
-    constructor(readonly selection: Selection) {
+    /** `replay`: watch it (with its score's mods) instead of playing. */
+    constructor(readonly selection: Selection, readonly replay: ReplayInfo | null = null) {
         super();
     }
 
     override load(): void {
         const g = this.game;
         const { set, diff } = this.selection;
-        this.mods = g.mods.value;
+        this.mods = this.replay ? withSettings(this.replay.mods, this.replay.modSettings) : g.mods.value;
         if (g.settings.fullscreenOnPlay.value && !document.fullscreenElement) {
             // Still inside the click/keypress that started the play, so the browser allows it.
             try { void document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {}); } catch { /* unsupported */ }
@@ -337,6 +339,7 @@ export class PlayerLoaderScreen extends Screen {
             retryCount: this.retries,
             storyboard: this.storyboard,
             beatmapSkin: this.beatmapSkin,
+            replay: this.replay,
         });
         try {
             player.prepare(this.game, this._w, this._h);

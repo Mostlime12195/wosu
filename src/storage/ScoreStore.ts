@@ -6,6 +6,7 @@
  */
 import { Signal } from '../core/Signal';
 import { modSettingsOf, parseLegacyModString, sortedMods, withSettings, type ModAcronym, type ModSettingsMap } from '../gameplay/mods';
+import type { GameplayMechanics } from '../gameplay/scoring/mechanics';
 import { openAppDatabase, type AppDatabase } from './idb';
 import { migrateOnce, readLegacyData, type LegacyHistoryEntry, type LegacySource } from './legacy';
 
@@ -39,6 +40,10 @@ export interface ScoreRecord {
     player: string;
     /** Imported from the old site's history (no hit counts). */
     legacy?: boolean;
+    /** Gameplay mechanics the score was set with (absent: set before they were recorded). */
+    mechanics?: GameplayMechanics;
+    /** A replay is stored for this score (see `replay`). */
+    hasReplay?: boolean;
 }
 
 /**
@@ -151,17 +156,24 @@ export class ScoreStore {
         }, this.legacySource);
     }
 
-    /** Persist a new record; resolves with it (id assigned). */
-    async add(record: ScoreRecord): Promise<ScoreRecord> {
+    /** Persist a new record, with its encoded replay if any; resolves with it (id assigned). */
+    async add(record: ScoreRecord, replay?: Uint8Array): Promise<ScoreRecord> {
         await this.init();
         const rec: ScoreRecord = { ...record, mods: [...record.mods] };
         delete rec.id;
+        delete rec.hasReplay;
         // Only valid, non-default settings of the score's own mods are kept.
         const settings = record.modSettings ? modSettingsOf(withSettings(record.mods, record.modSettings)) : {};
         if (Object.keys(settings).length) rec.modSettings = settings;
         else delete rec.modSettings;
         try {
             rec.id = await this.db!.scores.put(rec);
+            if (replay) {
+                // Written after the score (its key is the score's id); the flag only once it's stored.
+                await this.db!.replays.put(replay, rec.id);
+                rec.hasReplay = true;
+                await this.db!.scores.put(rec);
+            }
         } catch (e) {
             // Keep the score for this session even if persistence fails.
             console.warn('[scores] save failed', e);
@@ -195,11 +207,23 @@ export class ScoreStore {
         return [...this.records];
     }
 
+    /** A score's encoded replay (see gameplay/replay), or null when it has none. */
+    async replay(id: number): Promise<Uint8Array | null> {
+        await this.init();
+        try {
+            return (await this.db!.replays.get(id)) ?? null;
+        } catch (e) {
+            console.warn('[scores] replay load failed', e);
+            return null;
+        }
+    }
+
     async delete(id: number): Promise<void> {
         await this.init();
         this.records = this.records.filter(r => r.id !== id);
         try {
             await this.db!.scores.delete(id);
+            await this.db!.replays.delete(id);
         } catch (e) {
             console.warn('[scores] delete failed', e);
         }
@@ -211,6 +235,7 @@ export class ScoreStore {
         this.records = [];
         try {
             await this.db!.scores.clear();
+            await this.db!.replays.clear();
         } finally {
             this.removed.emit();
         }

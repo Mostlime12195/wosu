@@ -16,6 +16,10 @@ import { BackgroundVideo } from '../../gameplay/BackgroundVideo';
 import { StoryboardView } from '../../gameplay/StoryboardView';
 import { GameplayClock } from '../../gameplay/GameplayClock';
 import { GameplayRules, type CursorState, type SliderState, type SpinnerState } from '../../gameplay/GameplayRules';
+import { RulesDriver } from '../../gameplay/RulesDriver';
+import { buttonMask, encodeReplay, type ReplayInfo } from '../../gameplay/replay/Replay';
+import { ReplayPlayback } from '../../gameplay/replay/ReplayPlayback';
+import { ReplayRecorder } from '../../gameplay/replay/ReplayRecorder';
 import { HitsoundPlayer } from '../../gameplay/HitsoundPlayer';
 import { HUDOverlay } from '../../gameplay/hud/HUDOverlay';
 import { AutoPlayer } from '../../gameplay/input/AutoPlayer';
@@ -32,6 +36,7 @@ import { ResultsScreen } from '../results/ResultsScreen';
 import { ratingMods } from '../select/modStars';
 import { GameplayMenu } from './GameplayMenu';
 import { HoldForMenuButton } from './HoldForMenuButton';
+import { ReplayIndicator } from './ReplayIndicator';
 import { ResumeOverlay } from './ResumeOverlay';
 import { SkipButton } from './SkipButton';
 
@@ -48,6 +53,8 @@ export interface PlayerOptions {
     storyboard?: Storyboard | null;
     /** The map's own skin elements and hitsounds (owned by the loader). */
     beatmapSkin?: LegacySkin | null;
+    /** Watch this replay (lazer's ReplayPlayer) instead of playing; `mods` are the score's. */
+    replay?: ReplayInfo | null;
 }
 
 /** How a Player ended, read by the loader when it resumes. */
@@ -60,13 +67,6 @@ const RESULTS_DELAY = 1000;
 const FAIL_DURATION = 2500;
 /** Sample HP this often for the results graph. */
 const HEALTH_SAMPLE_MS = 250;
-/**
- * Judgement runs in steps of at most this many ms whatever the frame rate
- * (lazer's frame-stable gameplay), with the cursor interpolated between
- * frames, so a hitch never skips a slider tick or tail.
- */
-const SUBSTEP_MS = 8;
-const MAX_SUBSTEPS = 40;
 
 /**
  * The gameplay screen (lazer's Player). Judgement lives in GameplayRules;
@@ -92,6 +92,13 @@ export class PlayerScreen extends Screen {
     private hud!: HUDOverlay;
     private auto: AutoPlayer | null = null;
     private mode: InputMode = 'normal';
+    /** Feeds the rules (sub-stepped frames, presses, resumes); see RulesDriver. */
+    private driver!: RulesDriver;
+    /** Records a real play's input (not Autoplay, not a replay). */
+    private recorder: ReplayRecorder | null = null;
+    /** The replay being watched. */
+    private replay: ReplayPlayback | null = null;
+    private replayIndicator: ReplayIndicator | null = null;
     private readonly root = new Container();
     private readonly fieldWrap = new Container();
     /** Everything the fail animation shrinks, tilts and greys (lazer's FailAnimationContainer.Content). */
@@ -121,8 +128,6 @@ export class PlayerScreen extends Screen {
     private autoReleaseAt = 0;
     /** First object whose hitsound loops may still be running. */
     private loopStart = 0;
-    private rulesTime = -Infinity;
-    private prevCursor: CursorState = { x: 256, y: 192, held: false };
     private lastJudgementTime = -Infinity;
     private failClock = 0;
     private failedAtTime = 0;
@@ -200,7 +205,8 @@ export class PlayerScreen extends Screen {
             sliderTrackOverride: chain.config('sliderTrackOverride') ?? null,
             sliderBorder: chain.config('sliderBorder') ?? null,
         };
-        const mechanics = g.settings.gameplayMechanics.value;
+        // A replay judges with the mechanics its score was set with.
+        const mechanics = o.replay?.mechanics ?? g.settings.gameplayMechanics.value;
         const beatmap = (this.beatmap = buildPlayableBeatmap(data, mods, playableOptions(mechanics)));
         const d = o.data.difficulty;
         const objectCount = beatmap.hitObjects.length;
@@ -224,6 +230,10 @@ export class PlayerScreen extends Screen {
         });
         this.rules = new GameplayRules(beatmap, mods, this.score, this.health, mechanics);
         if (this.mode === 'autoplay' || this.mode === 'autopilot') this.auto = new AutoPlayer(beatmap);
+        this.driver = new RulesDriver(this.rules, this.mode, this.auto);
+        if (this.mode === 'autoplay') this.driver.beforeStep = t => this.feedAutoplay(t);
+        else if (o.replay) this.replay = new ReplayPlayback(o.replay.events);
+        else this.recorder = new ReplayRecorder();
 
         const first = beatmap.hitObjects[0];
         const preempt = beatmap.difficulty.preempt;
@@ -234,8 +244,17 @@ export class PlayerScreen extends Screen {
         this.clock = new GameplayClock(o.track, start);
 
         this.input = new GameplayInput(g.app, g.settings, () => this.clock.now, { x: g.input.pointer.x, y: g.input.pointer.y });
-        this.input.ignorePointer = (x, y) => this.holdButton.containsPoint(x, y) ||
-            (this.skip.available && x >= this.skip.x && y >= this.skip.y && x <= this.skip.x + this.skip.w && y <= this.skip.y + this.skip.h);
+        this.input.relative = g.input.pointerLock;
+        this.input.ignorePointer = (x, y) => {
+            const onHold = this.holdButton.containsPoint(x, y);
+            const onSkip = this.skip.available && x >= this.skip.x && y >= this.skip.y && x <= this.skip.x + this.skip.w && y <= this.skip.y + this.skip.h;
+            // Pixi can't see a locked pointer (its client position is frozen): press these for it.
+            if (g.input.pointerLock.locked) {
+                if (onHold) this.holdButton.beginHold();
+                else if (onSkip) this.doSkip();
+            }
+            return onHold || onSkip;
+        };
         this.hitsounds = new HitsoundPlayer(g.samples, beatmap, o.beatmapSkin ?? null, g.skins.current.value);
         this.hitsounds.useBeatmapSamples = g.settings.beatmapHitsounds.value;
 
@@ -260,7 +279,19 @@ export class PlayerScreen extends Screen {
             this.flashlightLayer.addChild(this.flashlight);
         }
 
-        this.hud = new HUDOverlay(chain, beatmap, g.settings, { canFail: !noFail });
+        this.hud = new HUDOverlay(chain, beatmap, g.settings, {
+            canFail: !noFail,
+            // lazer's legacy HUD layout comes with an imported skin; wosu!'s default keeps its own.
+            legacyLayout: g.skins.current.value !== null,
+            // lazer names Autoplay's score "Autoplay"; a replay shows its player.
+            playerName: this.mode === 'autoplay' ? 'Autoplay' : o.replay ? o.replay.player || 'Guest' : g.settings.playerName.value || 'Guest',
+            introStart: start,
+        });
+        // The gameplay leaderboard lists this difficulty's local scores (lazer's solo leaderboard provider).
+        const { set: lbSet, diff: lbDiff } = o.selection;
+        void g.scores.forBeatmap(beatmapKeyOf({ beatmapId: lbDiff.beatmapId, title: lbSet.title, version: lbDiff.version, setId: lbSet.onlineSetId ?? 0 }))
+            .then(list => { if (!this.destroyed) this.hud.setLeaderboardScores(list); })
+            .catch(e => console.warn('[leaderboard] scores unavailable', e));
         this.menu = new GameplayMenu(g.skin.tex('triangle'));
         this.skip = new SkipButton();
         this.skip.onActivate = () => this.doSkip();
@@ -272,6 +303,11 @@ export class PlayerScreen extends Screen {
         this.retryFade.alpha = 0;
         this.failBacking.visible = false;
         this.failContent.addChild(this.failBacking, this.fieldWrap, this.flashlightLayer, this.hud);
+        if (o.replay) {
+            const { set, diff } = o.selection;
+            this.replayIndicator = new ReplayIndicator(`Watching ${o.replay.player || 'Guest'} play ${set.artist} - ${set.title} [${diff.version}]`);
+            this.failContent.addChild(this.replayIndicator);
+        }
         this.failFlash.blendMode = 'add';
         this.root.addChild(this.failContent, this.failFlash, this.skip, this.holdButton, this.resume, this.menu, this.retryFade);
         this.addChild(this.root);
@@ -380,25 +416,20 @@ export class PlayerScreen extends Screen {
             if (previous >= 20) this.hitsounds.comboBreak();
         });
         this.health.failedSignal.add(() => this.startFail());
-        this.input.pressed.add((time, x, y) => {
-            // Autoplay and Relax hit for you; like lazer (AllowUserPresses = false), your own clicks
-            // must not reach the rules (they'd early-click, shake and notelock the auto-hits).
-            if (this.phase !== 'playing' || this.mode === 'autoplay' || this.mode === 'relax') return;
+        this.input.pressed.add((time, x, y, button) => {
+            // Only a real play takes presses: Autoplay and replays ignore the user's
+            // (the driver also drops Relax's, but they're recorded for the key overlay).
+            if (this.phase !== 'playing' || !this.recorder) return;
             const p = this.toPlayfield(x, y);
-            if (this.mode === 'autopilot' && this.auto) {
-                // Autopilot moves the cursor; the player only taps.
-                const c = this.auto.cursorAt(time);
-                this.rules.press(time, c.x, c.y);
-            } else {
-                this.rules.press(time, p.x, p.y);
-            }
+            const e = this.recorder.press(time, p.x, p.y, button);
+            this.driver.press(e.time, e.x, e.y);
         });
         this.input.anyPress.add((x, y) => {
             if (this.phase === 'resuming' && this.resume.hits(x, y)) this.finishResume();
         });
 
         const blur = () => {
-            if (this.phase === 'playing' && this.mode !== 'autoplay') this.pause();
+            if (this.phase === 'playing' && this.mode !== 'autoplay' && !this.replay) this.pause();
             this.input.releaseAll();
             this.hud.holdingForHud = false;
         };
@@ -410,6 +441,12 @@ export class PlayerScreen extends Screen {
             if (this.phase !== 'playing' || this.game.volume.meterHovered) return;
             this.game.volume.adjust(e.deltaY < 0 ? 0.05 : -0.05);
         };
+        // Esc (or the browser) took the pointer lock back: pause like Esc does.
+        this.offs.push(this.game.input.pointerLock.lost.add(() => {
+            if (this.phase === 'playing' || this.phase === 'resuming') this.pause();
+        }));
+        // Locked, Pixi would hit-test at the frozen lock point; gameplay presses the controls itself.
+        this.offs.push(this.game.input.pointerLock.lockChanged.add(locked => (this.root.interactiveChildren = !locked)));
         window.addEventListener('blur', blur);
         document.addEventListener('visibilitychange', visibility);
         window.addEventListener('wheel', wheel, { passive: true });
@@ -451,6 +488,7 @@ export class PlayerScreen extends Screen {
         this.failBacking.clear().rect(0, 0, w, h).fill(0x000000);
         this.retryFade.clear().rect(0, 0, w, h).fill(0x000000);
         this.flashlight?.resize(w, h);
+        this.replayIndicator?.layout(w, h);
     }
 
     private toPlayfield(x: number, y: number): { x: number; y: number } {
@@ -492,7 +530,7 @@ export class PlayerScreen extends Screen {
 
     private begin(): void {
         this.phase = 'playing';
-        this.input.enabled = this.mode !== 'autoplay';
+        this.input.enabled = this.mode !== 'autoplay' && !this.replay;
         this.clock.start();
     }
 
@@ -513,6 +551,8 @@ export class PlayerScreen extends Screen {
     private releaseGameplay(): void {
         if (this.released) return;
         this.released = true;
+        this.game.input.pointerLock.wanted = false;
+        this.root.interactiveChildren = true;
         this.input?.dispose();
         this.hitsounds?.stopAll();
         for (const off of this.offs) off();
@@ -541,10 +581,11 @@ export class PlayerScreen extends Screen {
         if (this.phase === 'loading' && this.sinceEnter > 400) this.begin();
         // Before the clock starts everything still draws, frozen at the start time.
         const time = this.phase === 'loading' ? this.clock.frameTime : this.clock.tick(dt);
+        this.updatePointerLock();
         const cursor = this.updateCursor(time, dt);
 
         if (this.phase === 'playing') {
-            this.stepRules(time, cursor);
+            this.feedRules(time, cursor);
             this.updateLoops(time);
             this.sampleHealth(time);
             if (this.rules.finished && time >= this.lastJudgementTime + RESULTS_DELAY && time >= this.beatmap.endTime) this.complete();
@@ -577,10 +618,11 @@ export class PlayerScreen extends Screen {
             score: this.score.score,
             accuracy: this.score.accuracy,
             combo: this.score.combo,
+            maxCombo: this.score.maxCombo,
             hp: this.health.hp,
             grade: this.score.grade(this.options.mods.has('HD') || this.options.mods.has('FL')),
-            down: this.mode === 'autoplay' ? this.autoDown : this.input.down,
-            counts: this.mode === 'autoplay' ? this.autoCounts : this.input.counts,
+            down: this.keysDown,
+            counts: this.mode === 'autoplay' ? this.autoCounts : this.replay ? this.replay.counts : this.input.counts,
             // lazer's localUserPlaying (breaks and the intro count as "not playing").
             playing: this.phase === 'playing' && time >= this.playStart && !this.hud.isBreak(time) && !this.rules.finished,
         });
@@ -614,16 +656,40 @@ export class PlayerScreen extends Screen {
         this.renderState(this.clock.frameTime, 0);
     }
 
+    /**
+     * lazer's high precision mouse / confine during gameplay: the pointer is
+     * locked while the player aims (not paused, failed or finished, nor while
+     * autoplay or autopilot moves the cursor). The menus get the real pointer back.
+     */
+    private updatePointerLock(): void {
+        const lock = this.game.input.pointerLock;
+        const s = this.game.settings;
+        const raw = s.highPrecisionMouse.value;
+        const aiming = this.phase === 'loading' || this.phase === 'playing' || this.phase === 'resuming';
+        lock.raw = raw;
+        lock.sensitivity = s.cursorSensitivity.value;
+        lock.wanted = !this.released && aiming && this.mode !== 'autoplay' && this.mode !== 'autopilot' && !this.replay &&
+            (raw || s.confineMouse.value === 'duringGameplay');
+        this.root.interactiveChildren = !lock.locked;
+    }
+
     /** Cursor in playfield coordinates; also drives the on-screen cursor. */
     private updateCursor(time: number, _dt: number): { x: number; y: number; held: boolean } {
         const c = this.game.cursor;
         // lazer swaps to the menu cursor once the pause / fail menu is up; autoplay keeps the user's cursor visible.
         c.gameplayActive = this.phase !== 'paused' && !(this.phase === 'failed' && this.menu.shown);
-        c.replayLoaded = this.mode === 'autoplay';
+        c.replayLoaded = this.mode === 'autoplay' || !!this.replay;
         c.playfieldScale = this.view.scale;
         c.circleSize = this.beatmap.difficulty.cs;
-        const down = this.mode === 'autoplay' ? this.autoDown : this.input.down;
+        const down = this.keysDown;
         c.setDownCount(+down.K1 + +down.K2 + +down.M1 + +down.M2);
+        // A replay moves the gameplay cursor along its frames (the menus keep the user's).
+        if (this.replay) {
+            const r = this.replay.cursorAt(time);
+            const sp = this.toScreen(r.x, r.y);
+            c.moveTo(sp.x, sp.y);
+            return { x: r.x, y: r.y, held: buttonMask(down) !== 0 };
+        }
         // Autoplay/autopilot steer the cursor while playing; menus give it back to the pointer.
         if (this.auto && (this.phase === 'playing' || this.phase === 'completed')) {
             const a = this.auto.cursorAt(time);
@@ -637,28 +703,25 @@ export class PlayerScreen extends Screen {
         return { x: p.x, y: p.y, held: this.input.held };
     }
 
-    private stepRules(time: number, cursor: CursorState): void {
-        const from = this.rulesTime === -Infinity ? time : this.rulesTime;
-        const span = time - from;
-        const steps = span > 0 ? Math.min(MAX_SUBSTEPS, Math.ceil(span / SUBSTEP_MS)) : 1;
-        const prev = this.prevCursor;
-        for (let k = 1; k <= steps; k++) {
-            const t = k === steps ? time : from + (span * k) / steps;
-            let c = cursor;
-            if (k < steps) {
-                if (this.auto) {
-                    const a = this.auto.cursorAt(t);
-                    c = { x: a.x, y: a.y, held: this.mode === 'autoplay' ? a.held : cursor.held };
-                } else {
-                    const f = k / steps;
-                    c = { x: prev.x + (cursor.x - prev.x) * f, y: prev.y + (cursor.y - prev.y) * f, held: cursor.held };
-                }
-            }
-            this.feedAutoplay(t);
-            this.rules.update(t, c);
+    /** Held gameplay buttons as shown (key overlay, cursor): Autoplay's, the replay's or the user's. */
+    private get keysDown(): Readonly<Record<GameplayButton, boolean>> {
+        return this.mode === 'autoplay' ? this.autoDown : this.replay ? this.replay.down : this.input.down;
+    }
+
+    /**
+     * Judge up to `time`. A real play judges exactly the frames it records
+     * (lazer's ReplayRecorder rate), a replay feeds back the recorded events
+     * as the clock passes them, and Autoplay steps every frame.
+     */
+    private feedRules(time: number, cursor: CursorState): void {
+        if (this.replay) {
+            this.replay.advance(time, e => this.driver.apply(e));
+        } else if (this.recorder) {
+            const f = this.recorder.frame(time, cursor.x, cursor.y, buttonMask(this.input.down));
+            if (f) this.driver.apply(f);
+        } else {
+            this.driver.step(time, cursor);
         }
-        this.rulesTime = Math.max(this.rulesTime, time);
-        this.prevCursor = cursor;
     }
 
     private feedAutoplay(time: number): void {
@@ -765,6 +828,8 @@ export class PlayerScreen extends Screen {
     pause(): void {
         if (this.phase !== 'playing' && this.phase !== 'resuming') return;
         this.phase = 'paused';
+        // The pause menu needs the real pointer at once.
+        this.updatePointerLock();
         this.clock.pause();
         this.hitsounds.stopAll();
         this.input.enabled = false;
@@ -804,7 +869,7 @@ export class PlayerScreen extends Screen {
         this.game.overlays.hideAll();
         const time = this.clock.frameTime;
         const first = this.beatmap.hitObjects[0];
-        const needsAim = this.mode !== 'autoplay' && this.mode !== 'autopilot' && time > first.time - this.beatmap.difficulty.preempt;
+        const needsAim = this.mode !== 'autoplay' && this.mode !== 'autopilot' && !this.replay && time > first.time - this.beatmap.difficulty.preempt;
         if (!needsAim) {
             this.finishResume();
             return;
@@ -816,8 +881,10 @@ export class PlayerScreen extends Screen {
     private finishResume(): void {
         this.resume.hide();
         this.phase = 'playing';
-        this.rules.resetSpinnerTracking();
-        this.input.enabled = this.mode !== 'autoplay';
+        // A replay's own pauses are among its events; pausing while watching changes nothing.
+        if (this.recorder) this.driver.apply(this.recorder.resume(this.clock.frameTime));
+        else if (!this.replay) this.driver.resume();
+        this.input.enabled = this.mode !== 'autoplay' && !this.replay;
         this.clock.resume();
     }
 
@@ -909,10 +976,19 @@ export class PlayerScreen extends Screen {
         this.input.enabled = false;
         this.hitsounds.stopAll();
         const result = this.buildResult();
-        if (this.mode !== 'autoplay') void this.saveScore(result);
+        const watched = this.options.replay;
+        let replay: ReplayInfo | null = watched ?? null;
+        if (watched) {
+            // lazer: results of a replay show that score, and nothing new is saved.
+            result.player = watched.player;
+            result.date = watched.date;
+        } else if (this.recorder) {
+            replay = { events: this.recorder.events, mods: result.mods, modSettings: result.modSettings, mechanics: this.rules.mechanics, player: result.player, date: result.date };
+            void this.saveScore(result, replay);
+        }
         tween(this.root, { alpha: 0 }, { duration: 400 }).finished.then(() => {
             if (this.destroyed || !this.isCurrent) return;
-            this.push(new ResultsScreen(result, this.options.selection));
+            this.push(new ResultsScreen(result, this.options.selection, { replay, allowRetry: !watched }));
         });
     }
 
@@ -972,7 +1048,13 @@ export class PlayerScreen extends Screen {
         }
     }
 
-    private async saveScore(r: ScoreResult): Promise<void> {
+    private async saveScore(r: ScoreResult, replay: ReplayInfo): Promise<void> {
+        let data: Uint8Array | undefined;
+        try {
+            data = encodeReplay(replay.events);
+        } catch (e) {
+            console.warn('encoding the replay failed', e);
+        }
         try {
             await this.game.scores.add({
                 beatmapKey: beatmapKeyOf({ beatmapId: r.beatmapId, title: r.title, version: r.version, setId: r.setId }),
@@ -995,7 +1077,8 @@ export class PlayerScreen extends Screen {
                 passed: r.passed,
                 date: r.date,
                 player: r.player,
-            });
+                mechanics: replay.mechanics,
+            }, data);
         } catch (e) {
             console.warn('saving score failed', e);
             this.game.notifications.error('Your score could not be saved.');
@@ -1022,6 +1105,8 @@ export class PlayerScreen extends Screen {
     // ------------------------------------------------------------------
 
     override onKey(e: KeyboardEvent, action: Action | null): boolean {
+        // The Esc that just broke the pointer lock already paused; it must not also press "Continue".
+        if (e.code === 'Escape' && this.game.input.pointerLock.lostWithin(500)) return true;
         if (this.menu.shown && this.menu.onKey(e, action)) return true;
         if (this.phase === 'resuming' || this.phase === 'playing') {
             if (this.input.keyDown(e)) return true;
@@ -1035,6 +1120,14 @@ export class PlayerScreen extends Screen {
             const mode = this.hud.cycleVisibilityMode();
             const names = { always: 'Always', hideDuringGameplay: 'Hide during gameplay', never: 'Never' } as const;
             this.game.notifications.info(`HUD visibility: ${names[mode]}`);
+            return true;
+        }
+        if (e.code === 'Tab') {
+            // lazer's ToggleInGameLeaderboard (persisted, like the setting).
+            if (!e.repeat) {
+                const on = this.hud.toggleLeaderboard();
+                this.game.notifications.info(`Gameplay leaderboard: ${on ? 'enabled' : 'disabled'}`);
+            }
             return true;
         }
         if (e.key === 'Control') {

@@ -96,7 +96,7 @@ export class Slider extends UIComponent {
     }
 
     private onDown(e: FederatedPointerEvent): void {
-        if (e.button > 0) return;
+        if (e.button > 0 || !this.enabled) return;
         this.dragging = true;
         this.setFromPointer(e);
         this.on('globalpointermove', this.setFromPointer, this);
@@ -110,6 +110,11 @@ export class Slider extends UIComponent {
         };
         this.on('pointerup', up);
         this.on('pointerupoutside', up);
+    }
+
+    /** Disabled sliders are greyed out (lazer dims disabled settings). */
+    protected override onEnabledChange(enabled: boolean): void {
+        this.alpha = enabled ? 1 : 0.5;
     }
 
     protected override onHoverChange(hovered: boolean): void {

@@ -15,6 +15,8 @@ import { UISounds } from '../audio/UISounds';
 import { BeatmapLibrary, type LibrarySet } from '../beatmap/Library';
 import type { DifficultySummary } from '../beatmap/types';
 import { NO_MODS, modSettingsOf, sanitizeMods, sortedMods, type ModSet } from '../gameplay/mods';
+import { decodeReplay, type ReplayInfo } from '../gameplay/replay/Replay';
+import { DEFAULT_MECHANICS } from '../gameplay/scoring/mechanics';
 import { textureFromBlob, TextureCache, textureFromUrl } from '../graphics/textures';
 import { InputManager, KeyPriority } from '../input/InputManager';
 import type { Action } from '../input/bindings';
@@ -37,7 +39,7 @@ import { Skin } from '../skin/Skin';
 import { SkinManager } from '../skin/SkinManager';
 import { Favourites } from '../storage/Favourites';
 import { KnownVideos } from '../storage/KnownVideos';
-import { ScoreStore } from '../storage/ScoreStore';
+import { ScoreStore, type ScoreRecord } from '../storage/ScoreStore';
 import { Dropdown } from '../ui/Dropdown';
 import { installBitmapFonts, loadFonts } from '../ui/fonts';
 import { KeyBindButton } from '../ui/KeyBindButton';
@@ -146,6 +148,9 @@ export class Game {
         this.tooltips = new TooltipLayer(() => this.input.pointer, () => ({ width: app.width, height: app.height }));
         // The gameplay cursor and trail come from the osu! skins (selected → default).
         this.cursor = new Cursor(cursorTextures, skins, (x, y) => app.toLogical(x, y));
+        const lock = this.input.pointerLock;
+        this.cursor.pointerLocked = () => lock.locked;
+        lock.moved.add((x, y) => this.cursor.addSample(x, y));
         this.fps = new FpsCounter();
 
         installUIContext({
@@ -613,6 +618,36 @@ export class Game {
     play(selection: Selection): void {
         this.selection.value = selection;
         this.screens.push(new PlayerLoaderScreen(selection));
+    }
+
+    /** Watch a replay of a difficulty (lazer's ReplayPlayer, loaded with the score's mods). */
+    watchReplay(selection: Selection, replay: ReplayInfo): void {
+        this.selection.value = selection;
+        this.screens.push(new PlayerLoaderScreen(selection, replay));
+    }
+
+    /** Watch a saved score's replay; false when it has none or it can't be read. */
+    async watchScore(selection: Selection, score: ScoreRecord): Promise<boolean> {
+        const data = score.hasReplay && score.id !== undefined ? await this.scores.replay(score.id) : null;
+        let events = null;
+        try {
+            events = data ? decodeReplay(data) : null;
+        } catch (e) {
+            console.warn('[replay] decode failed', e);
+        }
+        if (!events) {
+            this.notifications.error(data ? "This score's replay could not be read." : 'This score has no replay.');
+            return false;
+        }
+        this.watchReplay(selection, {
+            events,
+            mods: score.mods,
+            modSettings: score.modSettings,
+            mechanics: score.mechanics ?? DEFAULT_MECHANICS,
+            player: score.player,
+            date: score.date,
+        });
+        return true;
     }
 
     /** Background texture for a library set (falls back to default). */

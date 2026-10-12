@@ -61,6 +61,8 @@ export class Cursor extends Container {
     private readonly samples: number[] = [];
     /** The player's skin chain while a play is up. */
     private playerChain: SkinChain | null = null;
+    /** The pointer is locked (high precision mouse): pointer events carry a frozen position. */
+    pointerLocked: () => boolean = () => false;
 
     static async loadTextures(): Promise<CursorTextures> {
         const load = (name: string) =>
@@ -147,6 +149,11 @@ export class Cursor extends Container {
         g.moveTo(x, y);
     }
 
+    /** A virtual-cursor sample (pointer lock) for the trail, in logical px. */
+    addSample(x: number, y: number): void {
+        if (this._external && this.samples.length < 512) this.samples.push(x, y);
+    }
+
     /** Gameplay buttons held (keys + mouse); each new press expands the cursor. */
     setDownCount(count: number): void {
         this.gameplay.setDownCount(count);
@@ -181,6 +188,8 @@ export class Cursor extends Container {
             if (e.pointerType !== 'touch') this.lastInputWasMouse = true;
             interact();
             if (!e.isPrimary) return;
+            // Locked: the virtual cursor feeds the trail through addSample.
+            if (e.pointerType === 'mouse' && this.pointerLocked()) return;
             const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
             for (const ev of events.length ? events : [e]) {
                 const p = this.toLogical(ev.clientX, ev.clientY);

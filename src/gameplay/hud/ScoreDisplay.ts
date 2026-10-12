@@ -33,7 +33,7 @@ class Rolling {
 }
 
 /** lazer's FormatAccuracy: floored (never rounded up) to 0.01%. */
-function formatAccuracy(acc: number): string {
+export function formatAccuracy(acc: number): string {
     return `${(Math.floor(acc * 10000 + 1e-6) / 100).toFixed(2)}%`;
 }
 
@@ -81,6 +81,17 @@ export class ScoreCounter extends Container {
     update(dt: number): void {
         this.score.text = String(Math.round(this.rollScore.step(dt))).padStart(8, '0');
         this.accuracy.text = formatAccuracy(this.rollAcc.step(dt));
+    }
+
+    /**
+     * The accuracy counter's box as lazer's legacy layout measures it (at
+     * load, showing 100.00%), in this container's units: where the
+     * progress pie goes.
+     */
+    get accuracyBox(): { width: number; top: number; height: number } {
+        const s = this.accuracy.scale.x;
+        const m = this.accuracy.measure(formatAccuracy(1));
+        return { width: m.width * s, top: this.accuracy.y, height: m.height * s };
     }
 
     /** lazer's default legacy layout: accuracy.Y = the score's bottom edge (plus its 9-unit margin). */

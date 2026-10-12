@@ -301,7 +301,8 @@ export async function readAllEntries(db: IDBDatabase, storeName: string): Promis
 // ---------------------------------------------------------------------------
 
 export const APP_DB_NAME = 'webosu';
-export const APP_DB_VERSION = 1;
+/** 2: adds `replays` (created by the default upgrade; existing data is untouched). */
+export const APP_DB_VERSION = 2;
 
 export const APP_STORES: readonly StoreSchema[] = [
     { name: 'sets' },
@@ -309,6 +310,8 @@ export const APP_STORES: readonly StoreSchema[] = [
     { name: 'thumbs' },
     { name: 'scores', keyPath: 'id', autoIncrement: true },
     { name: 'kv' },
+    /** Encoded replay per score id (kept out of `scores`, which is mirrored in memory). */
+    { name: 'replays' },
 ];
 
 /** Typed handles for the app's stores. */
@@ -319,6 +322,7 @@ export interface AppDatabase {
     readonly thumbs: KeyValueStore<string, Blob>;
     readonly scores: KeyValueStore<number, unknown>;
     readonly kv: KeyValueStore<string, unknown>;
+    readonly replays: KeyValueStore<number, Uint8Array>;
 }
 
 function wrap(db: Database): AppDatabase {
@@ -329,6 +333,7 @@ function wrap(db: Database): AppDatabase {
         thumbs: db.store('thumbs'),
         scores: db.store('scores'),
         kv: db.store('kv'),
+        replays: db.store('replays'),
     };
 }
 

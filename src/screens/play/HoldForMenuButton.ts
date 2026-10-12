@@ -31,14 +31,23 @@ export class HoldForMenuButton extends UIComponent {
         this.glyph = icon('pause', 16, 0xffffff);
         this.addChild(this.caption, this.ring, this.glyph);
         this.makeInteractive({ sounds: false, rectHitArea: false });
-        this.on('pointerdown', () => {
-            this.holding = true;
-            this.fired = false;
-        });
+        this.on('pointerdown', () => this.beginHold());
         const stop = () => (this.holding = false);
         this.on('pointerup', stop);
         this.on('pointerupoutside', stop);
         this.resize(SIZE, SIZE);
+    }
+
+    /**
+     * Start holding. Gameplay calls this directly while the pointer is
+     * locked (Pixi can't hit-test a locked pointer); any release ends it.
+     */
+    beginHold(): void {
+        this.holding = true;
+        this.fired = false;
+        if (typeof window !== 'undefined') {
+            window.addEventListener('pointerup', () => (this.holding = false), { once: true, passive: true });
+        }
     }
 
     protected override onResize(w: number, h: number): void {

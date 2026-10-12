@@ -52,6 +52,10 @@ export function gameplaySection(game: Game): SectionDef {
                     checkboxRow('Show health bar even when you can\'t fail', s.hudHealthWhenCantFail, { keywords: 'hp no fail autoplay relax hud' }),
                     checkboxRow('Song progress bar', s.progressBar, { keywords: 'time hud' }),
                     checkboxRow('Show difficulty graph on progress bar', s.progressGraph, { keywords: 'density strain hud' }),
+                    checkboxRow('Always show gameplay leaderboard', s.gameplayLeaderboard, {
+                        description: 'Your score against this beatmap\'s local scores, on the left. Tab toggles it in game.',
+                        keywords: 'leaderboard scores ranking hud tab',
+                    }),
                     checkboxRow('Hit error meter', s.hitErrorMeter, { keywords: 'timing unstable rate hud' }),
                     checkboxRow('Key overlay', s.keyOverlay, { keywords: 'keys counter hud' }),
                     dropdownRow<KeyOverlayStyle>('Key overlay style', [

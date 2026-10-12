@@ -133,3 +133,23 @@ describe('ScoreStore', () => {
         expect(input.id).toBeUndefined();
     });
 });
+
+describe('ScoreStore replays', () => {
+    it('stores a replay beside its score, outside the in-memory records', async () => {
+        const db = createMemoryAppDatabase();
+        const store = new ScoreStore(db, { legacy: legacyWith([]) });
+        const bytes = new Uint8Array([1, 2, 3, 4]);
+        const withReplay = await store.add(record({ mechanics: 'stable' }), bytes);
+        const without = await store.add(record({ score: 5 }));
+        expect(withReplay.hasReplay).toBe(true);
+        expect(withReplay.mechanics).toBe('stable');
+        expect(without.hasReplay).toBeUndefined();
+        expect(await store.replay(withReplay.id!)).toEqual(bytes);
+        expect(await store.replay(without.id!)).toBeNull();
+        // Reloaded from the database, the flag survives.
+        const again = new ScoreStore(db, { legacy: legacyWith([]) });
+        expect((await again.all()).find(r => r.id === withReplay.id)?.hasReplay).toBe(true);
+        await store.delete(withReplay.id!);
+        expect(await store.replay(withReplay.id!)).toBeNull();
+    });
+});

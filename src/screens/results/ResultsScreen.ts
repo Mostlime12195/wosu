@@ -2,6 +2,7 @@ import { delay } from '../../core/Tweener';
 import { Container, Rectangle } from 'pixi.js';
 import { Screen } from '../../app/Screen';
 import type { Selection } from '../../app/Game';
+import type { ReplayInfo } from '../../gameplay/replay/Replay';
 import type { ScoreResult } from '../../gameplay/ScoreResult';
 import type { Action } from '../../input/bindings';
 import { BackButton, Button } from '../../ui/Button';
@@ -12,6 +13,14 @@ import { clamp01, easeOutQuint } from './resultsMath';
 
 const GAP = 24;
 const MAX_SCALE = 1.3;
+const BUTTON_GAP = 10;
+
+export interface ResultsOptions {
+    /** The score's replay: offers "Watch replay" (lazer's ReplayDownloadButton). */
+    replay?: ReplayInfo | null;
+    /** The player's own play (lazer's allowRetry); off for watched replays. */
+    allowRetry?: boolean;
+}
 
 /**
  * osu!lazer's results screen: the expanded score panel (accuracy circle,
@@ -26,14 +35,15 @@ export class ResultsScreen extends Screen {
     private readonly panelWrap = new Container();
     private readonly statsWrap = new Container();
     private readonly buttons = new Container();
-    private retryButton!: Button;
+    private retryButton: Button | null = null;
+    private replayButton: Button | null = null;
     private backButton!: BackButton;
     private clock = 0;
     private panelScale = 1;
     private top = 0;
     private leaving = false;
 
-    constructor(readonly result: ScoreResult, readonly selection: Selection) {
+    constructor(readonly result: ScoreResult, readonly selection: Selection, readonly options: ResultsOptions = {}) {
         super();
     }
 
@@ -46,10 +56,17 @@ export class ResultsScreen extends Screen {
         this.statsWrap.addChild(this.stats);
 
         const triangles = g.skin.tex('triangle');
-        this.retryButton = new Button('Retry', { color: Colors.pink, icon: 'retry', triangles, width: 170, height: 44 });
-        this.retryButton.onActivate = () => this.retry();
-        // The footer's back button already returns to song select (lazer has just Retry here).
-        this.buttons.addChild(this.retryButton);
+        // The footer's back button already returns to song select (lazer has just Retry and the replay here).
+        if (this.options.allowRetry !== false) {
+            this.retryButton = new Button('Retry', { color: Colors.pink, icon: 'retry', triangles, width: 170, height: 44 });
+            this.retryButton.onActivate = () => this.retry();
+            this.buttons.addChild(this.retryButton);
+        }
+        if (this.options.replay) {
+            this.replayButton = new Button('Watch replay', { color: Colors.blueDarker, icon: 'circlePlay', triangles, width: 190, height: 44 });
+            this.replayButton.onActivate = () => this.watchReplay();
+            this.buttons.addChild(this.replayButton);
+        }
         this.buttons.alpha = 0;
         this.backButton = new BackButton();
         this.backButton.onActivate = () => this.goBack();
@@ -68,13 +85,13 @@ export class ResultsScreen extends Screen {
         if (!this.panel) return;
         const toolbar = this.game.toolbarVisible.value ? this.game.toolbar.h : 0;
         const groupW = PANEL_W + GAP + STATS_W;
-        const retry = this.retryButton;
+        const buttons = [this.retryButton, this.replayButton].filter((b): b is Button => !!b);
         const back = this.backButton;
-        const rowW = retry.w;
+        const rowW = buttons.reduce((n, b, i) => n + b.w + (i ? BUTTON_GAP : 0), 0);
         // Short landscape screens (phones): a button row under the panels
         // shrinks them a lot, so the buttons stack in a column on the right
         // (clear of the back button) and the panels use the full height.
-        const colW = retry.w;
+        const colW = buttons.reduce((n, b) => Math.max(n, b.w), 0);
         const normalTop = toolbar + 16;
         const normalScale = Math.max(0.3, Math.min(MAX_SCALE, (h - normalTop - 76) / PANEL_H, (w - 32) / groupW));
         const compactTop = toolbar + 8;
@@ -87,14 +104,22 @@ export class ResultsScreen extends Screen {
             this.panelScale = compactScale;
             const used = groupW * compactScale + 16 + colW;
             x0 = Math.max(left, Math.round((w - used) / 2));
-            retry.position.set(0, 0);
-            const stackH = retry.h;
+            let y = 0;
+            for (const b of buttons) {
+                b.position.set(0, y);
+                y += b.h + BUTTON_GAP;
+            }
+            const stackH = Math.max(0, y - BUTTON_GAP);
             this.buttons.position.set(Math.round(x0 + groupW * compactScale + 16), Math.round(this.top + (PANEL_H * compactScale - stackH) / 2));
         } else {
             this.top = normalTop;
             this.panelScale = normalScale;
             x0 = (w - groupW * normalScale) / 2;
-            retry.position.set(0, 0);
+            let x = 0;
+            for (const b of buttons) {
+                b.position.set(x, 0);
+                x += b.w + BUTTON_GAP;
+            }
             this.buttons.position.set(Math.round((w - rowW) / 2), h - 60);
         }
         const s = this.panelScale;
@@ -172,8 +197,17 @@ export class ResultsScreen extends Screen {
         this.game.openSongSelect();
     }
 
+    private watchReplay(): void {
+        const replay = this.options.replay;
+        if (this.leaving || !replay) return;
+        this.leaving = true;
+        // Like retry: back to song select so the stack stays select → loader → player.
+        this.game.openSongSelect();
+        this.game.watchReplay(this.selection, replay);
+    }
+
     private retry(): void {
-        if (this.leaving) return;
+        if (this.leaving || this.options.allowRetry === false) return;
         this.leaving = true;
         // Return to song select first so the stack stays select → loader → player.
         this.game.openSongSelect();
