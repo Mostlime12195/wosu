@@ -180,6 +180,8 @@ export class MusicTrack {
     private playing = false;
     private rate = 1;
     private preservePitch = true;
+    /** Worklet transposition (semitones) giving the requested pitch at this rate. */
+    private semitones = 0;
     private _volume = 1;
 
     private smoothMs = 0;
@@ -359,15 +361,20 @@ export class MusicTrack {
     /**
      * Change the playback rate. Pitch-preserving rates need the time
      * stretch worklet; when it is unavailable the rate still applies but
-     * pitch follows it (reported through `diagnostics`).
+     * pitch follows it (reported through `diagnostics`). `pitch` (frequency
+     * ratio) overrides both: lazer's Nightcore at 1.2x keeps its 1.5x pitch
+     * and time-stretches the rest, which the worklet does by transposing.
      */
-    async setRate(rate: number, preservePitch = true): Promise<void> {
+    async setRate(rate: number, preservePitch = true, pitch?: number): Promise<void> {
         const r = Number(rate) > 0 && Number.isFinite(Number(rate)) ? Number(rate) : 1;
         if (this.pendingStretch) await this.pendingStretch;
         const wasPlaying = this.pause();
         this.rate = r;
         this.preservePitch = preservePitch;
-        if (preservePitch && r !== 1 && !this.stretch) {
+        const freq = pitch !== undefined && pitch > 0 && Number.isFinite(pitch) ? pitch : preservePitch ? 1 : r;
+        this.semitones = Math.abs(freq - 1) < 1e-6 ? 0 : 12 * Math.log2(freq);
+        // A plain buffer source can only make pitch follow the speed.
+        if (Math.abs(freq - r) > 1e-6 && !this.stretch) {
             this.pendingStretch = this.prepareStretch();
             try {
                 await this.pendingStretch;
@@ -538,9 +545,10 @@ export class MusicTrack {
 
     private startSource(when: number, offset: number): void {
         this.clearFailEffect();
-        // The worklet only keeps pitch; NC/DC (pitch follows speed) play the buffer directly,
-        // so a DT → NC switch really changes pitch even though the worklet already exists.
-        if (this.stretch && (this.preservePitch || this.rate === 1)) {
+        // Once the worklet exists it owns the song (the decoded buffer was handed over), so it
+        // plays every rate; NC/DC (pitch follows speed) get there by transposing, which also
+        // makes a DT → NC switch really change pitch.
+        if (this.stretch) {
             const stretch = this.stretch;
             if (!this.stretchConnected) {
                 stretch.connect(this.gain);
@@ -550,7 +558,7 @@ export class MusicTrack {
             // Signalsmith's start(duration) path can drop the active segment
             // when the context clock already passed `when`; schedule our own
             // wall-clock stop instead (pause/seek can cancel it safely).
-            void stretch.start(when, offset, undefined, this.rate);
+            void stretch.start(when, offset, undefined, this.rate, this.semitones);
             if (Number.isFinite(this.durationSec)) {
                 const remaining = Math.max(0, this.durationSec - offset) / this.rate;
                 const delay = Math.max(0, when - this.ctx.currentTime) + remaining;

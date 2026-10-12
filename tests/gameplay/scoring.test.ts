@@ -3,6 +3,11 @@ import {
     difficultyMultiplier, resultForError, ScoreProcessor, sliderResult, spinnerResult,
 } from '../../src/gameplay/scoring/ScoreProcessor';
 import { HealthProcessor } from '../../src/gameplay/scoring/HealthProcessor';
+import { parseOsu } from '../../src/beatmap/parser';
+import { buildPlayableBeatmap } from '../../src/beatmap/processing';
+import { difficultyRange } from '../../src/core/math';
+import { NO_MODS } from '../../src/gameplay/mods';
+import { makeMap } from '../beatmap/helpers';
 
 const make = (diff = 4, mods = 1) => new ScoreProcessor({ difficultyMultiplier: diff, modMultiplier: mods });
 
@@ -42,6 +47,14 @@ describe('ScoreProcessor (ScoreV1)', () => {
         expect(broke).toBe(1);
         expect(s.sliderTicksTotal).toBe(2);
         expect(s.sliderTicksHit).toBe(1);
+    });
+
+    it('spins score 100, bonus spins 1100 (stable)', () => {
+        const s = make();
+        s.applySpin(false);
+        s.applySpin(true);
+        expect(s.score).toBe(1200);
+        expect(s.combo).toBe(0);
     });
 
     it('accuracy counts main judgements only', () => {
@@ -97,7 +110,7 @@ describe('HealthProcessor', () => {
     const base = { hpDifficulty: 5, breaks: [{ startTime: 5000, endTime: 8000 }], drainStart: 1000, drainEnd: 20000 };
 
     it('drains only during play time outside breaks', () => {
-        const h = new HealthProcessor(base);
+        const h = new HealthProcessor({ ...base, drainRate: 0.0001 });
         h.drain(500, 100);
         expect(h.hp).toBe(1);
         h.drain(2000, 1000);
@@ -126,6 +139,89 @@ describe('HealthProcessor', () => {
         for (let i = 0; i < 9; i++) ez.applyMain('miss');
         expect(used).toBe(1);
         expect(ez.failed).toBe(false);
+    });
+
+    const pen = (hp: number) => difficultyRange(hp, 0.02, 0.075, 0.14);
+
+    it('lazer: tick miss costs, a missed slider tail is free; stable charges both', () => {
+        const lazer = new HealthProcessor({ ...base, mechanics: 'lazer' });
+        lazer.hp = 0.5;
+        lazer.applyNested('tail', false);
+        expect(lazer.hp).toBeCloseTo(0.5);
+        lazer.applyNested('tick', false);
+        expect(lazer.hp).toBeCloseTo(0.5 - pen(5));
+        lazer.applyNested('tick', true);
+        lazer.applyNested('tail', true);
+        expect(lazer.hp).toBeCloseTo(0.5 - pen(5) + 0.015 + 0.02);
+
+        const stable = new HealthProcessor({ ...base, mechanics: 'stable' });
+        stable.hp = 0.5;
+        stable.applyNested('tail', false);
+        expect(stable.hp).toBeCloseTo(0.5 - pen(5));
+        stable.applyNested('repeat', false);
+        expect(stable.hp).toBeCloseTo(0.5 - 2 * pen(5));
+    });
+
+    it('lazer judges the slider head like a circle, stable like a tick', () => {
+        const lazer = new HealthProcessor({ ...base, mechanics: 'lazer' });
+        lazer.hp = 0.5;
+        lazer.applyNested('head', true, 'meh');
+        expect(lazer.hp).toBeCloseTo(0.502);
+        lazer.applyNested('head', false);
+        expect(lazer.hp).toBeCloseTo(0.502 - difficultyRange(5, 0.03, 0.125, 0.2));
+        const stable = new HealthProcessor({ ...base, mechanics: 'stable' });
+        stable.hp = 0.5;
+        stable.applyNested('head', true, 'meh');
+        expect(stable.hp).toBeCloseTo(0.52);
+    });
+
+    it('lazer adds the end-of-combo bonus (+0.07 perfect, +0.05 good, +0.03 otherwise)', () => {
+        const map = parseOsu(makeMap({ objects: ['0,0,1000,5,0', '0,0,1200,1,0', '0,0,1400,5,0', '0,0,1600,1,0', '0,0,1800,5,0'] }));
+        const objects = buildPlayableBeatmap(map, NO_MODS).hitObjects;
+        const h = new HealthProcessor({ ...base, mechanics: 'lazer', objects, drainRate: 0 });
+        h.hp = 0.2;
+        h.applyMain('great', 0);
+        h.applyMain('great', 1); // last in combo, all perfect
+        expect(h.hp).toBeCloseTo(0.2 + 0.03 + 0.03 + 0.07);
+        h.applyMain('ok', 2);
+        const before = h.hp;
+        h.applyMain('great', 3); // last in combo with a 100
+        expect(h.hp).toBeCloseTo(before + 0.03 + 0.05);
+        const s = new HealthProcessor({ ...base, mechanics: 'stable', objects, drainRate: 0 });
+        s.hp = 0.2;
+        s.applyMain('great', 0);
+        s.applyMain('great', 1);
+        expect(s.hp).toBeCloseTo(0.2 + 0.06 * s.hpMultiplier);
+    });
+
+    it('drain alone fails you in stable; lazer waits for a judgement', () => {
+        const stable = new HealthProcessor({ ...base, mechanics: 'stable', drainRate: 0.001 });
+        stable.drain(2000, 1000);
+        expect(stable.failed).toBe(true);
+        const lazer = new HealthProcessor({ ...base, mechanics: 'lazer', drainRate: 0.001 });
+        lazer.drain(2000, 1000);
+        expect(lazer.hp).toBe(0);
+        expect(lazer.failed).toBe(false);
+        lazer.applyMain('great'); // survives: health above zero again
+        expect(lazer.failed).toBe(false);
+        lazer.hp = 0;
+        lazer.applyMain('miss');
+        expect(lazer.failed).toBe(true);
+    });
+
+    it('the drain rate is fitted per map, and breaks (to the objects around them) do not drain', () => {
+        const objects = ['0,0,1000,1,0', '0,0,2000,1,0', '0,0,3000,1,0', '0,0,9000,1,0', '0,0,10000,1,0'];
+        const data = parseOsu(makeMap({ objects }).replace('[TimingPoints]', '[Events]\n2,4000,8000\n[TimingPoints]'));
+        const pb = buildPlayableBeatmap(data, NO_MODS);
+        for (const mechanics of ['lazer', 'stable'] as const) {
+            const h = new HealthProcessor({ hpDifficulty: 5, breaks: pb.breaks, drainStart: 1000, drainEnd: 10000, mechanics, objects: pb.hitObjects });
+            expect(h.drainRate).toBeGreaterThan(0);
+            expect(h.isDraining(1500)).toBe(true);
+            // lazer widens the break to the objects either side (3000–9000).
+            expect(h.isDraining(3500)).toBe(false);
+            expect(h.isDraining(8500)).toBe(false);
+            expect(h.isDraining(9500)).toBe(true);
+        }
     });
 
     it('hits restore health, capped at 1', () => {

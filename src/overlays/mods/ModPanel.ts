@@ -1,7 +1,8 @@
-import { Container, Graphics, type Text } from 'pixi.js';
+import { Container, Graphics, type FederatedPointerEvent, type Text } from 'pixi.js';
 import { tween } from '../../core/Tweener';
 import { lerpColor, scaleColor } from '../../core/math';
-import type { ModInfo } from '../../gameplay/mods';
+import { hasSettings, type ModInfo } from '../../gameplay/mods';
+import { icon } from '../../ui/icons';
 import { drawSheared, SHEAR, shearedHitArea } from '../../ui/ShearedButton';
 import { label, fitText } from '../../ui/text';
 import { ColorProvider } from '../../ui/theme';
@@ -32,12 +33,18 @@ export class ModPanel extends UIComponent {
     private readonly acronym: Text;
     private readonly title: Text;
     private readonly desc: Text;
+    /** Customised value beside the title (a custom rate's "1.30x"). */
+    private readonly extended: Text;
+    /** Customisable mods: opens the customisation panel (shown while selected). */
+    private readonly gear: Text | null = null;
     private readonly accent: number;
     private active = false;
     private incompatible = false;
     private switchW = SWITCH_IDLE;
     /** Called when the panel is clicked (the overlay toggles the mod). */
     onToggle: (() => void) | null = null;
+    /** Called when the gear is clicked (the overlay opens the customisation panel). */
+    onCustomise: (() => void) | null = null;
 
     constructor(readonly mod: ModInfo) {
         super();
@@ -46,13 +53,37 @@ export class ModPanel extends UIComponent {
         this.acronym.anchor.set(0.5);
         this.title = label(mod.name, { size: 16, weight: '700', color: 0xffffff });
         this.desc = label('', { size: 12, weight: '500', color: 0xffffff });
-        this.body.addChild(this.switchBg, this.mainBg, this.pill, this.acronym, this.title, this.desc);
+        this.extended = label('', { size: 13, weight: '700', color: 0xffffff });
+        this.body.addChild(this.switchBg, this.mainBg, this.pill, this.acronym, this.title, this.extended, this.desc);
+        if (hasSettings(mod.acronym)) {
+            const gear = (this.gear = icon('gear', 14, 0xffffff));
+            gear.anchor.set(0.5);
+            gear.alpha = 0;
+            gear.visible = false;
+            gear.eventMode = 'static';
+            gear.cursor = 'pointer';
+            gear.hitArea = { contains: (x: number, y: number) => Math.abs(x) <= 14 && Math.abs(y) <= 14 };
+            const stop = (e: FederatedPointerEvent) => e.stopPropagation();
+            gear.on('pointerdown', stop);
+            gear.on('pointertap', (e: FederatedPointerEvent) => {
+                e.stopPropagation();
+                if (this.active) this.onCustomise?.();
+            });
+            this.body.addChild(gear);
+        }
         this.addChild(this.body);
         this.tooltip = mod.description;
         // Sounds are the toggle sounds, played by the overlay.
         this.makeInteractive({ sounds: false });
         this.applyColors(0);
         this.resize(300, MOD_PANEL_HEIGHT);
+    }
+
+    /** lazer's ExtendedIconInformation beside the title ("" at the default configuration). */
+    setExtended(text: string): void {
+        if (this.extended.text === text) return;
+        this.extended.text = text;
+        this.drawMain();
     }
 
     /** Reflect selection + incompatibility with the current selection. */
@@ -64,6 +95,13 @@ export class ModPanel extends UIComponent {
         this.tooltip = incompatible ? `${this.mod.description}\nIncompatible with ${incompatibleWith}` : this.mod.description;
         if (active === this.active) return;
         this.active = active;
+        if (this.gear) {
+            const gear = this.gear;
+            gear.visible = true;
+            tween(gear, { alpha: active ? 1 : 0 }, { duration: 200 }).finished.then(() => {
+                if (!gear.destroyed && !this.active) gear.visible = false;
+            });
+        }
         this.applyColors(200);
         this.animateSwitch();
     }
@@ -77,7 +115,7 @@ export class ModPanel extends UIComponent {
         this.body.position.set(w / 2, h / 2);
         drawSheared(this.switchBg.clear(), 0, 0, w, h, RADIUS).fill(0xffffff);
         // Truncate for the expanded strip so the text fits in both states.
-        fitText(this.desc, w - this.textX(SWITCH_EXPANDED) - h * SHEAR - 10, this.mod.description);
+        fitText(this.desc, w - this.textX(SWITCH_EXPANDED) - h * SHEAR - 10 - (this.gear ? 26 : 0), this.mod.description);
         this.drawMain();
     }
 
@@ -97,7 +135,9 @@ export class ModPanel extends UIComponent {
         // Text lines step left with the lean.
         const x = this.textX(this.switchW);
         this.title.position.set(x + 2, 5);
+        this.extended.position.set(x + 2 + this.title.width + 8, 7);
         this.desc.position.set(x - 2, 25);
+        this.gear?.position.set(w - shear / 2 - 22, h / 2);
     }
 
     private animateSwitch(): void {
@@ -131,6 +171,8 @@ export class ModPanel extends UIComponent {
         set(this.pill, this.active ? scaleColor(this.accent, 0.3) : c.background6);
         set(this.acronym, this.active ? lerpColor(this.accent, 0xffffff, 0.3) : scaleColor(this.accent, 0.8));
         set(this.title, text);
+        set(this.extended, text);
+        if (this.gear) set(this.gear, text);
         set(this.desc, this.active ? c.background5 : c.content2);
     }
 

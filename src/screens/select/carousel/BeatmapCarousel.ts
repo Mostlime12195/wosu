@@ -3,8 +3,10 @@ import type { Game } from '../../../app/Game';
 import type { DifficultySummary } from '../../../beatmap/types';
 import { Signal } from '../../../core/Signal';
 import { damp } from '../../../core/math';
+import { delay, type Tween } from '../../../core/Tweener';
 import { ScrollContainer } from '../../../ui/ScrollContainer';
 import { UIComponent } from '../../../ui/UIComponent';
+import { gesture } from '../../../ui/UIContext';
 import type { FilterEntry } from '../filter';
 import { DIFF_HEIGHT, DiffPanel } from './DiffPanel';
 import { SET_HEIGHT, SetPanel } from './SetPanel';
@@ -20,6 +22,20 @@ const BASE_X = 30;
 const EXPAND_RATE = 55;
 /** How far the selected set (and its difficulties with it) slides left. */
 const SET_SLIDE = 24;
+/**
+ * osu-framework's ClickDragDistance: a right press that moves further
+ * than this before release is a drag (absolute scroll), not a click
+ * (context menu).
+ */
+const CLICK_DRAG_DISTANCE = 10;
+/** Touch hold that opens a panel's context menu (osu-framework's touch long-press → right click). */
+const LONG_PRESS_MS = 500;
+
+/** What a context menu was requested for: a set header (diff null) or one difficulty. */
+export interface CarouselMenuTarget {
+    entry: FilterEntry;
+    diff: DifficultySummary | null;
+}
 
 interface Expansion {
     key: string;
@@ -42,6 +58,8 @@ interface Expansion {
 export class BeatmapCarousel extends UIComponent {
     readonly selectionChanged = new Signal<[entry: FilterEntry, diff: DifficultySummary]>();
     readonly activated = new Signal<[entry: FilterEntry, diff: DifficultySummary]>();
+    /** Right click (or touch long-press) on a panel: open its context menu at (x, y) global. */
+    readonly menuRequested = new Signal<[target: CarouselMenuTarget, x: number, y: number]>();
     readonly scroll = new ScrollContainer();
     // Difficulties render beneath set headers so they slide out from under them.
     private readonly diffLayer = new Container();
@@ -73,6 +91,7 @@ export class BeatmapCarousel extends UIComponent {
         this.scroll.wheelStep = SET_STRIDE * 1.5;
         this.scroll.on('wheel', () => (this.follow = false));
         this.scroll.on('rightdown', this.onRightDown, this);
+        this.scroll.on('pointerdown', this.onTouchDown, this);
         this.eventMode = 'passive';
         this.onFrame(dt => this.update(dt));
     }
@@ -260,19 +279,90 @@ export class BeatmapCarousel extends UIComponent {
         this.scroll.scrollTo(this.scroll.scrollY + dir * this.visibleHeight * 0.8);
     }
 
-    /** lazer: holding the right button scrolls to the pointer's relative height. */
+    /**
+     * Right button: over a panel, a click opens its context menu while a
+     * drag (past CLICK_DRAG_DISTANCE) becomes lazer's absolute scroll;
+     * elsewhere the press scrolls to the pointer's relative height at once.
+     */
     private onRightDown(e: FederatedPointerEvent): void {
-        this.follow = false;
-        this.scrollToPointer(e);
-        this.scroll.on('globalpointermove', this.scrollToPointer, this);
+        const target = this.menuTargetAt(e);
+        const startX = e.global.x, startY = e.global.y;
+        let scrolling = !target;
+        if (scrolling) {
+            this.follow = false;
+            this.scrollToPointer(e);
+        }
+        const move = (ev: FederatedPointerEvent) => {
+            if (!scrolling) {
+                if (Math.hypot(ev.global.x - startX, ev.global.y - startY) < CLICK_DRAG_DISTANCE) return;
+                scrolling = true;
+                this.follow = false;
+            }
+            this.scrollToPointer(ev);
+        };
         // Only one of rightup/rightupoutside fires: drop both, or the other piles up per click.
-        const stop = () => {
-            this.scroll.off('globalpointermove', this.scrollToPointer, this);
+        const stop = (ev: FederatedPointerEvent) => {
+            this.scroll.off('globalpointermove', move);
             this.scroll.off('rightup', stop);
             this.scroll.off('rightupoutside', stop);
+            if (!scrolling && target) this.menuRequested.emit(target, ev.global.x, ev.global.y);
         };
+        this.scroll.on('globalpointermove', move);
         this.scroll.on('rightup', stop);
         this.scroll.on('rightupoutside', stop);
+    }
+
+    private longPress: Tween | null = null;
+
+    /** Touch: holding still on a panel opens its context menu. */
+    private onTouchDown(e: FederatedPointerEvent): void {
+        if (e.pointerType !== 'touch' || e.button > 0) return;
+        const target = this.menuTargetAt(e);
+        if (!target) return;
+        this.longPress?.cancel();
+        const startX = e.global.x, startY = e.global.y;
+        let fired = false;
+        const move = (ev: FederatedPointerEvent) => {
+            if (Math.hypot(ev.global.x - startX, ev.global.y - startY) >= CLICK_DRAG_DISTANCE) cancel();
+        };
+        const cancel = () => {
+            this.longPress?.cancel();
+            this.longPress = null;
+            this.scroll.off('globalpointermove', move);
+        };
+        const up = () => {
+            cancel();
+            this.scroll.off('pointerup', up);
+            this.scroll.off('pointerupoutside', up);
+            // The lift that ends a long-press must not also select the panel.
+            if (fired) setTimeout(() => (gesture.suppressClicks = false), 0);
+        };
+        this.scroll.on('globalpointermove', move);
+        this.scroll.on('pointerup', up);
+        this.scroll.on('pointerupoutside', up);
+        this.longPress = delay(LONG_PRESS_MS, () => {
+            this.longPress = null;
+            if (this.scroll.isDragging) return;
+            fired = true;
+            gesture.suppressClicks = true;
+            this.menuRequested.emit(target, startX, startY);
+        }, this);
+    }
+
+    /** The set/difficulty panel under a pointer event, captured now (panels are pooled). */
+    private menuTargetAt(e: FederatedPointerEvent): CarouselMenuTarget | null {
+        let c: Container | null = e.target as Container | null;
+        while (c && c !== this.scroll) {
+            if (c instanceof DiffPanel) return c.entry && c.diff ? { entry: c.entry, diff: c.diff } : null;
+            if (c instanceof SetPanel) return c.entry ? { entry: c.entry, diff: null } : null;
+            c = c.parent;
+        }
+        return null;
+    }
+
+    /** Whether the set is the expanded (selected) one. */
+    isExpanded(key: string): boolean {
+        return this.selectedEntry?.set.key === key;
     }
 
     private scrollToPointer(e: FederatedPointerEvent): void {

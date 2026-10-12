@@ -5,7 +5,7 @@ import { MusicTrack } from '../../audio/MusicTrack';
 import type { BeatmapData } from '../../beatmap/types';
 import { Bindable } from '../../core/Bindable';
 import { tween } from '../../core/Tweener';
-import { playbackRate, preservesPitch, sortedMods, type ModSet } from '../../gameplay/mods';
+import { audioPitch, playbackRate, preservesPitch, sortedMods, type ModSet } from '../../gameplay/mods';
 import type { Action } from '../../input/bindings';
 import { ModIconRow } from '../../overlays/mods/ModIcon';
 import { Checkbox } from '../../ui/Checkbox';
@@ -96,7 +96,7 @@ export class PlayerLoaderScreen extends Screen {
         for (const t of [this.title, this.artist, this.version, this.starText]) t.anchor.set(0.5, 0);
         this.spinner = new LoadingSpinner(16, 0xffffff, 4);
         this.buildLines(set.source, set.creator);
-        this.modRow.setMods(sortedMods(this.mods));
+        this.modRow.setMods(sortedMods(this.mods), this.mods.settings);
         this.meta.addChild(this.title, this.artist, this.thumb, this.thumbShade, this.spinner, this.version, this.starPill, this.starText, this.lines, this.modRow);
         this.content.addChild(this.meta);
         this.panel = new SettingsPanel(this);
@@ -180,7 +180,7 @@ export class PlayerLoaderScreen extends Screen {
             await track.fadeTo(0, 250);
             if (this.cancelled) return this.handBackTrack();
             track.pause();
-            await track.setRate(playbackRate(this.mods), preservesPitch(this.mods));
+            await track.setRate(playbackRate(this.mods), preservesPitch(this.mods), audioPitch(this.mods));
             if (this.cancelled) return this.handBackTrack();
             track.userOffsetMs = g.settings.audioOffset.value;
             this.disposer.add(g.settings.audioOffset.bind(v => {

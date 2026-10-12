@@ -112,6 +112,18 @@ describe('ScoreStore', () => {
         expect((await store.forBeatmap('bid:1')).map(r => r.score)).toEqual([900, 700]);
     });
 
+    it('records customised mod settings (only valid ones of its mods)', async () => {
+        const store = new ScoreStore(createMemoryAppDatabase(), { legacy: legacyWith([]) });
+        const saved = await store.add(record({
+            mods: ['DT', 'FL'],
+            modSettings: { DT: { speedChange: 1.3 }, FL: { sizeMultiplier: 1 }, HT: { speedChange: 0.6 } },
+        }));
+        expect(saved.modSettings).toEqual({ DT: { speedChange: 1.3 } });
+        expect((await store.forBeatmap('bid:1'))[0].modSettings).toEqual({ DT: { speedChange: 1.3 } });
+        const plain = await store.add(record({ mods: ['HD'] }));
+        expect(plain.modSettings).toBeUndefined();
+    });
+
     it('does not alias the caller record', async () => {
         const store = new ScoreStore(createMemoryAppDatabase(), { legacy: legacyWith([]) });
         const input = record({ mods: ['HD'] });

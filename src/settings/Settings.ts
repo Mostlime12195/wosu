@@ -2,6 +2,7 @@ import { Bindable, BindableNumber } from '../core/Bindable';
 import type { RendererPreference } from '../app/App';
 import { isModAcronym, sanitizeMods, sortedMods, type ModAcronym } from '../gameplay/mods';
 import type { ProviderId } from '../online/providers';
+import { DEFAULT_MECHANICS, type GameplayMechanics } from '../gameplay/scoring/mechanics';
 
 export type SongSort = 'title' | 'artist' | 'creator' | 'difficulty' | 'length' | 'bpm' | 'dateAdded' | 'lastPlayed';
 /** lazer's HUDVisibilityMode. */
@@ -13,6 +14,7 @@ export type KeyOverlayStyle = 'lazer' | 'stable';
 const ENUM_VALUES: Record<string, readonly string[]> = {
     hudVisibility: ['always', 'hideDuringGameplay', 'never'],
     keyOverlayStyle: ['lazer', 'stable'],
+    gameplayMechanics: ['lazer', 'stable'],
 };
 
 const STORAGE_KEY = 'webosu.settings.v2';
@@ -41,6 +43,8 @@ export class GameSettings {
     readonly snakingIn = new Bindable(true);
     readonly snakingOut = new Bindable(true);
     readonly kiaiFlash = new Bindable(false);
+    /** Note lock, slider, spinner and health rules: osu!lazer's (default) or osu!stable's. */
+    readonly gameplayMechanics = new Bindable<GameplayMechanics>(DEFAULT_MECHANICS);
 
     // HUD (lazer's HUD settings, plus per-element toggles)
     readonly hudVisibility = new Bindable<HudVisibility>('always');
@@ -102,6 +106,8 @@ export class GameSettings {
 
     // Session state worth remembering
     readonly selectedMods = new Bindable<readonly ModAcronym[]>([]);
+    /** Customised settings of the selected mods (sanitized by Game when applied). */
+    readonly modSettings = new Bindable<Readonly<Record<string, unknown>>>({});
     readonly playerName = new Bindable('Guest');
     readonly songSort = new Bindable<SongSort>('title');
     readonly lastBeatmap = new Bindable<string>('');
@@ -174,7 +180,7 @@ export class GameSettings {
 
     resetAll(): void {
         for (const [k, b] of this.registry) {
-            if (k === 'selectedMods' || k === 'lastBeatmap' || k === 'playerName' || k === 'bundledBeatmapsFetched' || k === 'bundledSeen') continue;
+            if (k === 'selectedMods' || k === 'modSettings' || k === 'lastBeatmap' || k === 'playerName' || k === 'bundledBeatmapsFetched' || k === 'bundledSeen') continue;
             b.setDefault();
         }
     }

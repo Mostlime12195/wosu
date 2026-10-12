@@ -21,7 +21,8 @@ export interface ScoreOptions {
  *    using the combo *before* the hit;
  *  - slider head/repeat/tail add 30, ticks 10, each also +1 combo; a
  *    missed head/tick/repeat breaks combo, a missed tail does not;
- *  - spinner spins add 100, bonus spins 1000.
+ *  - spinner spins add 100, bonus spins 1100 (stable's +1000 bonus on top
+ *    of the spin's 100, as lazer's OsuLegacyScoreSimulator reproduces).
  * Accuracy counts only main judgements.
  */
 export class ScoreProcessor {
@@ -85,9 +86,9 @@ export class ScoreProcessor {
         this.changed.emit();
     }
 
-    /** One full spinner rotation (bonus once the spinner is cleared). */
+    /** One scoring spinner rotation (bonus once the spinner is cleared). */
     applySpin(bonus: boolean): void {
-        this.score += bonus ? 1000 : 100;
+        this.score += bonus ? 1100 : 100;
         this.changed.emit();
     }
 
@@ -143,11 +144,11 @@ export function sliderResult(hitParts: number, totalParts: number): HitResult {
     return 'miss';
 }
 
-/** Spinner judgement from progress (rotations / required). */
+/** Spinner judgement from progress (rotations / required), lazer's DrawableSpinner thresholds. */
 export function spinnerResult(progress: number): HitResult {
     if (progress >= 1) return 'great';
-    if (progress >= 0.9) return 'ok';
-    if (progress >= 0.75) return 'meh';
+    if (progress > 0.9) return 'ok';
+    if (progress > 0.75) return 'meh';
     return 'miss';
 }
 

@@ -18,7 +18,7 @@ export class Checkbox extends UIComponent {
     private fillProgress = 0;
     private readonly fullLabel: string;
 
-    constructor(caption: string, private readonly bindable: Bindable<boolean>, private readonly accent = Colors.pink) {
+    constructor(caption: string, private readonly bindable: Bindable<boolean>, private readonly accent: number = Colors.pink) {
         super();
         this.fullLabel = caption;
         this.text = label(caption, { size: 15, weight: '500' });

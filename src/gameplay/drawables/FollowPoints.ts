@@ -1,6 +1,7 @@
-import { Container, type Sprite, type Texture } from 'pixi.js';
+import { Container, type Sprite } from 'pixi.js';
 import type { PlayableBeatmap } from '../../beatmap/types';
-import { clamp01, ease, sprite } from './context';
+import type { SkinTexture } from '../../skin/LegacySkin';
+import { clamp01, ease, frameAt, sprite } from './context';
 
 const SPACING = 32;
 
@@ -19,6 +20,12 @@ interface Point {
  * FollowPointConnection): each point slides into place as it fades in
  * ahead of the next object, and fades out as the cursor's path passes it.
  * All points are precomputed and drawn from a small sprite pool.
+ *
+ * An animated followpoint (followpoint-0, -1…) loops at the skin's
+ * AnimationFramerate (or all frames over a second), each point's
+ * animation starting when it starts fading in (lazer's FollowPoint is the
+ * animation's time reference). Skin follow points draw normally; wosu!'s
+ * default skin's are additive.
  */
 export class FollowPoints extends Container {
     private readonly points: Point[] = [];
@@ -26,7 +33,10 @@ export class FollowPoints extends Container {
     private first = 0;
     private readonly scaleBase: number;
 
-    constructor(beatmap: PlayableBeatmap, private readonly texture: Texture, preempt: number, private readonly fadeInTime: number, radius: number, scaleBase?: number) {
+    constructor(
+        beatmap: PlayableBeatmap, private readonly frames: SkinTexture[], private readonly frameLength: number, preempt: number,
+        private readonly fadeInTime: number, radius: number, scaleBase?: number, private readonly additive = true,
+    ) {
         super();
         this.eventMode = 'none';
         this.scaleBase = scaleBase ?? (radius / 120) * 0.9;
@@ -56,6 +66,7 @@ export class FollowPoints extends Container {
 
     update(time: number): void {
         const fade = this.fadeInTime;
+        const animated = this.frames.length > 1;
         // Points never come back once fully faded; advance the window start.
         while (this.first < this.points.length && time > this.points[this.first].fadeOut + fade) this.first++;
         let used = 0;
@@ -72,13 +83,17 @@ export class FollowPoints extends Container {
             s.rotation = p.rotation;
             s.scale.set(this.scaleBase * (1.5 - 0.5 * e));
             s.alpha = time < p.fadeOut ? k : 1 - clamp01((time - p.fadeOut) / fade);
+            if (animated) {
+                const f = frameAt(this.frames, time - p.fadeIn, this.frameLength, true);
+                if (s.texture !== f.texture) s.texture = f.texture;
+            }
         }
         for (let i = used; i < this.pool.length; i++) this.pool[i].visible = false;
     }
 
     private grow(): Sprite {
-        const s = sprite(this.texture);
-        s.blendMode = 'add';
+        const s = sprite(this.frames[0].texture);
+        if (this.additive) s.blendMode = 'add';
         this.pool.push(s);
         this.addChild(s);
         return s;

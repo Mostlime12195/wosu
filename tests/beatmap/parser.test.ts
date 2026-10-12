@@ -101,6 +101,19 @@ describe('parseOsu', () => {
         expect(bad.pixelLength).toBe(0);
     });
 
+    it('drops sliders longer than lazer will parse (Aspire decoration sliders)', () => {
+        const text = MAP_BASIC.replace('[HitObjects]\n', '[HitObjects]\n1,1,600,2,0,L|5:5,1,833737.5\n1,1,700,2,0,L|5:5,1,131072\n');
+        const map = parseOsu(text);
+        expect(map.hitObjects.filter(h => h.kind === 'slider').map(h => h.pixelLength)).toEqual([131072, 100]);
+    });
+
+    it('keeps a NaN inherited timing point as "no ticks" with SV 1', () => {
+        const text = MAP_BASIC.replace('0,500,4,1,0,100,1,0', '0,500,4,1,0,100,1,0\n500,NaN,4,1,0,100,0,0\n600,NaN,4,1,0,100,1,0');
+        const tp = parseOsu(text).timingPoints;
+        expect(tp).toHaveLength(2);
+        expect(tp[1]).toMatchObject({ time: 500, beatLength: -100, uninherited: false, generateTicks: false });
+    });
+
     it('fixes spinner end before start and ignores mania holds', () => {
         const text = MAP_BASIC.replace('256,192,3000,12,0,3500', '256,192,3000,12,0,2000') + '64,192,4000,128,0,4500:0:0:0:0:\n';
         const map = parseOsu(text);

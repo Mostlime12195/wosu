@@ -89,7 +89,7 @@ export class FooterModsButton extends FooterButton {
 
     setMods(mods: ModSet): void {
         const list = sortedMods(mods);
-        this.icons.setMods(list);
+        this.icons.setMods(list, mods.settings);
         const m = scoreMultiplier(mods);
         this.multiplier.visible = list.length > 0;
         this.icons.visible = list.length > 0;

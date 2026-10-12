@@ -3,7 +3,7 @@ import type { PlayableBeatmap } from '../../beatmap/types';
 import { SliderResources } from '../../graphics/slider/SliderRenderer';
 import type { SkinChain } from '../../skin/SkinChain';
 import type { GameplayRules } from '../GameplayRules';
-import { legacyScale, makeKiaiFlash, type DrawableContext } from './context';
+import { OBJECT_SIZE, cappedFrames, fromDefaultSkin, legacyScale, makeKiaiFlash, type DrawableContext } from './context';
 import { DrawableHitCircle, type Drawable } from './DrawableHitCircle';
 import { DrawableSlider } from './DrawableSlider';
 import { DrawableSpinner } from './DrawableSpinner';
@@ -46,6 +46,7 @@ export class Playfield extends Container {
     /** Per-object fail state: random spin and the transform it started from. */
     private readonly failState = new Map<Drawable, { spin: number; x: number; y: number }>();
     private next = 0;
+    private readonly offNested: () => void;
 
     constructor(private readonly o: PlayfieldOptions) {
         super();
@@ -72,12 +73,25 @@ export class Playfield extends Container {
         };
         const ctx = this.ctx;
         ctx.kiaiFlash = makeKiaiFlash(b, () => ctx.kiaiFlashes);
-        const fp = o.skin.frames('followpoint')[0] ?? null;
+        // lazer's legacy follow point: an animation (followpoint-0…) at the skin's frame rate,
+        // cropped to a circle diameter by a radius.
+        const fpFrames = cappedFrames(o.skin.frames('followpoint'), OBJECT_SIZE, OBJECT_SIZE / 2);
+        const fp = fpFrames[0] ?? null;
         this.followPoints = o.hideFollowPoints || !fp ? null
-            : new FollowPoints(b, fp.texture, d.preempt, d.fadeIn, d.circleRadius, legacyScale(d.circleRadius, fp));
+            : new FollowPoints(b, fpFrames, o.skin.frameDuration(fpFrames.length), d.preempt, d.fadeIn, d.circleRadius,
+                legacyScale(d.circleRadius, fp), fromDefaultSkin(o.skin, 'followpoint', true));
         this.judgements = new Judgements(o.skin, d.circleRadius);
         if (this.followPoints) this.addChild(this.followPoints);
-        this.addChild(this.objectLayer, this.approachLayer, this.judgements);
+        // New-style skin judgements (and their particles) sit under the objects, like lazer's.
+        this.addChild(this.judgements.below, this.objectLayer, this.approachLayer, this.judgements);
+        // Slider heads, ticks and repeats show slider point judgements when the skin has them.
+        this.offNested = o.rules.nestedJudged.add((index, ev, hit) => {
+            if (ev.kind === 'tail') return;
+            const s = o.rules.states[index];
+            const time = ev.kind !== 'head' ? ev.time
+                : hit && s.kind === 'slider' ? s.headAt : ev.time + o.rules.windows.w50;
+            this.judgements.addNested(hit, ev.x, ev.y, time);
+        });
     }
 
     /** Device pixels per osu! pixel, for slider body texture resolution. */
@@ -164,6 +178,7 @@ export class Playfield extends Container {
         this.objectLayer.alpha = a;
         this.approachLayer.alpha = a;
         this.judgements.alpha = a;
+        this.judgements.below.alpha = a;
         if (this.followPoints) this.followPoints.alpha = a;
     }
 
@@ -179,6 +194,7 @@ export class Playfield extends Container {
     }
 
     override destroy(): void {
+        this.offNested();
         for (const d of this.active) d.destroy();
         this.active.length = 0;
         super.destroy({ children: true });

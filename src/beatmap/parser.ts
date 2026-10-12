@@ -270,16 +270,23 @@ function parseTimingPoint(row: string): TimingPoint | null {
     const p = row.split(',');
     if (p.length < 2) return null;
     const time = Number(p[0]);
-    const beatLength = Number(p[1]);
-    if (!Number.isFinite(time) || !Number.isFinite(beatLength)) return null;
+    let beatLength = Number(p[1]);
     // Column 7 decides; old two-column maps are always uninherited. A
     // negative beat length can only mean an inherited (SV) point.
     let uninherited = p.length >= 7 ? p[6].trim() !== '0' : true;
+    // lazer: a NaN inherited point keeps SV 1 but turns slider ticks off
+    // (a mapping trick); a NaN red line is rejected.
+    const noTicks = Number.isNaN(beatLength) && !uninherited;
+    if (noTicks) beatLength = -100;
+    if (!Number.isFinite(time) || !Number.isFinite(beatLength)) return null;
     if (beatLength < 0) uninherited = false;
     const effects = Math.trunc(num(p[7], 0));
+    const clamped = uninherited ? clamp(beatLength, 6, 60000) : beatLength;
     return {
         time,
-        beatLength: uninherited ? clamp(beatLength, 6, 60000) : beatLength,
+        beatLength: clamped,
+        // Aspire maps use e.g. 1E-298 for instant sliders: stable takes it as is.
+        ...(clamped !== beatLength && beatLength > 0 ? { rawBeatLength: beatLength } : {}),
         meter: Math.max(1, Math.trunc(num(p[2], 4)) || 4),
         sampleSet: toSampleSet(num(p[3], 0)),
         sampleIndex: Math.trunc(num(p[4], 0)),
@@ -287,6 +294,7 @@ function parseTimingPoint(row: string): TimingPoint | null {
         uninherited,
         kiai: (effects & 1) !== 0,
         omitFirstBarLine: (effects & 8) !== 0,
+        ...(noTicks ? { generateTicks: false } : {}),
     };
 }
 
@@ -360,6 +368,12 @@ function parseHitObject(row: string): HitObjectData | null {
         // Absurd repeat counts freeze event generation; stable caps too.
         slides = Math.min(slides, 9000);
         let pixelLength = num(p[7], 0);
+        if (pixelLength > MAX_COORDINATE) {
+            // lazer's length parse limit: the line fails and the object is
+            // dropped (Aspire maps use such sliders as instant decorations).
+            console.warn('[parse] dropping slider with out-of-range length:', row.slice(0, 80));
+            return null;
+        }
         if (!(pixelLength >= 0)) {
             console.warn('[parse] clamping bad slider length:', row);
             pixelLength = 0;

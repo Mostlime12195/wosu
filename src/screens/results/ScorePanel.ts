@@ -2,7 +2,7 @@ import { BitmapText, Container, Graphics, Sprite, type Text } from 'pixi.js';
 import type { Game, Selection } from '../../app/Game';
 import { formatNumber } from '../../core/math';
 import type { ScoreResult } from '../../gameplay/ScoreResult';
-import { sortedMods, sanitizeMods } from '../../gameplay/mods';
+import { extendedModInfo, sortedMods, sanitizeMods } from '../../gameplay/mods';
 import { textureFromBlob, textureFromUrl } from '../../graphics/textures';
 import { coverUrl } from '../../online/providers';
 import { icon } from '../../ui/icons';
@@ -135,7 +135,7 @@ export class ScorePanel extends UIComponent {
             px = w + 8;
         }
         for (const m of mods) {
-            const pill = new ModPill(m);
+            const pill = new ModPill(m, extendedModInfo(m, r.modSettings));
             pill.x = px;
             pills.addChild(pill);
             px += pill.w + 4;

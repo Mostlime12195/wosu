@@ -64,7 +64,7 @@ class ScoreRow extends UIComponent {
         this.score.text = formatNumber(r.score);
         this.stats.text = `${(r.accuracy * 100).toFixed(2)}%  ·  ${formatNumber(r.maxCombo)}x${r.passed ? '' : '  ·  failed'}`;
         this.date.text = r.date ? relativeDate(r.date) : '';
-        this.mods.setMods(r.mods);
+        this.mods.setMods(r.mods, r.modSettings);
         this.relayout();
     }
 

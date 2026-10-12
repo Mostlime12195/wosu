@@ -1,3 +1,4 @@
+import { collectionItemKey } from '../../beatmap/collections';
 import type { LibrarySet } from '../../beatmap/Library';
 import type { DifficultySummary } from '../../beatmap/types';
 import type { SongSort } from '../../settings/Settings';
@@ -23,6 +24,11 @@ export interface NumericFilter {
 export interface FilterCriteria {
     terms: string[];
     numeric: NumericFilter[];
+    /**
+     * lazer's collection filter: only difficulties whose
+     * `collectionItemKey` is in this set (absent = all beatmaps).
+     */
+    collection?: ReadonlySet<string> | null;
 }
 
 export interface FilterEntry {
@@ -122,6 +128,11 @@ export function filterSets(sets: readonly LibrarySet[], c: FilterCriteria): Filt
                 const v = numericValue(d, f.key);
                 return v !== null && compare(v, f.op, f.value, f.key);
             }));
+            if (!diffs.length) continue;
+        }
+        const members = c.collection;
+        if (members) {
+            diffs = diffs.filter(d => members.has(collectionItemKey(set, d)));
             if (!diffs.length) continue;
         }
         out.push({ set, diffs });

@@ -14,7 +14,7 @@ import { SampleBank } from '../audio/SampleBank';
 import { UISounds } from '../audio/UISounds';
 import { BeatmapLibrary, type LibrarySet } from '../beatmap/Library';
 import type { DifficultySummary } from '../beatmap/types';
-import { NO_MODS, sanitizeMods, sortedMods, type ModSet } from '../gameplay/mods';
+import { NO_MODS, modSettingsOf, sanitizeMods, sortedMods, type ModSet } from '../gameplay/mods';
 import { textureFromBlob, TextureCache, textureFromUrl } from '../graphics/textures';
 import { InputManager, KeyPriority } from '../input/InputManager';
 import type { Action } from '../input/bindings';
@@ -326,8 +326,11 @@ export class Game {
             this.settings.restartRequired.value = v !== this.app.bootPreference;
         });
         s.antialias.bind(() => (this.settings.restartRequired.value = true));
-        this.mods.value = sanitizeMods(s.selectedMods.value);
-        this.mods.bind(m => (s.selectedMods.value = sortedMods(m)));
+        this.mods.value = sanitizeMods(s.selectedMods.value, s.modSettings.value);
+        this.mods.bind(m => {
+            s.selectedMods.value = sortedMods(m);
+            s.modSettings.value = modSettingsOf(m);
+        });
         this.input.lastPointerKind.bind(() => this.updateCursorVisibility());
         this.input.pointerMoved.once(() => this.updateCursorVisibility());
         this.library.changed.add(() => this.onLibraryChanged());

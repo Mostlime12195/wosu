@@ -107,6 +107,21 @@ export class BeatmapListingOverlay extends Overlay {
         this.show();
     }
 
+    /**
+     * lazer's FetchAndShowBeatmapSet: open the listing on one set's
+     * details (song select's context menu "Details").
+     */
+    async showSet(sid: number): Promise<void> {
+        this.search(String(sid));
+        let set: OnlineSet | null = null;
+        try {
+            set = await this.game.api.setInfo(sid);
+        } catch {
+            /* offline: show what the library knows */
+        }
+        if (this.isOpen) this.details.show(set ?? this.fallbackSet(sid));
+    }
+
     // ------------------------------------------------------------------
     // Query
     // ------------------------------------------------------------------

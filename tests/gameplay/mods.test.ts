@@ -45,7 +45,8 @@ describe('mods', () => {
     it('formats in canonical order and multiplies score', () => {
         const m = sanitizeMods(['DT', 'HR', 'HD']);
         expect(modsString(m)).toBe('HRDTHD');
-        expect(scoreMultiplier(m)).toBeCloseTo(1.06 * 1.12 * 1.06);
+        // lazer's ScoreV1 calculator: DT at 1.5x is 1.10 (see rateAdjustMultiplier).
+        expect(scoreMultiplier(m)).toBeCloseTo(1.06 * 1.1 * 1.06);
         expect(modsString(parseLegacyModString('EZ+HD'), '+')).toBe('EZ+HD');
         expect(parseLegacyModString('').size).toBe(0);
     });

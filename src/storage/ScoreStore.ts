@@ -5,7 +5,7 @@
  * scores are tiny, and song select queries them on every selection.
  */
 import { Signal } from '../core/Signal';
-import { parseLegacyModString, sortedMods, type ModAcronym } from '../gameplay/mods';
+import { modSettingsOf, parseLegacyModString, sortedMods, withSettings, type ModAcronym, type ModSettingsMap } from '../gameplay/mods';
 import { openAppDatabase, type AppDatabase } from './idb';
 import { migrateOnce, readLegacyData, type LegacyHistoryEntry, type LegacySource } from './legacy';
 
@@ -24,6 +24,8 @@ export interface ScoreRecord {
     version: string;
     creator: string;
     mods: ModAcronym[];
+    /** Customised mod settings the score was set with (lazer stores them with the mods). */
+    modSettings?: ModSettingsMap;
     score: number;
     accuracy: number; // 0..1
     maxCombo: number;
@@ -154,6 +156,10 @@ export class ScoreStore {
         await this.init();
         const rec: ScoreRecord = { ...record, mods: [...record.mods] };
         delete rec.id;
+        // Only valid, non-default settings of the score's own mods are kept.
+        const settings = record.modSettings ? modSettingsOf(withSettings(record.mods, record.modSettings)) : {};
+        if (Object.keys(settings).length) rec.modSettings = settings;
+        else delete rec.modSettings;
         try {
             rec.id = await this.db!.scores.put(rec);
         } catch (e) {

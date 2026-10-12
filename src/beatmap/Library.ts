@@ -35,6 +35,11 @@ export interface LibrarySet {
     addedAt: number;
     lastPlayedAt: number | null;
     sizeBytes: number;
+    /**
+     * Difficulties the player deleted from the set (lazer's "hide"): the
+     * .osz keeps them, so they can be restored. Absent = none.
+     */
+    hidden?: DifficultySummary[];
 }
 
 export interface ImportOptions {
@@ -241,10 +246,11 @@ export class BeatmapLibrary {
         const key = onlineSetId ? `osu-${onlineSetId}` : `local-${await contentHash(texts)}`;
         const previous = this.byKey.get(key);
 
-        const difficulties = std.map(p => {
+        const previousDiffs = previous ? [...previous.difficulties, ...(previous.hidden ?? [])] : [];
+        const allDifficulties = std.map(p => {
             const summary = summarizeDifficulty(p.data, p.file);
             // Keep official star ratings learned earlier (online lookup) on re-import.
-            const known = previous?.difficulties.find(d =>
+            const known = previousDiffs.find(d =>
                 (summary.beatmapId > 0 && d.beatmapId === summary.beatmapId) || d.file === summary.file);
             if (known && known.stars !== null && (summary.stars === null || known.starSource === 'online')) {
                 summary.stars = known.stars;
@@ -252,6 +258,12 @@ export class BeatmapLibrary {
             }
             return summary;
         }).sort(compareDifficulties);
+        // Difficulties deleted from this set stay deleted on re-import
+        // (unless that would leave nothing to play).
+        const hiddenFiles = new Set((previous?.hidden ?? []).map(d => d.file));
+        let hidden = allDifficulties.filter(d => hiddenFiles.has(d.file));
+        if (hidden.length === allDifficulties.length) hidden = [];
+        const difficulties = hidden.length ? allDifficulties.filter(d => !hidden.includes(d)) : allDifficulties;
 
         const backgroundFile = std.map(p => p.data.events.backgroundFile).find((f): f is string => !!f) ?? null;
         const hasVideo = std.some(p => {
@@ -277,6 +289,7 @@ export class BeatmapLibrary {
             addedAt: previous?.addedAt ?? Date.now(),
             lastPlayedAt: previous?.lastPlayedAt ?? null,
             sizeBytes: data.size,
+            ...(hidden.length ? { hidden } : {}),
         };
 
         let thumbnail: Blob | null = null;
@@ -392,6 +405,50 @@ export class BeatmapLibrary {
             this.changed.emit();
         }
         await Promise.all([db.sets.delete(key), db.blobs.delete(key), db.thumbs.delete(key)]);
+    }
+
+    /** lazer's CanHide: a set always keeps at least one playable difficulty. */
+    canDeleteDifficulty(key: string): boolean {
+        return (this.byKey.get(key)?.difficulties.length ?? 0) > 1;
+    }
+
+    /**
+     * Delete one difficulty from a set (lazer's "hide"): it disappears
+     * from the library but stays in the stored .osz, so
+     * `restoreDifficulties` can bring it back. The set object is replaced
+     * (like a re-import) so caches keyed by it refresh.
+     */
+    async deleteDifficulty(key: string, file: string): Promise<boolean> {
+        await this.init();
+        const set = this.byKey.get(key);
+        if (!set || !this.canDeleteDifficulty(key)) return false;
+        const diff = set.difficulties.find(d => d.file === file);
+        if (!diff) return false;
+        const next: LibrarySet = {
+            ...set,
+            difficulties: set.difficulties.filter(d => d !== diff),
+            hidden: [...(set.hidden ?? []), diff],
+        };
+        this.byKey.set(key, next);
+        this.resort();
+        this.changed.emit();
+        await this.save(next);
+        return true;
+    }
+
+    /** Bring back every deleted difficulty of a set (lazer's "Restore all hidden"). */
+    async restoreDifficulties(key: string): Promise<number> {
+        await this.init();
+        const set = this.byKey.get(key);
+        const hidden = set?.hidden ?? [];
+        if (!set || !hidden.length) return 0;
+        const next: LibrarySet = { ...set, difficulties: [...set.difficulties, ...hidden].sort(compareDifficulties) };
+        delete next.hidden;
+        this.byKey.set(key, next);
+        this.resort();
+        this.changed.emit();
+        await this.save(next);
+        return hidden.length;
     }
 
     markPlayed(key: string): void {

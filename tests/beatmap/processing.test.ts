@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildControlPointTimeline } from '../../src/beatmap/controlPoints';
 import { parseOsu } from '../../src/beatmap/parser';
 import {
+    playableOptions,
     buildPlayableBeatmap,
     computeCombos,
     DEFAULT_COMBO_COLORS,
@@ -91,6 +92,64 @@ describe('slider events', () => {
         // duration still uses SV in both
         expect(v14.duration).toBeCloseTo(1000);
         expect(v7.duration).toBeCloseTo(1000);
+    });
+});
+
+describe('slider events: lazer vs legacy tail', () => {
+    it('lazer puts the tail at the true end; legacy at max(end − 36, middle)', () => {
+        const legacy = generateSliderEvents(1000, 1500, 0.2, 100, 300, 2, 'legacy');
+        const lazer = generateSliderEvents(1000, 1500, 0.2, 100, 300, 2, 'lazer');
+        expect(legacy[legacy.length - 1].time).toBeCloseTo(3964);
+        expect(lazer[lazer.length - 1].time).toBeCloseTo(4000);
+        expect(lazer.map(e => e.kind)).toEqual(legacy.map(e => e.kind));
+        // Short sliders: the legacy tick never goes before the middle.
+        expect(generateSliderEvents(0, 50, 2, 100, 100, 1, 'legacy')[1].time).toBe(25);
+        expect(generateSliderEvents(0, 50, 2, 100, 100, 1, 'lazer')[1].time).toBe(50);
+    });
+
+    it('buildPlayableBeatmap builds either tail', () => {
+        const data = parseOsu(makeMap({ objects: ['0,0,1000,2,0,L|300:0,1,300'] }));
+        const tail = (mode: 'legacy' | 'lazer') => {
+            const s = buildPlayableBeatmap(data, NO_MODS, { sliderTail: mode }).hitObjects[0] as PlayableSlider;
+            return s.events[s.events.length - 1].time - s.endTime;
+        };
+        expect(tail('legacy')).toBeCloseTo(-36);
+        expect(tail('lazer')).toBeCloseTo(0);
+        // Default (difficulty calculation) stays legacy.
+        const d = buildPlayableBeatmap(data, NO_MODS).hitObjects[0] as PlayableSlider;
+        expect(d.events[d.events.length - 1].time).toBeCloseTo(d.endTime - 36);
+    });
+
+    it('zero-length sliders lose their repeats (lazer ConvertHitObjectParser)', () => {
+        const data = parseOsu(makeMap({ objects: ['100,100,1000,2,0,L|100:100,4,0,2|0|0|0|8'] }));
+        const s = buildPlayableBeatmap(data, NO_MODS).hitObjects[0] as PlayableSlider;
+        expect(s.slides).toBe(1);
+        expect(s.events.map(e => e.kind)).toEqual(['head', 'tail']);
+        expect(s.edgeSounds).toEqual([2, 8]);
+    });
+
+    it('stable times sliders with the unclamped beat length (Aspire "instant" sliders)', () => {
+        const timing = ['0,500,4,1,0,100,1,0', '1000,1E-298,4,1,0,100,1,0', '1001,500,4,1,0,100,1,0'];
+        const data = parseOsu(makeMap({ objects: ['0,0,1000,2,0,L|3000:0,1,3000'], timing }));
+        const lazer = buildPlayableBeatmap(data, NO_MODS, playableOptions('lazer')).hitObjects[0] as PlayableSlider;
+        const stable = buildPlayableBeatmap(data, NO_MODS, playableOptions('stable')).hitObjects[0] as PlayableSlider;
+        // lazer clamps the beat length to 6 ms: 3000 px at 16.7 px/ms with a tick every 100 px.
+        expect(lazer.duration).toBeCloseTo(180);
+        expect(lazer.events.filter(e => e.kind === 'tick').length).toBeGreaterThan(20);
+        // stable: effectively instant, head and tail only.
+        expect(stable.duration).toBeLessThan(1e-6);
+        expect(stable.events.map(e => e.kind)).toEqual(['head', 'tail']);
+    });
+
+    it('a NaN inherited point turns slider ticks off until the next red line', () => {
+        const timing = ['0,500,4,1,0,100,1,0', '900,NaN,4,1,0,100,0,0', '3000,500,4,1,0,100,1,0'];
+        const objects = ['0,0,1000,2,0,L|400:0,1,400', '0,0,3500,2,0,L|400:0,1,400'];
+        const pb = buildPlayableBeatmap(parseOsu(makeMap({ objects, timing })), NO_MODS);
+        const [a, b] = pb.hitObjects as PlayableSlider[];
+        expect(a.events.filter(e => e.kind === 'tick')).toHaveLength(0);
+        // SV stays 1 under the NaN point.
+        expect(a.duration).toBeCloseTo(2000);
+        expect(b.events.filter(e => e.kind === 'tick')).toHaveLength(3);
     });
 });
 

@@ -3,7 +3,7 @@ import type { Game } from '../../app/Game';
 import type { LibrarySet } from '../../beatmap/Library';
 import type { DifficultySummary } from '../../beatmap/types';
 import { tween } from '../../core/Tweener';
-import { adjustDifficulty, playbackRate, type ModSet } from '../../gameplay/mods';
+import { adjustDifficulty, modsKey, playbackRate, type ModSet } from '../../gameplay/mods';
 import { icon, type IconName } from '../../ui/icons';
 import { label, fitText } from '../../ui/text';
 import { Colors, starColor, starTextColor } from '../../ui/theme';
@@ -145,7 +145,7 @@ export class BeatmapInfoWedge extends UIComponent {
     /** Recompute the mod-adjusted rating when the beatmap or rating mods change. */
     private updateStars(set: LibrarySet, d: DifficultySummary): void {
         const relevant = ratingMods(this.mods);
-        const key = relevant ? `${set.key}|${d.file}|${d.stars}|${[...relevant].sort().join('')}` : '';
+        const key = relevant ? `${set.key}|${d.file}|${d.stars}|${modsKey(relevant)}` : '';
         if (key === this.starsKey) return;
         this.starsKey = key;
         this.shownStars = null;

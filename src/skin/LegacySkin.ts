@@ -44,6 +44,7 @@ const ELEMENTS = [
     'sliderb', 'sliderb-nd', 'sliderb-spec', 'sliderfollowcircle', 'sliderscorepoint', 'reversearrow', 'followpoint',
     // judgements
     'hit0', 'hit50', 'hit100', 'hit300', 'hit100k', 'hit300k', 'hit300g',
+    'particle50', 'particle100', 'particle300', 'slidertickmiss', 'sliderpoint30',
     // spinners (new and old style)
     'spinner-glow', 'spinner-bottom', 'spinner-top', 'spinner-middle', 'spinner-middle2',
     'spinner-background', 'spinner-circle', 'spinner-metre', 'spinner-approachcircle',

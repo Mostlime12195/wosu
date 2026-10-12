@@ -1,14 +1,14 @@
-import { Container, Graphics, RenderTexture, Sprite } from 'pixi.js';
+import { Container, Graphics, RenderTexture } from 'pixi.js';
 import { Screen } from '../../app/Screen';
 import type { Game, Selection } from '../../app/Game';
 import type { MusicTrack } from '../../audio/MusicTrack';
 import { calculateDifficulty } from '../../beatmap/difficulty';
-import { buildPlayableBeatmap } from '../../beatmap/processing';
+import { buildPlayableBeatmap, playableOptions } from '../../beatmap/processing';
 import type { Storyboard } from '../../beatmap/storyboard';
 import type { LegacySkin } from '../../skin/LegacySkin';
 import type { SkinChain } from '../../skin/SkinChain';
 import type { BeatmapData, PlayableBeatmap, PlayableSlider } from '../../beatmap/types';
-import { clamp01, damp } from '../../core/math';
+import { clamp01 } from '../../core/math';
 import { tween, tweener } from '../../core/Tweener';
 import { comboColor } from '../../gameplay/drawables/context';
 import { PLAYFIELD_H, PLAYFIELD_W, Playfield } from '../../gameplay/drawables/Playfield';
@@ -20,7 +20,8 @@ import { HitsoundPlayer } from '../../gameplay/HitsoundPlayer';
 import { HUDOverlay } from '../../gameplay/hud/HUDOverlay';
 import { AutoPlayer } from '../../gameplay/input/AutoPlayer';
 import { GameplayInput, type GameplayButton } from '../../gameplay/input/GameplayInput';
-import { NO_MODS, inputMode, scoreMultiplier, sortedMods, type InputMode, type ModSet } from '../../gameplay/mods';
+import { NO_MODS, extraLives, flashlightSettings, inputMode, modSettingsOf, restartOnFail, scoreMultiplier, sortedMods, type InputMode, type ModSet } from '../../gameplay/mods';
+import { Flashlight } from '../../gameplay/Flashlight';
 import type { ScoreResult } from '../../gameplay/ScoreResult';
 import { HealthProcessor } from '../../gameplay/scoring/HealthProcessor';
 import { difficultyMultiplier, ScoreProcessor } from '../../gameplay/scoring/ScoreProcessor';
@@ -96,9 +97,13 @@ export class PlayerScreen extends Screen {
     /** Everything the fail animation shrinks, tilts and greys (lazer's FailAnimationContainer.Content). */
     private readonly failContent = new Container();
     private readonly failBacking = new Graphics();
-    private readonly flashlight = new Container();
-    private flashlightHole!: Sprite;
-    private readonly flashlightFill = new Graphics();
+    /** Holds the Flashlight mod's overlay (above the playfield, below the HUD). */
+    private readonly flashlightLayer = new Container();
+    private flashlight: Flashlight | null = null;
+    /** Song time the flashlight last advanced to. */
+    private flashlightTime = NaN;
+    /** SD / PF "Restart on fail" tripped: retry at the end of this frame. */
+    private restartPending = false;
     private readonly failFlash = new Graphics();
     private readonly retryFade = new Graphics();
     private menu!: GameplayMenu;
@@ -195,7 +200,8 @@ export class PlayerScreen extends Screen {
             sliderTrackOverride: chain.config('sliderTrackOverride') ?? null,
             sliderBorder: chain.config('sliderBorder') ?? null,
         };
-        const beatmap = (this.beatmap = buildPlayableBeatmap(data, mods));
+        const mechanics = g.settings.gameplayMechanics.value;
+        const beatmap = (this.beatmap = buildPlayableBeatmap(data, mods, playableOptions(mechanics)));
         const d = o.data.difficulty;
         const objectCount = beatmap.hitObjects.length;
         const breakTime = beatmap.breaks.reduce((t, b) => t + Math.max(0, b.endTime - b.startTime), 0);
@@ -210,10 +216,13 @@ export class PlayerScreen extends Screen {
             breaks: beatmap.breaks,
             drainStart: beatmap.startTime,
             drainEnd: beatmap.endTime,
-            lives: mods.has('EZ') ? 2 : 0,
+            lives: extraLives(mods),
             noFail,
+            mechanics,
+            objects: beatmap.hitObjects,
+            od: beatmap.difficulty.od,
         });
-        this.rules = new GameplayRules(beatmap, mods, this.score, this.health);
+        this.rules = new GameplayRules(beatmap, mods, this.score, this.health, mechanics);
         if (this.mode === 'autoplay' || this.mode === 'autopilot') this.auto = new AutoPlayer(beatmap);
 
         const first = beatmap.hitObjects[0];
@@ -247,11 +256,8 @@ export class PlayerScreen extends Screen {
         this.fieldWrap.addChild(this.playfield);
 
         if (mods.has('FL')) {
-            this.flashlightHole = new Sprite(g.skin.tex('flashlight'));
-            this.flashlightHole.anchor.set(0.5);
-            this.flashlight.addChild(this.flashlightHole, this.flashlightFill);
-        } else {
-            this.flashlight.visible = false;
+            this.flashlight = new Flashlight(flashlightSettings(mods));
+            this.flashlightLayer.addChild(this.flashlight);
         }
 
         this.hud = new HUDOverlay(chain, beatmap, g.settings, { canFail: !noFail });
@@ -265,7 +271,7 @@ export class PlayerScreen extends Screen {
         this.failFlash.alpha = 0;
         this.retryFade.alpha = 0;
         this.failBacking.visible = false;
-        this.failContent.addChild(this.failBacking, this.fieldWrap, this.flashlight, this.hud);
+        this.failContent.addChild(this.failBacking, this.fieldWrap, this.flashlightLayer, this.hud);
         this.failFlash.blendMode = 'add';
         this.root.addChild(this.failContent, this.failFlash, this.skip, this.holdButton, this.resume, this.menu, this.retryFade);
         this.addChild(this.root);
@@ -444,6 +450,7 @@ export class PlayerScreen extends Screen {
         this.failFlash.clear().rect(0, 0, w, h).fill(0xff0000);
         this.failBacking.clear().rect(0, 0, w, h).fill(0x000000);
         this.retryFade.clear().rect(0, 0, w, h).fill(0x000000);
+        this.flashlight?.resize(w, h);
     }
 
     private toPlayfield(x: number, y: number): { x: number; y: number } {
@@ -548,6 +555,12 @@ export class PlayerScreen extends Screen {
         if (this.holdButton.visible) this.holdButton.update(dt, this.input, this.game.input.lastPointerKind.value === 'touch');
         this.updateFlashlight(cursor, time);
         this.resume.update(dt, this._w, this._h, this.input.x, this.input.y);
+        if (this.restartPending) {
+            // Outside the judgement loop that raised the fail.
+            this.restartPending = false;
+            this.retry();
+            return;
+        }
         if (this.phase === 'failed') this.updateFail(dt);
         this.updateQuickRetry(dt);
     }
@@ -710,27 +723,39 @@ export class PlayerScreen extends Screen {
         this.clock.seek(this.skipTarget);
     }
 
+    /**
+     * The Flashlight mod (see gameplay/Flashlight): it runs on song time like
+     * lazer's (frozen while paused, faster under DT). lazer's IsBreakTime also
+     * covers the intro until 2 s before the first object (its shrink delayed by
+     * BREAK_FADE_DURATION, as when leaving a break) and everything after the
+     * last judgement.
+     */
     private updateFlashlight(cursor: { x: number; y: number }, time: number): void {
-        if (!this.flashlight.visible) return;
-        const combo = this.score.combo;
-        const size = combo >= 200 ? 0.625 : combo >= 100 ? 0.8125 : 1;
-        const inBreak = this.hud.isBreak(time);
-        const radius = 120 * size * this.view.scale * (inBreak ? 2.5 : 1);
-        const sp = this.toScreen(cursor.x, cursor.y);
-        // The texture's clear centre is 70% of its radius.
-        const texR = this.flashlightHole.texture.width / 2;
-        const scale = radius / (texR * 0.7);
-        const hole = this.flashlightHole;
-        hole.scale.set(damp(hole.scale.x || scale, scale, 60, 16));
-        hole.position.set(sp.x, sp.y);
-        const half = texR * hole.scale.x;
-        const w = this._w, h = this._h;
-        const x0 = sp.x - half, x1 = sp.x + half, y0 = sp.y - half, y1 = sp.y + half;
-        this.flashlightFill.clear()
-            .rect(0, 0, w, Math.max(0, y0)).fill(0x000000)
-            .rect(0, y1, w, Math.max(0, h - y1)).fill(0x000000)
-            .rect(0, y0, Math.max(0, x0), y1 - y0).fill(0x000000)
-            .rect(x1, y0, Math.max(0, w - x1), y1 - y0).fill(0x000000);
+        const fl = this.flashlight;
+        if (!fl) return;
+        const dt = Number.isNaN(this.flashlightTime) ? 0 : time - this.flashlightTime;
+        this.flashlightTime = time;
+        const first = this.beatmap.hitObjects[0];
+        const inBreak = this.hud.isBreak(time) || time < first.time - 2000 + 325 || this.rules.finished;
+        fl.update(dt, {
+            cursorX: cursor.x,
+            cursorY: cursor.y,
+            combo: this.score.combo,
+            inBreak,
+            sliderTracking: this.sliderTracked(time),
+        }, this.view.scale, (x, y) => this.toScreen(x, y));
+    }
+
+    /** A started slider is being held right now (OsuFlashlight.OnSliderTrackingChange). */
+    private sliderTracked(time: number): boolean {
+        const objs = this.beatmap.hitObjects;
+        for (let i = this.loopStart; i < objs.length; i++) {
+            const h = objs[i];
+            if (h.time > time) break;
+            if (h.kind !== 'slider' || time >= h.endTime) continue;
+            if ((this.rules.states[i] as SliderState).tracking) return true;
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------
@@ -802,6 +827,17 @@ export class PlayerScreen extends Screen {
 
     private startFail(): void {
         if (this.phase === 'failed' || this.phase === 'completed') return;
+        if (restartOnFail(this.options.mods)) {
+            // lazer's Player.onFail: a fail override with RestartOnFail (SD / PF
+            // "Restart on fail") restarts at once (quick restart), with no fail animation.
+            this.phase = 'failed';
+            this.failedAtTime = this.clock.frameTime;
+            this.input.enabled = false;
+            this.hitsounds.stopAll();
+            this.clock.freeze();
+            this.restartPending = true;
+            return;
+        }
         this.phase = 'failed';
         this.failedAtTime = this.clock.frameTime;
         this.failClock = 0;
@@ -899,6 +935,7 @@ export class PlayerScreen extends Screen {
             version: diff.version,
             creator: set.creator,
             mods: sortedMods(o.mods),
+            modSettings: modSettingsOf(o.mods),
             score: Math.round(s.score),
             accuracy: s.accuracy,
             maxCombo: s.maxCombo,
@@ -946,6 +983,7 @@ export class PlayerScreen extends Screen {
                 version: r.version,
                 creator: r.creator,
                 mods: r.mods,
+                modSettings: r.modSettings,
                 score: r.score,
                 accuracy: r.accuracy,
                 maxCombo: r.maxCombo,

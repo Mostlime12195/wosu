@@ -3,17 +3,17 @@ import type { LibrarySet } from '../../beatmap/Library';
 import { calculateDifficulty } from '../../beatmap/difficulty';
 import { buildPlayableBeatmap } from '../../beatmap/processing';
 import type { DifficultySummary } from '../../beatmap/types';
-import { NO_MODS, modsString, playbackRate, sanitizeMods, type ModSet } from '../../gameplay/mods';
+import { NO_MODS, modsKey, playbackRate, withSettings, type ModSet } from '../../gameplay/mods';
 
 /** Mods that change the star rating (Hidden/Flashlight don't, in the classic model). */
 const RATING_MODS = ['EZ', 'HR', 'HT', 'DC', 'DT', 'NC'] as const;
 const cache = new Map<string, Promise<number | null>>();
 const CACHE_LIMIT = 200;
 
-/** The subset of `mods` that affects difficulty, or null when none does. */
+/** The subset of `mods` that affects difficulty (with a rate mod's custom speed), or null when none does. */
 export function ratingMods(mods: ModSet): ModSet | null {
     const relevant = RATING_MODS.filter(m => mods.has(m));
-    return relevant.length ? sanitizeMods(relevant) : null;
+    return relevant.length ? withSettings(relevant, mods.settings ?? {}) : null;
 }
 
 /**
@@ -24,7 +24,7 @@ export function ratingMods(mods: ModSet): ModSet | null {
 export function modAdjustedStars(game: Game, set: LibrarySet, diff: DifficultySummary, mods: ModSet): Promise<number | null> {
     const relevant = ratingMods(mods);
     if (!relevant || diff.stars === null) return Promise.resolve(diff.stars);
-    const key = `${set.key}|${diff.file}|${diff.stars}|${modsString(relevant)}`;
+    const key = `${set.key}|${diff.file}|${diff.stars}|${modsKey(relevant)}`;
     let hit = cache.get(key);
     if (!hit) {
         hit = game.library.loadBeatmap(set.key, diff.file).then(data => {

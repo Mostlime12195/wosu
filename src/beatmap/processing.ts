@@ -9,6 +9,7 @@
  */
 import type { Vec2 } from '../core/math';
 import { adjustDifficulty, type ModSet } from '../gameplay/mods';
+import type { GameplayMechanics } from '../gameplay/scoring/mechanics';
 import { buildControlPointTimeline } from './controlPoints';
 import { createSliderPath, offsetSliderPath } from './curves';
 import type {
@@ -29,6 +30,14 @@ export const PLAYFIELD_HEIGHT = 384;
 
 /** Legacy tail judgement happens this long before the slider's true end. */
 export const LEGACY_LAST_TICK_OFFSET = 36;
+/**
+ * Where a slider's tail event sits:
+ *  - `legacy`: stable's last tick, at max(start + duration / 2, end − 36 ms),
+ *    judged once at that instant (osu!stable; also what difficulty uses);
+ *  - `lazer`: the true end; lazer judges it from 36 ms before the end
+ *    (DrawableSliderTail / SliderInputManager.TryJudgeNestedObject).
+ */
+export type SliderTailMode = 'legacy' | 'lazer';
 const STACK_DISTANCE = 3;
 const BASE_SCORING_DISTANCE = 100;
 /** Event generation guard for edited/corrupt maps (lazer's max_length). */
@@ -70,12 +79,14 @@ export interface SliderTiming {
     tickDistance: number;
 }
 
-export function sliderTiming(data: BeatmapData, control: ControlPoint, length: number, slides: number): SliderTiming {
+export function sliderTiming(data: BeatmapData, control: ControlPoint, length: number, slides: number, unclampedBeatLength = false): SliderTiming {
     const scoringDistance = BASE_SCORING_DISTANCE * data.difficulty.sliderMultiplier * control.sliderVelocity;
-    const velocity = scoringDistance / control.beatLength;
+    const beatLength = unclampedBeatLength && control.rawBeatLength !== undefined ? control.rawBeatLength : control.beatLength;
+    const velocity = scoringDistance / beatLength;
     // Before v8, stable computed tick spacing without slider velocity.
     const tickMultiplier = data.formatVersion < 8 ? 1 / control.sliderVelocity : 1;
-    const tickDistance = (scoringDistance / data.difficulty.sliderTickRate) * tickMultiplier;
+    // A NaN inherited point turns ticks off (lazer: TickDistance = ∞).
+    const tickDistance = control.generateTicks === false ? Infinity : (scoringDistance / data.difficulty.sliderTickRate) * tickMultiplier;
     const spanDuration = velocity > 0 ? length / velocity : 0;
     return { velocity, spanDuration, duration: spanDuration * slides, tickDistance };
 }
@@ -87,7 +98,10 @@ export interface SliderEventDescriptor {
     pathProgress: number;
 }
 
-/** Port of lazer's SliderEventGenerator (legacy last tick becomes our tail). */
+/**
+ * Port of lazer's SliderEventGenerator. The tail is either the legacy last
+ * tick (stable) or lazer's tail at the true end (see SliderTailMode).
+ */
 export function generateSliderEvents(
     startTime: number,
     spanDuration: number,
@@ -95,6 +109,7 @@ export function generateSliderEvents(
     tickDistance: number,
     totalDistance: number,
     slides: number,
+    tail: SliderTailMode = 'legacy',
 ): SliderEventDescriptor[] {
     const length = Math.min(MAX_SLIDER_LENGTH, totalDistance);
     const tickDist = Math.min(Math.max(tickDistance, 0), length);
@@ -124,7 +139,9 @@ export function generateSliderEvents(
 
     const totalDuration = slides * spanDuration;
     const finalSpanStart = startTime + (slides - 1) * spanDuration;
-    const tailTime = Math.max(startTime + totalDuration / 2, finalSpanStart + spanDuration - LEGACY_LAST_TICK_OFFSET);
+    const tailTime = tail === 'lazer'
+        ? startTime + totalDuration
+        : Math.max(startTime + totalDuration / 2, finalSpanStart + spanDuration - LEGACY_LAST_TICK_OFFSET);
     events.push({ kind: 'tail', time: tailTime, spanIndex: slides - 1, pathProgress: slides % 2 });
 
     // The tail precedes ticks in the last 36ms; keep a stable time order.
@@ -291,9 +308,41 @@ interface Geometry {
     path: SliderPath | null;
     timing: { velocity: number; spanDuration: number; duration: number; tickDistance: number } | null;
     endTime: number;
+    slides: number;
 }
 
-export function buildPlayableBeatmap(data: BeatmapData, mods: ModSet): PlayableBeatmap {
+/**
+ * lazer's ConvertHitObjectParser drops the repeats of zero-length sliders:
+ * stable never judged them, so they'd be free combo (or a stream of misses).
+ */
+function effectiveSlides(slides: number, pathLength: number): number {
+    return Math.abs(pathLength) <= 1e-7 ? 1 : slides;
+}
+
+/** Keep the first and last node's sounds when a slider's repeats are dropped. */
+function edgeList<T>(list: readonly T[] | undefined, slides: number, rawSlides: number): T[] {
+    const l = list ?? [];
+    if (slides === rawSlides || l.length < 2) return l.slice();
+    return [l[0], l[Math.min(l.length - 1, rawSlides)]];
+}
+
+export interface PlayableOptions {
+    /** Slider tail placement (default `legacy`, which difficulty calculation expects). */
+    sliderTail?: SliderTailMode;
+    /**
+     * Time sliders with the red line's unclamped beat length (stable).
+     * lazer clamps beat lengths to 6 ms, which turns Aspire's 1E-298 "instant"
+     * sliders into seconds-long ones flying off-screen with hundreds of ticks.
+     */
+    unclampedBeatLength?: boolean;
+}
+
+/** The processing options for a mechanics setting. */
+export function playableOptions(mechanics: GameplayMechanics): PlayableOptions {
+    return mechanics === 'lazer' ? { sliderTail: 'lazer' } : { sliderTail: 'legacy', unclampedBeatLength: true };
+}
+
+export function buildPlayableBeatmap(data: BeatmapData, mods: ModSet, options: PlayableOptions = {}): PlayableBeatmap {
     const raw = data.difficulty;
     const adjusted = adjustDifficulty(
         { cs: raw.circleSize, ar: raw.approachRate, od: raw.overallDifficulty, hp: raw.hpDrainRate },
@@ -317,11 +366,12 @@ export function buildPlayableBeatmap(data: BeatmapData, mods: ModSet): PlayableB
         let endTime = o.time;
         let endX = head.x;
         let endY = head.y;
+        let slides = 1;
         if (o.kind === 'slider') {
             const cps = (o.controlPoints ?? []).map(p => ({ x: p.x, y: flipY(p.y) }));
             path = createSliderPath(head, o.curveType ?? 'B', cps, o.pixelLength ?? 0);
-            const slides = o.slides ?? 1;
-            timing = sliderTiming(data, control, path.length, slides);
+            slides = effectiveSlides(o.slides ?? 1, path.length);
+            timing = sliderTiming(data, control, path.length, slides, options.unclampedBeatLength ?? false);
             endTime = o.time + timing.duration;
             const end = path.pointAt(slides % 2 === 1 ? 1 : 0);
             endX = end.x;
@@ -329,7 +379,7 @@ export function buildPlayableBeatmap(data: BeatmapData, mods: ModSet): PlayableB
         } else if (o.kind === 'spinner') {
             endTime = Math.max(o.endTime ?? o.time + 1, o.time + 1);
         }
-        geometry[i] = { head, path, timing, endTime };
+        geometry[i] = { head, path, timing, endTime, slides };
         items[i] = { kind: o.kind, time: o.time, endTime, x: head.x, y: head.y, endX, endY, stackHeight: 0 };
     }
 
@@ -362,10 +412,10 @@ export function buildPlayableBeatmap(data: BeatmapData, mods: ModSet): PlayableB
             control: timeline.at(o.time),
         };
         if (o.kind === 'slider' && g.path && g.timing) {
-            const slides = o.slides ?? 1;
+            const slides = g.slides;
             const path = offsetSliderPath(g.path, offset, offset);
             const descriptors = generateSliderEvents(
-                o.time, g.timing.spanDuration, g.timing.velocity, g.timing.tickDistance, path.length, slides,
+                o.time, g.timing.spanDuration, g.timing.velocity, g.timing.tickDistance, path.length, slides, options.sliderTail ?? 'legacy',
             );
             const events: SliderEvent[] = descriptors.map(d => {
                 const p = path.pointAt(d.pathProgress);
@@ -382,8 +432,8 @@ export function buildPlayableBeatmap(data: BeatmapData, mods: ModSet): PlayableB
                 endX: end.x,
                 endY: end.y,
                 events,
-                edgeSounds: o.edgeSounds ?? [],
-                edgeSets: o.edgeSets ?? [],
+                edgeSounds: edgeList(o.edgeSounds, slides, o.slides ?? 1),
+                edgeSets: edgeList(o.edgeSets, slides, o.slides ?? 1),
                 tickDistance: g.timing.tickDistance,
                 velocity: g.timing.velocity,
             };

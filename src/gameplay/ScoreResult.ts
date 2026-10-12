@@ -1,5 +1,5 @@
 import type { Grade } from '../storage/ScoreStore';
-import type { ModAcronym } from './mods';
+import type { ModAcronym, ModSettingsMap } from './mods';
 
 /** Final outcome of a play, handed from the Player to the Results screen. */
 export interface ScoreResult {
@@ -11,6 +11,8 @@ export interface ScoreResult {
     version: string;
     creator: string;
     mods: ModAcronym[];
+    /** Customised mod settings (e.g. DT's speed); absent or empty at defaults. */
+    modSettings?: ModSettingsMap;
     score: number;
     accuracy: number; // 0..1
     maxCombo: number;

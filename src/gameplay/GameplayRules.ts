@@ -3,17 +3,20 @@ import { Signal } from '../core/Signal';
 import type { ModSet } from './mods';
 import type { HealthProcessor } from './scoring/HealthProcessor';
 import {
+    DEFAULT_MECHANICS, MISS_WINDOW, TAIL_LENIENCY, BONUS_SPINS_GAP,
+    lazerSpinnerSpins, stableHalfSpinAward, stableSpinnerHalfSpins, type GameplayMechanics,
+} from './scoring/mechanics';
+import {
     resultForError, sliderResult, spinnerResult, type HitResult, type NestedKind, type ScoreProcessor,
 } from './scoring/ScoreProcessor';
 
-/** Spin speed cap (stable: ~477 RPM). */
+/** stable's spin speed cap (~477 RPM); lazer has none. */
 const MAX_SPIN_RAD_PER_MS = 0.05;
 /** Spun Out's fixed spin speed (stable: 287 RPM). */
 const SPUN_OUT_RAD_PER_MS = (287 / 60000) * Math.PI * 2;
-/** Clicks this early (beyond the 50 window) shake instead of judging. */
-const SHAKE_WINDOW = 400;
-/** Follow area while tracking, in circle radii (stable/lazer 2.4). */
+/** Follow area while tracking, in circle radii (lazer DrawableSliderBall.FOLLOW_AREA). */
 const FOLLOW_RADIUS_SCALE = 2.4;
+const TWO_PI = Math.PI * 2;
 
 export interface CircleState {
     kind: 'circle';
@@ -45,11 +48,15 @@ export interface SpinnerState {
     kind: 'spinner';
     /** Accumulated rotation (radians, signed) for the visual. */
     rotation: number;
-    /** Absolute rotation counted toward clearing (radians). */
+    /** Rotation counted toward clearing (radians). */
     progress: number;
+    /** Rotation needed to clear (radians); 0 = cleared without spinning. */
     required: number;
     lastAngle: number | null;
+    /** Full spins counted so far. */
     spinsAwarded: number;
+    /** Spins that scored as bonus. */
+    bonusSpins: number;
     rpm: number;
     result: HitResult | null;
     judgedAt: number;
@@ -75,12 +82,39 @@ export interface HitEventInfo {
     error: number | null;
 }
 
+/** Per-spinner counting state (not shown to drawables). */
+interface SpinCounter {
+    // lazer (Spinner + SpinnerSpinHistory)
+    spinsRequired: number;
+    maxBonusSpins: number;
+    accumulated: number;
+    atLastCompletion: number;
+    currentSpinMax: number;
+    completed: number;
+    // stable
+    halfSpinsRequired: number;
+    halfSpins: number;
+}
+
+type ClickAction = 'hit' | 'shake' | 'ignore';
+
 /**
  * The osu!standard rules, separate from rendering so they can be tested
  * headlessly. The Player feeds it presses (with exact timestamps and
  * positions) and calls `update` every frame with the cursor state; it
  * judges objects, drives the score/health processors and emits events
  * the renderer and sound player react to.
+ *
+ * `mechanics` picks whose rules apply (see GameplayMechanics):
+ *  - note lock: lazer's StartTimeOrderedHitPolicy or stable's
+ *    LegacyHitPolicy (+ OsuModClassic's slider-head input blocking);
+ *  - sliders: lazer waits for the head before judging ticks, credits the
+ *    passed ticks on a late head hit, and hits the tail any time in its
+ *    last 36 ms; stable judges every tick at its time and the legacy last
+ *    tick once;
+ *  - spinners: lazer's whole-spin requirement and net-rotation counting,
+ *    or stable's half-spin counting with its 477 RPM cap.
+ * Early clicks inside the 400 ms miss window miss in both, as in the clients.
  */
 export class GameplayRules {
     readonly states: ObjectState[];
@@ -95,6 +129,10 @@ export class GameplayRules {
     private readonly w100: number;
     private readonly w50: number;
     private readonly radius: number;
+    private readonly preempt: number;
+    /** stable: clicks must land within this of the object (LegacyHitPolicy hittableRange). */
+    private readonly hittableRange: number;
+    private readonly spinCounters: (SpinCounter | null)[];
     /** First object that may still need judging (all before are done). */
     private firstPending = 0;
     autoSpin = false;
@@ -110,24 +148,44 @@ export class GameplayRules {
         mods: ModSet,
         readonly score: ScoreProcessor,
         readonly health: HealthProcessor,
+        readonly mechanics: GameplayMechanics = DEFAULT_MECHANICS,
     ) {
         const d = beatmap.difficulty;
         this.w300 = d.window300;
         this.w100 = d.window100;
         this.w50 = d.window50;
         this.radius = d.circleRadius;
+        this.preempt = d.preempt;
+        // OsuModClassic: autopilot narrows the classic hittable range by 200 ms.
+        this.hittableRange = MISS_WINDOW - (mods.has('AP') ? 200 : 0);
         this.suddenDeath = mods.has('SD');
         this.perfect = mods.has('PF');
         this.relax = mods.has('RX');
         this.autoSpin = mods.has('SO') || mods.has('AT');
         this.autoSpinRate = mods.has('AT') ? MAX_SPIN_RAD_PER_MS : SPUN_OUT_RAD_PER_MS;
-        this.states = beatmap.hitObjects.map(h => this.initialState(h, d.od));
+        this.spinCounters = beatmap.hitObjects.map(h => (h.kind === 'spinner' ? this.spinCounter(h, d.od) : null));
+        this.states = beatmap.hitObjects.map((h, i) => this.initialState(h, i));
         score.comboBroken.add(() => {
             if (this.suddenDeath || this.perfect) health.fail();
         });
     }
 
-    private initialState(h: PlayableHitObject, od: number): ObjectState {
+    private spinCounter(h: PlayableHitObject, od: number): SpinCounter {
+        const duration = h.endTime - h.time;
+        const lazer = lazerSpinnerSpins(od, duration);
+        return {
+            spinsRequired: lazer.spinsRequired,
+            maxBonusSpins: lazer.maxBonusSpins,
+            accumulated: 0,
+            atLastCompletion: 0,
+            currentSpinMax: 0,
+            completed: 0,
+            halfSpinsRequired: stableSpinnerHalfSpins(od, duration),
+            halfSpins: 0,
+        };
+    }
+
+    private initialState(h: PlayableHitObject, i: number): ObjectState {
         if (h.kind === 'circle') return { kind: 'circle', result: null, judgedAt: 0, shakeAt: -Infinity };
         if (h.kind === 'slider') {
             return {
@@ -135,12 +193,11 @@ export class GameplayRules {
                 nextEvent: 1, eventHit: h.events.map(() => null), partsHit: 0, result: null, judgedAt: 0,
             };
         }
-        // Rotations per second needed (stable difficultyRange(OD, 3, 5, 7.5)),
-        // eased by 0.7 like the original WebOsu so spinners stay friendly.
-        const perSec = (od < 5 ? 3 + 0.4 * od : 2.5 + 0.5 * od) * 0.7;
+        const c = this.spinCounters[i]!;
+        const required = this.mechanics === 'lazer' ? c.spinsRequired * TWO_PI : c.halfSpinsRequired * Math.PI;
         return {
-            kind: 'spinner', rotation: 0, progress: 0, required: Math.PI * 2 * perSec * (h.duration / 1000),
-            lastAngle: null, spinsAwarded: 0, rpm: 0, result: null, judgedAt: 0,
+            kind: 'spinner', rotation: 0, progress: 0, required,
+            lastAngle: null, spinsAwarded: 0, bonusSpins: 0, rpm: 0, result: null, judgedAt: 0,
         };
     }
 
@@ -153,36 +210,98 @@ export class GameplayRules {
         return this.firstPending >= this.states.length;
     }
 
+    // -----------------------------------------------------------------------
+    // Clicks and note lock
+    // -----------------------------------------------------------------------
+
     /**
-     * A key/button/touch went down at `time` with the cursor at (x, y).
-     * Implements stable's note lock: only the earliest pending object can
-     * be hit; clicking a later one (or clicking too early) shakes it.
+     * A key/button/touch went down at `time` with the cursor at (x, y). The
+     * earliest visible, unjudged circle or slider head under the cursor
+     * takes the click; the hit policy decides whether it hits or shakes.
      */
     press(time: number, x: number, y: number): void {
+        // Judge whatever ended before this click first (a frame may not have reached it yet).
+        this.settle(time);
         const objs = this.beatmap.hitObjects;
-        let earliestPending = -1;
         for (let i = this.firstPending; i < objs.length; i++) {
             const h = objs[i];
-            if (h.time - SHAKE_WINDOW - this.w50 > time) break;
+            if (h.time - this.preempt > time) break;
             if (h.kind === 'spinner') continue;
+            const s = this.states[i];
+            if (s.kind === 'slider' && s.headHit !== null) {
+                // OsuModClassic: a judged slider head keeps taking clicks over
+                // it until the slider is fully judged (stable behaviour).
+                if (this.mechanics === 'stable' && s.result === null && this.inside(h, x, y)) return;
+                continue;
+            }
             if (!this.headPending(i)) continue;
-            // Already past its window: it's a miss waiting to be swept by
-            // update(), so it must not note-lock the next object.
+            // Already past its window: a miss waiting to be swept.
             if (time > h.time + this.w50) continue;
-            if (earliestPending === -1) earliestPending = i;
             if (!this.inside(h, x, y)) continue;
-            if (i !== earliestPending) {
-                this.shake(i, time);
-                return;
-            }
-            const error = time - h.time;
-            const result = resultForError(error, this.w300, this.w100, this.w50);
-            if (result === null) {
-                if (error < 0) this.shake(i, time);
-                return;
-            }
-            this.judgeHead(i, time, error, result);
+            this.receivePress(i, time, x, y);
             return;
+        }
+    }
+
+    private receivePress(i: number, time: number, x: number, y: number): void {
+        const h = this.beatmap.hitObjects[i];
+        const error = time - h.time;
+        const result = this.resultFor(error);
+        const action = this.mechanics === 'lazer' ? this.lazerHittable(i, time, result) : this.stableHittable(i, time, result);
+        if (action === 'shake') this.shake(i, time);
+        if (result === null || action !== 'hit') return;
+        this.judgeHead(i, time, error, result, x, y);
+        // StartTimeOrderedHitPolicy.HandleHit: every earlier circle/head still pending misses.
+        if (this.mechanics === 'lazer') this.missEarlierHeads(i, time);
+    }
+
+    /** Timing judgement for a click, with osu!'s 400 ms miss window for early clicks. */
+    private resultFor(error: number): HitResult | null {
+        const r = resultForError(error, this.w300, this.w100, this.w50);
+        if (r !== null) return r;
+        return Math.abs(error) <= MISS_WINDOW ? 'miss' : null;
+    }
+
+    /**
+     * lazer's StartTimeOrderedHitPolicy: the latest circle/slider head that
+     * starts before this one blocks it only until that object's start time.
+     */
+    private lazerHittable(i: number, time: number, result: HitResult | null): ClickAction {
+        const objs = this.beatmap.hitObjects;
+        const h = objs[i];
+        for (let j = i - 1; j >= 0; j--) {
+            const b = objs[j];
+            if (b.kind === 'spinner' || b.time >= h.time) continue;
+            if (this.headPending(j) && time < b.time) return 'shake';
+            break;
+        }
+        return result === null ? 'shake' : 'hit';
+    }
+
+    /**
+     * stable's note lock (lazer's LegacyHitPolicy): any earlier object not
+     * fully judged that ends (+3 ms) before this one starts blocks it, and
+     * a click under a pending stacked object does nothing.
+     */
+    private stableHittable(i: number, time: number, result: HitResult | null): ClickAction {
+        const objs = this.beatmap.hitObjects;
+        const h = objs[i];
+        if (i > 0 && objs[i - 1].stackHeight > 0 && this.states[i - 1].result === null) return 'ignore';
+        if (result === null) return 'shake';
+        for (let j = this.firstPending; j < i; j++) {
+            if (this.states[j].result !== null) continue;
+            if (objs[j].endTime + 3 < h.time) return 'shake';
+        }
+        return Math.abs(h.time - time) < this.hittableRange ? 'hit' : 'shake';
+    }
+
+    private missEarlierHeads(i: number, time: number): void {
+        const objs = this.beatmap.hitObjects;
+        for (let j = this.firstPending; j < i; j++) {
+            const b = objs[j];
+            if (b.kind === 'spinner' || b.time >= objs[i].time || !this.headPending(j)) continue;
+            if (b.kind === 'circle') this.applyMain(j, 'miss', time, b.x, b.y, null, true);
+            else this.missHead(j, time);
         }
     }
 
@@ -204,37 +323,81 @@ export class GameplayRules {
         this.shaken.emit(i);
     }
 
-    private judgeHead(i: number, time: number, error: number, result: HitResult): void {
+    private judgeHead(i: number, time: number, error: number, result: HitResult, x: number, y: number): void {
         const h = this.beatmap.hitObjects[i];
         const s = this.states[i];
+        if (result === 'miss') {
+            // An early click inside the miss window.
+            if (s.kind === 'circle') this.applyMain(i, 'miss', time, h.x, h.y, null, true);
+            else this.missHead(i, time);
+            return;
+        }
         this.hitErrors.push(error);
         this.headHit.emit(i, time, error);
         if (s.kind === 'circle') {
             this.applyMain(i, result, time, h.x, h.y, error, true);
         } else if (s.kind === 'slider') {
+            const slider = h as PlayableSlider;
             s.headHit = true;
             s.headAt = time;
             s.eventHit[0] = true;
             s.partsHit++;
             this.score.applyNested('head', true);
-            this.health.applyNested('head', true);
-            this.nestedJudged.emit(i, (h as PlayableSlider).events[0], true);
+            this.health.applyNested('head', true, result);
+            this.nestedJudged.emit(i, slider.events[0], true);
+            if (this.mechanics === 'lazer') this.postProcessHead(i, slider, s, time, x, y);
         }
+    }
+
+    private missHead(i: number, time: number): void {
+        const s = this.states[i];
+        if (s.kind !== 'slider' || s.headHit !== null) return;
+        s.headHit = false;
+        s.headAt = time;
+        s.eventHit[0] = false;
+        this.score.applyNested('head', false);
+        this.health.applyNested('head', false);
+        this.nestedJudged.emit(i, (this.beatmap.hitObjects[i] as PlayableSlider).events[0], false);
+    }
+
+    /**
+     * lazer SliderInputManager.PostProcessHeadJudgement: after a late head
+     * hit, the ticks already passed are all hit if the cursor is within the
+     * follow area of every one of them, otherwise all missed.
+     */
+    private postProcessHead(i: number, h: PlayableSlider, s: SliderState, time: number, x: number, y: number): void {
+        const far = this.radius * FOLLOW_RADIUS_SCALE;
+        const ball = sliderBallPosition(h, time);
+        if (dist2(ball.x - x, ball.y - y) > far * far) return;
+        let allInRange = true;
+        for (let k = s.nextEvent; k < h.events.length; k++) {
+            const ev = h.events[k];
+            if (ev.time > time) break;
+            const p = sliderBallPosition(h, ev.time);
+            if (dist2(p.x - x, p.y - y) > far * far) {
+                allInRange = false;
+                break;
+            }
+        }
+        while (s.nextEvent < h.events.length && h.events[s.nextEvent].time <= time) this.judgeNextEvent(i, h, s, allInRange);
+        this.setTracking(s, allInRange || dist2(ball.x - x, ball.y - y) <= this.radius * this.radius, time);
     }
 
     private applyMain(i: number, result: HitResult, time: number, x: number, y: number, error: number | null, affectsCombo: boolean): void {
         const s = this.states[i];
-        if (s.kind === 'circle' || s.kind === 'slider' || s.kind === 'spinner') {
-            s.result = result;
-            s.judgedAt = time;
-        }
+        s.result = result;
+        s.judgedAt = time;
         this.score.applyMain(result, affectsCombo);
-        this.health.applyMain(result);
+        this.health.applyMain(result, i);
         if (this.perfect && result !== 'great') this.health.fail();
         this.objectJudged.emit({ index: i, result, time, x, y, error });
     }
 
-    /** Advance passive judgement to `time` (misses, slider events, spinners). */
+    // -----------------------------------------------------------------------
+    // Per-frame input and passive judgement
+    // -----------------------------------------------------------------------
+
+    /** Advance to `time` with the cursor state: drain, tracking, spinning, then passive judgement. */
     update(time: number, cursor: CursorState): void {
         const dt = this.lastTime === -Infinity ? 0 : Math.max(0, time - this.lastTime);
         this.lastTime = time;
@@ -242,23 +405,20 @@ export class GameplayRules {
         const objs = this.beatmap.hitObjects;
         for (let i = this.firstPending; i < objs.length; i++) {
             const h = objs[i];
-            if (h.time - SHAKE_WINDOW - this.w50 > time) break;
+            if (h.time > time) break;
             const s = this.states[i];
-            if (s.kind === 'circle') this.updateCircle(i, s, time, cursor);
-            else if (s.kind === 'slider') this.updateSlider(i, h as PlayableSlider, s, time, cursor);
-            else this.updateSpinner(i, h, s, time, cursor, dt);
+            if (s.result !== null) continue;
+            if (s.kind === 'circle') this.relaxCircle(i, h, time, cursor);
+            else if (s.kind === 'slider') this.inputSlider(i, h as PlayableSlider, s, time, cursor);
+            else this.inputSpinner(i, h, s, time, cursor, dt);
         }
-        while (this.firstPending < objs.length && this.states[this.firstPending].result !== null) this.firstPending++;
+        this.settle(time);
     }
 
-    private updateCircle(i: number, s: CircleState, time: number, cursor: CursorState): void {
-        if (s.result !== null) return;
-        const h = this.beatmap.hitObjects[i];
-        if (this.relax && time >= h.time && this.inside(h, cursor.x, cursor.y) && i === this.earliestPendingHead()) {
-            this.judgeHead(i, time, time - h.time, resultForError(time - h.time, this.w300, this.w100, this.w50) ?? 'meh');
-            return;
+    private relaxCircle(i: number, h: PlayableHitObject, time: number, cursor: CursorState): void {
+        if (this.relax && this.inside(h, cursor.x, cursor.y) && i === this.earliestPendingHead() && time <= h.time + this.w50) {
+            this.judgeHead(i, time, time - h.time, resultForError(time - h.time, this.w300, this.w100, this.w50) ?? 'meh', cursor.x, cursor.y);
         }
-        if (time > h.time + this.w50) this.applyMain(i, 'miss', h.time + this.w50, h.x, h.y, null, true);
     }
 
     private earliestPendingHead(): number {
@@ -269,93 +429,170 @@ export class GameplayRules {
         return -1;
     }
 
-    private updateSlider(i: number, h: PlayableSlider, s: SliderState, time: number, cursor: CursorState): void {
-        if (s.result !== null) return;
-        // Head: relax auto-hit, or miss once its window passes.
-        if (s.headHit === null) {
-            if (this.relax && time >= h.time && this.inside(h, cursor.x, cursor.y) && i === this.earliestPendingHead()) {
-                this.judgeHead(i, time, time - h.time, 'great');
-            } else if (time > h.time + this.w50) {
-                s.headHit = false;
-                s.eventHit[0] = false;
-                this.score.applyNested('head', false);
-                this.health.applyNested('head', false);
-                this.nestedJudged.emit(i, h.events[0], false);
-            }
+    private inputSlider(i: number, h: PlayableSlider, s: SliderState, time: number, cursor: CursorState): void {
+        if (s.headHit === null && this.relax && time <= h.time + this.w50 && this.inside(h, cursor.x, cursor.y) && i === this.earliestPendingHead()) {
+            this.judgeHead(i, time, time - h.time, resultForError(time - h.time, this.w300, this.w100, this.w50) ?? 'meh', cursor.x, cursor.y);
         }
-        // Tracking during the slider's active time. A frame that lands past
-        // the end judges the remaining events with the tracking state of the
-        // last frame inside the slider (the cursor has moved on since).
-        if (time >= h.time && time <= h.endTime) {
+        // Tracking during the slider's active time (the follow area grows
+        // to 2.4 radii once tracking). Past the end the last state stays, so
+        // a frame landing late judges the tail with the tracking at the end.
+        if (time <= h.endTime) {
             const p = sliderBallPosition(h, time);
             const r = this.radius * (s.tracking ? FOLLOW_RADIUS_SCALE : 1);
-            const dx = cursor.x - p.x, dy = cursor.y - p.y;
-            const tracking = (cursor.held || this.relax) && dx * dx + dy * dy <= r * r;
-            if (tracking !== s.tracking) {
-                s.tracking = tracking;
-                s.trackingChangedAt = time;
-            }
-        }
-        // Nested events whose time has come.
-        while (s.nextEvent < h.events.length && time >= h.events[s.nextEvent].time) {
-            const ev = h.events[s.nextEvent];
-            const hit = s.tracking;
-            s.eventHit[s.nextEvent] = hit;
-            if (hit) s.partsHit++;
-            const kind = ev.kind as NestedKind;
-            this.score.applyNested(kind, hit);
-            this.health.applyNested(kind, hit);
-            this.nestedJudged.emit(i, ev, hit);
-            s.nextEvent++;
-        }
-        if (time > h.endTime && s.tracking) {
-            s.tracking = false;
-            s.trackingChangedAt = h.endTime;
-        }
-        if (time >= h.endTime && s.nextEvent >= h.events.length && s.headHit !== null) {
-            const result = sliderResult(s.partsHit, h.events.length);
-            this.applyMain(i, result, h.endTime, h.endX, h.endY, null, false);
+            const tracking = (cursor.held || this.relax) && dist2(cursor.x - p.x, cursor.y - p.y) <= r * r;
+            this.setTracking(s, tracking, time);
         }
     }
 
-    private updateSpinner(i: number, h: PlayableHitObject, s: SpinnerState, time: number, cursor: CursorState, dt: number): void {
-        if (s.result !== null) return;
-        if (time >= h.time && time <= h.endTime) {
-            let delta = 0;
-            if (this.autoSpin) {
-                delta = this.autoSpinRate * dt;
-                s.lastAngle = null;
-            } else if (cursor.held || this.relax) {
-                const angle = Math.atan2(cursor.y - h.y, cursor.x - h.x);
-                if (s.lastAngle !== null) {
-                    delta = angle - s.lastAngle;
-                    if (delta > Math.PI) delta -= Math.PI * 2;
-                    if (delta < -Math.PI) delta += Math.PI * 2;
+    private setTracking(s: SliderState, tracking: boolean, time: number): void {
+        if (tracking === s.tracking) return;
+        s.tracking = tracking;
+        s.trackingChangedAt = time;
+    }
+
+    private inputSpinner(i: number, h: PlayableHitObject, s: SpinnerState, time: number, cursor: CursorState, dt: number): void {
+        if (time >= h.endTime) return;
+        const stable = this.mechanics === 'stable';
+        let delta = 0;
+        if (this.autoSpin) {
+            delta = this.autoSpinRate * dt;
+            s.lastAngle = null;
+        } else if (cursor.held || this.relax) {
+            const angle = Math.atan2(cursor.y - h.y, cursor.x - h.x);
+            if (s.lastAngle !== null) {
+                delta = angle - s.lastAngle;
+                if (delta > Math.PI) delta -= TWO_PI;
+                if (delta < -Math.PI) delta += TWO_PI;
+                if (stable) {
                     const cap = MAX_SPIN_RAD_PER_MS * Math.max(dt, 1);
                     delta = Math.max(-cap, Math.min(cap, delta));
                 }
-                s.lastAngle = angle;
+            }
+            s.lastAngle = angle;
+        } else {
+            s.lastAngle = null;
+        }
+        s.rotation += delta;
+        // Smoothed RPM for the counter.
+        const instRpm = dt > 0 ? (Math.abs(delta) / dt) * (60000 / TWO_PI) : 0;
+        s.rpm += (instRpm - s.rpm) * Math.min(1, dt / 200);
+        if (delta === 0) return;
+        const c = this.spinCounters[i]!;
+        if (stable) this.spinStable(i, s, c, delta);
+        else this.spinLazer(i, s, c, delta);
+    }
+
+    /** stable: absolute rotation, scored per half spin (OsuLegacyScoreSimulator). */
+    private spinStable(i: number, s: SpinnerState, c: SpinCounter, delta: number): void {
+        s.progress += Math.abs(delta);
+        const halfSpins = Math.floor(s.progress / Math.PI);
+        while (c.halfSpins < halfSpins) {
+            c.halfSpins++;
+            const award = stableHalfSpinAward(c.halfSpins, c.halfSpinsRequired);
+            if (award === null) continue;
+            const bonus = award === 'bonus';
+            if (bonus) s.bonusSpins++;
+            this.score.applySpin(bonus);
+            this.health.applySpin(bonus);
+            this.spun.emit(i, bonus);
+        }
+        s.spinsAwarded = Math.floor(s.progress / TWO_PI);
+    }
+
+    /**
+     * lazer: SpinnerSpinHistory counts a spin only once the net rotation
+     * within it reaches 360° (wiggling back and forth doesn't count); the
+     * first SpinsRequired + 2 spins are normal ticks, then up to
+     * MaximumBonusSpins bonus ticks, then nothing.
+     */
+    private spinLazer(i: number, s: SpinnerState, c: SpinCounter, delta: number): void {
+        c.accumulated += delta;
+        c.currentSpinMax = Math.max(c.currentSpinMax, Math.abs(c.accumulated - c.atLastCompletion));
+        while (c.currentSpinMax >= TWO_PI) {
+            const direction = Math.sign(c.accumulated - c.atLastCompletion) || 1;
+            c.completed++;
+            c.atLastCompletion += direction * TWO_PI;
+            c.currentSpinMax = Math.abs(c.accumulated - c.atLastCompletion);
+        }
+        s.progress = c.completed * TWO_PI + c.currentSpinMax;
+        while (s.spinsAwarded < c.completed) {
+            s.spinsAwarded++;
+            const normalTicks = c.spinsRequired + BONUS_SPINS_GAP;
+            if (s.spinsAwarded <= normalTicks) {
+                this.score.applySpin(false);
+                this.health.applySpin(false);
+                this.spun.emit(i, false);
+            } else if (s.spinsAwarded <= normalTicks + c.maxBonusSpins) {
+                s.bonusSpins++;
+                this.score.applySpin(true);
+                this.health.applySpin(true);
+                this.spun.emit(i, true);
             } else {
-                s.lastAngle = null;
-            }
-            s.rotation += delta;
-            s.progress += Math.abs(delta);
-            // Smoothed RPM for the counter.
-            const instRpm = dt > 0 ? (Math.abs(delta) / dt) * (60000 / (Math.PI * 2)) : 0;
-            s.rpm += (instRpm - s.rpm) * Math.min(1, dt / 200);
-            const spins = Math.floor(s.progress / (Math.PI * 2));
-            while (s.spinsAwarded < spins) {
-                s.spinsAwarded++;
-                const bonus = s.spinsAwarded * Math.PI * 2 > s.required + Math.PI * 2;
-                this.score.applySpin(bonus);
-                this.health.applySpin();
-                this.spun.emit(i, bonus);
+                // Past the bonus limit: lazer only plays the max-bonus sound.
+                this.spun.emit(i, true);
             }
         }
-        if (time >= h.endTime) {
-            const progress = s.required > 0 ? s.progress / s.required : 1;
-            this.applyMain(i, spinnerResult(progress), h.endTime, h.x, h.y, null, true);
+    }
+
+    /**
+     * Passive judgement up to `time` without new input: missed circles and
+     * heads, slider ticks/repeats/tails, slider and spinner ends.
+     */
+    private settle(time: number): void {
+        const objs = this.beatmap.hitObjects;
+        for (let i = this.firstPending; i < objs.length; i++) {
+            const h = objs[i];
+            if (h.time > time) break;
+            const s = this.states[i];
+            if (s.result !== null) continue;
+            if (s.kind === 'circle') {
+                if (time > h.time + this.w50) this.applyMain(i, 'miss', h.time + this.w50, h.x, h.y, null, true);
+            } else if (s.kind === 'slider') {
+                this.settleSlider(i, h as PlayableSlider, s, time);
+            } else if (time >= h.endTime) {
+                // Spinners too short to need a spin are cleared outright.
+                const progress = s.required > 0 ? s.progress / s.required : 1;
+                this.applyMain(i, spinnerResult(progress), h.endTime, h.x, h.y, null, true);
+            }
         }
+        while (this.firstPending < objs.length && this.states[this.firstPending].result !== null) this.firstPending++;
+    }
+
+    private settleSlider(i: number, h: PlayableSlider, s: SliderState, time: number): void {
+        if (s.headHit === null && time > h.time + this.w50) this.missHead(i, h.time + this.w50);
+        // lazer judges nothing nested before the head (SliderInputManager.TryJudgeNestedObject).
+        if (this.mechanics === 'stable' || s.headHit !== null) {
+            while (s.nextEvent < h.events.length) {
+                const ev = h.events[s.nextEvent];
+                if (this.mechanics === 'lazer' && ev.kind === 'tail') {
+                    // lazer's tail: hit while tracking from 36 ms before the end
+                    // (DrawableSliderTail leniency), otherwise judged at the end.
+                    if (time >= ev.time - TAIL_LENIENCY && s.tracking) this.judgeNextEvent(i, h, s, true);
+                    else if (time >= ev.time) this.judgeNextEvent(i, h, s, s.tracking);
+                    else break;
+                } else if (time >= ev.time) {
+                    this.judgeNextEvent(i, h, s, s.tracking);
+                } else {
+                    break;
+                }
+            }
+        }
+        const allJudged = s.nextEvent >= h.events.length && s.headHit !== null;
+        if (time > h.endTime && allJudged) this.setTracking(s, false, h.endTime);
+        if (time >= h.endTime && allJudged) {
+            this.applyMain(i, sliderResult(s.partsHit, h.events.length), h.endTime, h.endX, h.endY, null, false);
+        }
+    }
+
+    private judgeNextEvent(i: number, h: PlayableSlider, s: SliderState, hit: boolean): void {
+        const ev = h.events[s.nextEvent];
+        s.eventHit[s.nextEvent] = hit;
+        if (hit) s.partsHit++;
+        const kind = ev.kind as NestedKind;
+        this.score.applyNested(kind, hit);
+        this.health.applyNested(kind, hit);
+        this.nestedJudged.emit(i, ev, hit);
+        s.nextEvent++;
     }
 
     /** Forget the last spinner angle (resume after pause shouldn't jump). */
@@ -363,6 +600,8 @@ export class GameplayRules {
         for (const s of this.states) if (s.kind === 'spinner') s.lastAngle = null;
     }
 }
+
+const dist2 = (dx: number, dy: number): number => dx * dx + dy * dy;
 
 /** Ball position on a slider at `time` (accounts for repeats). */
 export function sliderBallPosition(h: PlayableSlider, time: number): { x: number; y: number } {

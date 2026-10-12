@@ -61,6 +61,8 @@ export function buildControlPointTimeline(points: readonly TimingPoint[], defaul
     let beatLength = firstRed ? firstRed.beatLength : DEFAULT_BEAT_LENGTH;
     let meter = firstRed ? firstRed.meter : 4;
     let sliderVelocity = 1;
+    let generateTicks = true;
+    let rawBeatLength = firstRed?.rawBeatLength;
 
     const out: ControlPoint[] = [];
     for (const p of sorted) {
@@ -68,8 +70,11 @@ export function buildControlPointTimeline(points: readonly TimingPoint[], defaul
             beatLength = p.beatLength;
             meter = p.meter;
             sliderVelocity = 1;
+            generateTicks = true;
+            rawBeatLength = p.rawBeatLength;
         } else {
             sliderVelocity = sliderVelocityOf(p.beatLength);
+            generateTicks = p.generateTicks ?? true;
         }
         const cp: ControlPoint = {
             time: p.time,
@@ -80,6 +85,8 @@ export function buildControlPointTimeline(points: readonly TimingPoint[], defaul
             sampleIndex: p.sampleIndex,
             volume: p.volume,
             kiai: p.kiai,
+            ...(generateTicks ? {} : { generateTicks: false }),
+            ...(rawBeatLength !== undefined ? { rawBeatLength } : {}),
         };
         // Points sharing a timestamp collapse into the last one.
         if (out.length > 0 && out[out.length - 1].time === p.time) out[out.length - 1] = cp;

@@ -1,8 +1,8 @@
-import { Container, Graphics, type Text } from 'pixi.js';
+import { Container, Graphics, Rectangle, type Text } from 'pixi.js';
 import type { Game } from '../../app/Game';
 import { Overlay } from '../../app/Overlay';
 import { tween, tweener } from '../../core/Tweener';
-import { MODS, modInfo, NO_MODS, scoreMultiplier, toggleMod, type ModCategory, type ModSet } from '../../gameplay/mods';
+import { extendedModInfo, MODS, modInfo, NO_MODS, scoreMultiplier, toggleMod, withModSetting, type ModCategory, type ModSet } from '../../gameplay/mods';
 import type { Action } from '../../input/bindings';
 import { BackButton } from '../../ui/Button';
 import { drawSheared, SHEAR, ShearedButton } from '../../ui/ShearedButton';
@@ -10,6 +10,7 @@ import { label } from '../../ui/text';
 import { Metrics } from '../../ui/theme';
 import { tweenTint } from '../../ui/UIComponent';
 import { ModColumn, MOD_COLUMN_SPAN } from './ModColumn';
+import { CUSTOMISATION_PANEL_WIDTH, ModCustomisationPanel } from './ModCustomisationPanel';
 import { modCategoryColor } from './ModIcon';
 import { modColors, ModPanel } from './ModPanel';
 
@@ -28,6 +29,9 @@ const HOTKEY_ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
  * with back / deselect-all. Toggling goes through `toggleMod`, so
  * incompatible mods drop out immediately and the panels follow
  * `game.mods`. Each column's mods also toggle from one keyboard row.
+ * The "Customise" panel at the top right edits the selected mods'
+ * settings (lazer's ModCustomisationPanel); while it is open the columns
+ * dim and a click anywhere else closes it.
  */
 export class ModSelectOverlay extends Overlay {
     protected override readonly popInSample = 'SongSelect/mod-column-pop-in';
@@ -46,6 +50,9 @@ export class ModSelectOverlay extends Overlay {
     private readonly deselect: ShearedButton;
     private readonly panels: ModPanel[] = [];
     private readonly hotkeys = new Map<string, ModPanel>();
+    private readonly customisation = new ModCustomisationPanel();
+    /** Catches clicks outside the expanded customisation panel (lazer: the panel's OnClick). */
+    private readonly customisationBlocker = new Graphics();
     /** Resting y of each column (animations start from here). */
     private readonly columnY: number[] = [];
 
@@ -65,6 +72,7 @@ export class ModSelectOverlay extends Overlay {
             this.columnLayer.addChild(col);
             col.panels.forEach((p, pi) => {
                 p.onToggle = () => this.togglePanel(p);
+                p.onCustomise = () => this.customisation.expandByMod();
                 const key = HOTKEY_ROWS[ci]?.[pi];
                 if (key) this.hotkeys.set(`Key${key}`, p);
                 this.panels.push(p);
@@ -81,7 +89,19 @@ export class ModSelectOverlay extends Overlay {
         this.footerLayer.eventMode = 'passive';
         this.footerBg.eventMode = 'static';
 
-        this.addChild(this.columnLayer, this.headerLayer, this.footerLayer);
+        this.customisation.onSettingChanged = (a, key, v) => {
+            this.game.mods.value = withModSetting(this.game.mods.value, a, key, v);
+        };
+        this.customisation.onStateChanged = state => {
+            const open = state !== 'collapsed';
+            this.customisationBlocker.eventMode = open ? 'static' : 'none';
+            // lazer fades the columns to Gray(0.5) behind the expanded panel.
+            tweenTint(this.columnLayer, open ? 0x808080 : 0xffffff, 400);
+        };
+        this.customisationBlocker.eventMode = 'none';
+        this.customisationBlocker.on('pointertap', () => (this.customisation.state = 'collapsed'));
+
+        this.addChild(this.columnLayer, this.customisationBlocker, this.customisation, this.headerLayer, this.footerLayer);
         this.disposer.add(game.mods.bind(m => this.sync(m), true));
     }
 
@@ -97,7 +117,9 @@ export class ModSelectOverlay extends Overlay {
             const active = mods.has(a);
             const clashes = active ? [] : [...mods].filter(m => p.mod.incompatible.includes(m) || modInfo(m).incompatible.includes(a));
             p.setState(active, clashes.length > 0, clashes.map(m => modInfo(m).name).join(', '));
+            p.setExtended(active ? extendedModInfo(a, mods.settings) : '');
         }
+        this.customisation.sync(mods);
         this.multiplier.setValue(scoreMultiplier(mods));
         this.deselect.enabled = mods.size > 0;
     }
@@ -113,6 +135,12 @@ export class ModSelectOverlay extends Overlay {
         this.description.position.set(margin, top + 48);
         this.multiplier.position.set(w - margin - this.multiplier.w, top + (HEADER - this.multiplier.h) / 2);
         this.description.visible = this.description.x + this.description.width < this.multiplier.x - 20;
+        // lazer's aboveColumnsContent: the customisation panel hangs from the top right.
+        const panelTop = top + HEADER + 15;
+        this.customisation.position.set(Math.max(16, w - margin - CUSTOMISATION_PANEL_WIDTH), panelTop);
+        this.customisation.setMaxHeight(h - FOOTER - 15 - panelTop);
+        this.customisationBlocker.clear().rect(0, 0, w, h).fill({ color: 0x000000, alpha: 0 });
+        this.customisationBlocker.hitArea = new Rectangle(0, 0, w, h);
 
         // lazer anchors the column flow to the bottom: the panels end just
         // above the footer and the column bodies run on down behind it to
@@ -174,6 +202,9 @@ export class ModSelectOverlay extends Overlay {
 
     protected popIn(): void {
         this.relayout();
+        this.customisation.state = 'collapsed';
+        this.customisation.alpha = 0;
+        tween(this.customisation, { alpha: 1 }, { duration: 300, ease: 'OutQuint' });
         this.headerLayer.y = -HEADER;
         this.headerLayer.alpha = 0;
         tween(this.headerLayer, { y: 0, alpha: 1 }, { duration: 400, ease: 'OutQuint' });
@@ -190,11 +221,18 @@ export class ModSelectOverlay extends Overlay {
     protected async popOut(): Promise<void> {
         tween(this.headerLayer, { y: -HEADER, alpha: 0 }, { duration: 300, ease: 'OutQuint' });
         tween(this.footerLayer, { y: FOOTER }, { duration: 300, ease: 'OutQuint' });
+        this.customisation.state = 'collapsed';
+        tween(this.customisation, { alpha: 0 }, { duration: 300, ease: 'OutQuint' });
         this.columns.forEach((c, i) => tween(c, { y: this.columnY[i] + 120 }, { duration: 300, ease: 'OutQuint' }));
         await tween(this.columnLayer, { alpha: 0 }, { duration: 250, ease: 'OutQuint' }).finished;
     }
 
     override onKey(e: KeyboardEvent, action: Action | null): boolean {
+        if (this.customisation.expanded) {
+            // lazer: the expanded panel takes Back (collapse) and blocks every other key.
+            if (action === 'back') this.customisation.state = 'collapsed';
+            return true;
+        }
         if (action === 'back' || action === 'toggleMods' || action === 'select') {
             this.hide();
             return true;

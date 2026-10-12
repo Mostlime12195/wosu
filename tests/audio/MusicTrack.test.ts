@@ -314,6 +314,29 @@ describe('MusicTrack', () => {
         expect(track.usesTimeStretch).toBe(false);
     });
 
+    it('custom-rate Nightcore keeps its pitch through the worklet (lazer ModNightcore)', async () => {
+        const { ctx, track } = await makeTrack({ numberOfChannels: 2 });
+        const worklet = installWorklet(ctx);
+        MusicTrack.loadStretch = loadRealStretch;
+        // 1.2x speed at the 1.5x nightcore pitch: tempo 1.2, transposed up 12·log2(1.5) semitones.
+        await track.setRate(1.2, false, 1.5);
+        expect(track.usesTimeStretch).toBe(true);
+        expect(track.playbackRate).toBe(1.2);
+        track.play();
+        const node = worklet.nodes[0];
+        expect(node.startMessages[0][3]).toBe(1.2);
+        expect(node.startMessages[0][4] as number).toBeCloseTo(12 * Math.log2(1.5), 9);
+        // Default NC (pitch = speed): the worklet owns the song now, so it transposes by the rate.
+        await track.setRate(1.5, false, 1.5);
+        expect(node.startMessages[node.startMessages.length - 1][3]).toBe(1.5);
+        expect(node.startMessages[node.startMessages.length - 1][4] as number).toBeCloseTo(12 * Math.log2(1.5), 9);
+        // DT keeps pitch: worklet, no transposition.
+        await track.setRate(1.3, true, 1);
+        expect(node.startMessages[node.startMessages.length - 1][3]).toBe(1.3);
+        expect(node.startMessages[node.startMessages.length - 1][4]).toBe(0);
+        track.dispose();
+    });
+
     it('stretch path finishes naturally and releases the DSP output', async () => {
         const { ctx, track } = await makeTrack({ duration: 0.05 });
         installWorklet(ctx);

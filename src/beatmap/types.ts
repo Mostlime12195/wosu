@@ -34,6 +34,10 @@ export interface TimingPoint {
     uninherited: boolean;
     kiai: boolean;
     omitFirstBarLine: boolean;
+    /** A red line's beat length before lazer's 6–60000 ms clamp (only when it was clamped; stable doesn't clamp). */
+    rawBeatLength?: number;
+    /** False for an inherited point whose beat length is NaN: mappers use it to stop slider ticks (lazer's DifficultyControlPoint.GenerateTicks). */
+    generateTicks?: boolean;
 }
 
 /**
@@ -52,6 +56,10 @@ export interface ControlPoint {
     sampleIndex: number;
     volume: number;
     kiai: boolean;
+    /** The governing red line's unclamped beat length, when it differs (stable mechanics use it). */
+    rawBeatLength?: number;
+    /** Sliders starting here get ticks (false after a NaN inherited point; any red line resets it). */
+    generateTicks?: boolean;
 }
 
 export type CurveType = 'B' | 'L' | 'P' | 'C';

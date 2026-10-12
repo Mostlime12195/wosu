@@ -1,5 +1,7 @@
 import { Graphics, type Text } from 'pixi.js';
 import type { Game } from '../../app/Game';
+import { Bindable } from '../../core/Bindable';
+import { collections } from '../../storage/Collections';
 import { formatNumber } from '../../core/math';
 import type { SongSort } from '../../settings/Settings';
 import { Dropdown, type DropdownItem } from '../../ui/Dropdown';
@@ -11,6 +13,9 @@ import { UIComponent } from '../../ui/UIComponent';
 import { EDGE_HIDE, WEDGE_RADIUS } from './visuals';
 
 export const FILTER_HEIGHT = 96;
+
+/** lazer's ManageCollectionsFilterMenuItem: never selected, opens the dialog. */
+const MANAGE_ITEM = '\u0000manage';
 
 const SORT_ITEMS: DropdownItem<SongSort>[] = [
     { value: 'title', label: 'Title' },
@@ -48,6 +53,11 @@ export class SearchTextBox extends TextBox {
 export class FilterControl extends UIComponent {
     readonly search: SearchTextBox;
     private readonly sort: Dropdown<SongSort>;
+    /** lazer's CollectionDropdown: "All beatmaps", each collection, "Manage collections…". */
+    private readonly collection: Dropdown<string>;
+    private readonly collectionValue = new Bindable<string>('');
+    /** Picked "Manage collections…" in the collection dropdown. */
+    onManageCollections: (() => void) | null = null;
     private readonly bg = new Graphics();
     private readonly sortCaption: Text;
     private readonly count: Text;
@@ -71,11 +81,24 @@ export class FilterControl extends UIComponent {
             fontSize: 17,
         });
         this.sort = new Dropdown(SORT_ITEMS, game.settings.songSort, Colors.blue, { shear: SHEAR });
+        const store = collections();
+        this.collection = new Dropdown(this.collectionItems(), this.collectionValue, Colors.blue, { shear: SHEAR });
+        this.disposer.add(store.filter.bind(v => (this.collectionValue.value = v), true));
+        this.disposer.add(this.collectionValue.bind((v, prev) => {
+            if (v === MANAGE_ITEM) {
+                // Roll back like lazer, then open the dialog.
+                this.collectionValue.value = prev === MANAGE_ITEM ? '' : prev;
+                this.onManageCollections?.();
+                return;
+            }
+            store.filter.value = v;
+        }));
+        this.disposer.add(store.changed.add(() => this.collection.setItems(this.collectionItems())));
         this.sortCaption = label('sort by', { size: 13, weight: '700', color: Colors.blueLight });
         this.sortCaption.anchor.set(0, 0.5);
         this.count = label('', { size: 13, weight: '600', color: Colors.grayC });
         this.count.anchor.set(1, 0.5);
-        this.addChild(this.bg, this.search, this.sortCaption, this.sort, this.count);
+        this.addChild(this.bg, this.search, this.sortCaption, this.sort, this.collection, this.count);
         // Clicks on the backdrop shouldn't fall through to the carousel.
         this.eventMode = 'static';
         this.resize(600, FILTER_HEIGHT);
@@ -88,9 +111,18 @@ export class FilterControl extends UIComponent {
         this.relayout();
     }
 
-    /** Close the sort menu (it lives in the popup layer, above every screen). */
+    private collectionItems(): DropdownItem<string>[] {
+        return [
+            { value: '', label: 'All beatmaps' },
+            ...collections().all.map(c => ({ value: c.id, label: c.name })),
+            { value: MANAGE_ITEM, label: 'Manage collections…' },
+        ];
+    }
+
+    /** Close the sort/collection menus (they live in the popup layer, above every screen). */
     closeMenus(): void {
         this.sort.closeMenu();
+        this.collection.closeMenu();
     }
 
     /** `shown`: difficulties currently listed; `filtered`: a query is active. */
@@ -120,7 +152,15 @@ export class FilterControl extends UIComponent {
         const rowY = 12 + 40 + 10 + 13;
         this.sortCaption.position.set(left + 2, rowY);
         this.sort.position.set(left + this.sortCaption.width + 10, rowY - 13);
-        this.sort.resize(Math.min(180, Math.max(120, w * 0.3)), 26);
+        this.sort.resize(Math.min(180, Math.max(110, w * 0.27)), 26);
+        // Collection dropdown fills what the count leaves (lazer puts it beside sort/group).
+        const colX = this.sort.x + this.sort.w + 10;
+        let colW = Math.min(220, w - right - Math.max(90, this.count.width) - 12 - colX);
+        // Narrow: the filter matters more than the count.
+        this.count.visible = colW >= 100;
+        if (!this.count.visible) colW = Math.min(220, w - right - colX);
+        this.collection.position.set(colX, rowY - 13);
+        this.collection.resize(Math.max(80, colW), 26);
         this.count.position.set(w - right, rowY);
     }
 }

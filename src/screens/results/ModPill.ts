@@ -10,20 +10,25 @@ const CATEGORY_COLOR: Record<ModCategory, number> = {
     automation: 0x66ccff,
 };
 
-/** Compact mod acronym pill (results panel only). */
+/**
+ * Compact mod acronym pill (results panel only). `extended` is lazer's
+ * ExtendedIconInformation: a custom rate reads "DT 1.30x".
+ */
 export class ModPill extends UIComponent {
     private readonly bg = new Graphics();
     private readonly text: Text;
 
-    constructor(acronym: ModAcronym) {
+    constructor(acronym: ModAcronym, extended = '') {
         super();
-        this.text = label(acronym, { size: 12, weight: '800', color: 0x16161c });
+        const caption = extended ? `${acronym} ${extended}` : acronym;
+        this.text = label(caption, { size: 12, weight: '800', color: 0x16161c });
         this.text.anchor.set(0.5);
         this.addChild(this.bg, this.text);
-        this.tooltip = modInfo(acronym).name;
+        this.tooltip = extended ? `${modInfo(acronym).name} (${extended})` : modInfo(acronym).name;
         this.eventMode = 'static';
-        this.bg.roundRect(0, 0, 36, 20, 10).fill(CATEGORY_COLOR[modInfo(acronym).category]);
-        this.resize(36, 20);
+        const w = extended ? Math.ceil(this.text.width + 16) : 36;
+        this.bg.roundRect(0, 0, w, 20, 10).fill(CATEGORY_COLOR[modInfo(acronym).category]);
+        this.resize(w, 20);
     }
 
     protected override onResize(w: number, h: number): void {

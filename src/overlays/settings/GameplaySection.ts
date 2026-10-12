@@ -1,4 +1,5 @@
 import type { Game } from '../../app/Game';
+import type { GameplayMechanics } from '../../gameplay/scoring/mechanics';
 import type { HudVisibility, KeyOverlayStyle } from '../../settings/Settings';
 import { checkboxRow, dropdownRow, mult, pct, sliderRow } from './rows';
 import type { SectionDef } from './types';
@@ -63,6 +64,13 @@ export function gameplaySection(game: Game): SectionDef {
             {
                 title: 'General',
                 rows: [
+                    dropdownRow<GameplayMechanics>('Gameplay mechanics', [
+                        { value: 'lazer', label: 'osu!lazer' },
+                        { value: 'stable', label: 'osu!stable' },
+                    ], s.gameplayMechanics, {
+                        description: 'Note lock, slider, spinner and health rules. lazer: a later note is only locked until the earlier one\'s time, late slider heads keep the ticks they passed, missed slider ends cost no health. stable: classic note lock, the legacy slider end and stable\'s spinner and HP rules. Applies from the next play.',
+                        keywords: 'notelock note lock classic stable lazer slider spinner hp health drain mechanics rules',
+                    }),
                     checkboxRow('Fullscreen when playing', s.fullscreenOnPlay),
                     sliderRow('Hold-to-confirm activation time', s.holdToConfirmMs, v => `${Math.round(v)} ms`, {
                         description: 'How long to hold the pause button or the quick retry key before it acts.',

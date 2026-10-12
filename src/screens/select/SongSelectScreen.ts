@@ -1,4 +1,4 @@
-import { Container, Texture, type FederatedPointerEvent } from 'pixi.js';
+import { Container, Texture, type FederatedPointerEvent, type Text } from 'pixi.js';
 import type { Selection } from '../../app/Game';
 import type { NowPlaying } from '../../app/MusicController';
 import { Screen } from '../../app/Screen';
@@ -7,9 +7,11 @@ import type { DifficultySummary } from '../../beatmap/types';
 import { clamp } from '../../core/math';
 import type { MusicTrack } from '../../audio/MusicTrack';
 import { delay, tween, tweener, type Tween } from '../../core/Tweener';
-import { playbackRate, preservesPitch } from '../../gameplay/mods';
+import { audioPitch, playbackRate, preservesPitch } from '../../gameplay/mods';
 import type { Action } from '../../input/bindings';
 import { ModSelectOverlay } from '../../overlays/mods/ModSelectOverlay';
+import { collections } from '../../storage/Collections';
+import { ContextMenu } from '../../ui/ContextMenu';
 import { SHEAR } from '../../ui/ShearedButton';
 import { label } from '../../ui/text';
 import { Colors } from '../../ui/theme';
@@ -17,15 +19,21 @@ import { uiSounds } from '../../ui/UIContext';
 import { OsuLogo } from '../menu/OsuLogo';
 import { BeatmapInfoWedge } from './BeatmapInfoWedge';
 import { BeatmapOptionsOverlay } from './BeatmapOptions';
-import { BeatmapCarousel } from './carousel/BeatmapCarousel';
+import { BeatmapCarousel, type CarouselMenuTarget } from './carousel/BeatmapCarousel';
+import { BeatmapDetailsDialog } from './BeatmapDetailsDialog';
+import { diffMenu, setMenu, type CarouselMenuHost } from './CarouselMenus';
 import { EmptyLibraryState } from './EmptyLibrary';
 import { filterSets, parseQuery, sortEntries } from './filter';
 import { FILTER_HEIGHT, FilterControl } from './FilterControl';
 import { FOOTER_HEIGHT, SongSelectFooter } from './Footer';
-import { LocalLeaderboard } from './Leaderboard';
+import { LocalLeaderboard, scoreKeyFor } from './Leaderboard';
+import { ManageCollectionsDialog } from './ManageCollectionsDialog';
 
 /** Music/background/leaderboard follow the selection after this pause (lazer debounces too). */
 const SELECTION_DEBOUNCE = 150;
+const NO_MATCH_SEARCH = 'Try a different search, or press Esc to clear it.';
+const NO_MATCH_COLLECTION = 'Nothing in this collection matches. Add beatmaps from their right-click menu.';
+
 /** Below this logical width the wedge stacks above the carousel. */
 const NARROW = 900;
 
@@ -53,7 +61,10 @@ export class SongSelectScreen extends Screen {
     private empty!: EmptyLibraryState;
     private modSelect!: ModSelectOverlay;
     private options!: BeatmapOptionsOverlay;
+    private manageCollections!: ManageCollectionsDialog;
+    private detailsDialog!: BeatmapDetailsDialog;
     private readonly noMatches = new Container();
+    private noMatchesBody: Text | null = null;
     private readonly leftArea = new Container();
     private readonly rightArea = new Container();
     private readonly footerSlot = new Container();
@@ -104,19 +115,22 @@ export class SongSelectScreen extends Screen {
         this.modSelect = new ModSelectOverlay(g);
         this.options = new BeatmapOptionsOverlay(g, [
             { icon: 'trash', first: 'Delete', second: 'this beatmap set', color: 0xc23a5a, action: () => void this.confirmDelete(), enabled: () => !!this.current },
-            { icon: 'eraser', first: 'Clear', second: 'local scores', color: Colors.purpleDark, action: () => void this.confirmClearScores(), enabled: () => this.leaderboard.scores.length > 0 },
+            { icon: 'eraser', first: 'Clear', second: 'local scores', color: Colors.purpleDark, action: () => void this.confirmClearScores(this.current?.set, this.current?.diff), enabled: () => this.leaderboard.scores.length > 0 },
             { icon: 'fileImport', first: 'Import', second: '.osz files', color: 0xd98a00, action: () => g.pickFiles() },
             { icon: 'download', first: 'Browse', second: 'beatmap listing', color: Colors.greenDark, action: () => g.listing.show() },
         ]);
 
-        this.addChild(this.leftArea, this.rightArea, this.empty, this.footerSlot, this.logoSlot, this.options, this.modSelect);
+        this.manageCollections = new ManageCollectionsDialog(g);
+        this.detailsDialog = new BeatmapDetailsDialog(g);
+
+        this.addChild(this.leftArea, this.rightArea, this.empty, this.footerSlot, this.logoSlot, this.options, this.modSelect, this.manageCollections, this.detailsDialog);
         this.eventMode = 'passive';
         this.wire();
     }
 
     private buildNoMatches(): void {
         const title = label('No matching beatmaps', { size: 22, weight: '700' });
-        const body = label('Try a different search, or press Esc to clear it.', { size: 14, weight: '500', color: Colors.grayA });
+        const body = this.noMatchesBody = label(NO_MATCH_SEARCH, { size: 14, weight: '500', color: Colors.grayA });
         title.anchor.set(0.5, 0);
         body.anchor.set(0.5, 0);
         body.y = 36;
@@ -165,6 +179,8 @@ export class SongSelectScreen extends Screen {
             this.onSelected(e.set, d);
         });
         this.carousel.activated.add((e, d) => this.startPlay(e.set, d));
+        this.carousel.menuRequested.add((t, x, y) => this.openContextMenu(t, x, y));
+        this.filter.onManageCollections = () => this.manageCollections.open();
 
         const d = this.disposer;
         d.add(g.mods.bind(m => {
@@ -173,6 +189,12 @@ export class SongSelectScreen extends Screen {
         }, true));
         d.add(g.settings.songSort.bind(() => (this.filterDirty = true)));
         d.add(g.library.changed.add(() => (this.filterDirty = true)));
+        // lazer's collection filter: membership edits and picks re-filter.
+        const store = collections();
+        d.add(store.changed.add(() => {
+            if (store.filter.value) this.filterDirty = true;
+        }));
+        d.add(store.filter.bind(() => (this.filterDirty = true)));
         d.add(g.selection.bind(sel => this.onExternalSelection(sel)));
         d.add(g.music.current.bind(n => this.onMusicChanged(n)));
         d.add(g.toolbarVisible.bind(() => this.relayout()));
@@ -189,7 +211,10 @@ export class SongSelectScreen extends Screen {
     private refilter(): void {
         this.filterDirty = false;
         const sets = this.game.library.sets;
-        const entries = sortEntries(filterSets(sets, parseQuery(this.query)), this.game.settings.songSort.value);
+        const criteria = parseQuery(this.query);
+        const collectionId = collections().filter.value;
+        if (collectionId) criteria.collection = collections().members(collectionId);
+        const entries = sortEntries(filterSets(sets, criteria), this.game.settings.songSort.value);
         if (this.current && !this.game.library.get(this.current.set.key)) {
             // The selected set was deleted while hidden by the search.
             this.current = null;
@@ -207,8 +232,9 @@ export class SongSelectScreen extends Screen {
         else if (this.current && !this.pending) this.wedge.setBeatmap(this.current.set, this.current.diff);
         let diffs = 0;
         for (const x of entries) diffs += x.diffs.length;
-        this.filter.setCount(diffs, this.query.trim().length > 0);
+        this.filter.setCount(diffs, this.query.trim().length > 0 || !!criteria.collection);
         this.noMatches.visible = sets.length > 0 && entries.length === 0;
+        if (this.noMatches.visible && this.noMatchesBody) this.noMatchesBody.text = criteria.collection && !this.query.trim() ? NO_MATCH_COLLECTION : NO_MATCH_SEARCH;
         this.setLibraryEmpty(sets.length === 0);
     }
 
@@ -365,9 +391,9 @@ export class SongSelectScreen extends Screen {
     // Options
     // ------------------------------------------------------------------
 
-    private async confirmDelete(): Promise<void> {
-        const sel = this.current;
-        if (!sel) return;
+    private async confirmDelete(set: LibrarySet | undefined = this.current?.set): Promise<void> {
+        if (!set) return;
+        const sel = { set };
         const ok = await this.game.dialog.confirm({
             title: 'Delete this beatmap set?',
             text: `${sel.set.artist} - ${sel.set.title} and all of its difficulties will be removed from your library.`,
@@ -386,13 +412,17 @@ export class SongSelectScreen extends Screen {
         }
     }
 
-    private async confirmClearScores(): Promise<void> {
-        const scores = this.leaderboard.scores.slice();
-        const sel = this.current;
-        if (!scores.length || !sel) return;
+    /** lazer's BeatmapClearScoresDialog for one difficulty. */
+    private async confirmClearScores(set: LibrarySet | undefined, diff: DifficultySummary | undefined): Promise<void> {
+        if (!set || !diff) return;
+        const scores = await this.game.scores.forBeatmap(scoreKeyFor(set, diff));
+        if (!scores.length) {
+            this.game.notifications.info(`There are no local scores on ${diff.version}.`);
+            return;
+        }
         const ok = await this.game.dialog.confirm({
-            title: 'Clear local scores?',
-            text: `All ${scores.length} local score${scores.length === 1 ? '' : 's'} on ${sel.diff.version} will be deleted.`,
+            title: 'Clear all local scores?',
+            text: `All ${scores.length} local score${scores.length === 1 ? '' : 's'} on ${set.artist} - ${set.title} [${diff.version}] will be deleted.`,
             confirmText: 'Yes, clear them',
             cancelText: 'No, keep them',
             danger: true,
@@ -401,6 +431,79 @@ export class SongSelectScreen extends Screen {
         if (!ok) return;
         for (const s of scores) if (s.id !== undefined) await this.game.scores.delete(s.id);
         this.leaderboard.refresh();
+        this.game.notifications.success(`Cleared ${scores.length} local score${scores.length === 1 ? '' : 's'} on ${diff.version}`);
+    }
+
+    /** lazer's "Hide": the difficulty leaves the library (restorable from the set's menu). */
+    private async confirmDeleteDifficulty(set: LibrarySet, diff: DifficultySummary): Promise<void> {
+        if (!this.game.library.canDeleteDifficulty(set.key)) return;
+        const ok = await this.game.dialog.confirm({
+            title: 'Delete this difficulty?',
+            text: `${set.artist} - ${set.title} [${diff.version}] will be removed from your library. "Restore all hidden" in the set's menu brings it back.`,
+            confirmText: 'Yes, delete it',
+            cancelText: 'No, keep it',
+            danger: true,
+            icon: 'trash',
+        });
+        if (!ok) return;
+        try {
+            if (await this.game.library.deleteDifficulty(set.key, diff.file)) this.game.notifications.success(`Deleted ${diff.version} from ${set.artist} - ${set.title}`);
+        } catch (e) {
+            console.warn('delete difficulty failed', e);
+            this.game.notifications.error('Could not delete the difficulty.');
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Context menus (lazer's carousel panel ContextMenuItems)
+    // ------------------------------------------------------------------
+
+    private readonly menuHost: CarouselMenuHost = {
+        isExpanded: set => this.carousel.isExpanded(set.key),
+        expand: set => this.carousel.selectByKey(set.key),
+        play: (set, diff) => {
+            const live = this.game.library.get(set.key);
+            if (!live) return;
+            const d = (diff && live.difficulties.find(x => x.file === diff.file))
+                ?? (this.current?.set.key === live.key ? live.difficulties.find(x => x.file === this.current!.diff.file) : undefined)
+                ?? live.difficulties[0];
+            if (!d) return;
+            if (this.filterDirty) this.refilter();
+            this.carousel.selectByKey(live.key, d.file, { silent: true });
+            this.startPlay(live, d);
+        },
+        details: (set, diff) => {
+            if (set.onlineSetId) void this.game.listing.showSet(set.onlineSetId);
+            else this.detailsDialog.open(set, diff);
+        },
+        copyLink: url => void this.copyLink(url),
+        manageCollections: addOnCreate => this.manageCollections.open({ addOnCreate }),
+        clearScores: (set, diff) => void this.confirmClearScores(set, diff),
+        deleteSet: set => void this.confirmDelete(set),
+        deleteDifficulty: (set, diff) => void this.confirmDeleteDifficulty(set, diff),
+        restoreDifficulties: set => void this.game.library.restoreDifficulties(set.key).then(n => {
+            if (n) this.game.notifications.success(`Restored ${n} difficult${n === 1 ? 'y' : 'ies'} of ${set.artist} - ${set.title}`);
+        }),
+        canDeleteDifficulty: set => this.game.library.canDeleteDifficulty(set.key),
+    };
+
+    private openContextMenu(t: CarouselMenuTarget, x: number, y: number): void {
+        if (!this.isCurrent) return;
+        const set = this.game.library.get(t.entry.set.key);
+        if (!set) return;
+        const diff = t.diff ? set.difficulties.find(d => d.file === t.diff!.file) : null;
+        if (t.diff && !diff) return;
+        this.filter.search.blur();
+        ContextMenu.open(diff ? diffMenu(this.menuHost, set, diff) : setMenu(this.menuHost, set), x, y);
+    }
+
+    private async copyLink(url: string): Promise<void> {
+        try {
+            await navigator.clipboard.writeText(url);
+            this.game.notifications.info('Link copied to clipboard.');
+        } catch {
+            this.game.notifications.error('Could not copy the link.');
+        }
     }
 
     // ------------------------------------------------------------------
@@ -443,6 +546,8 @@ export class SongSelectScreen extends Screen {
         this.logoSlot.position.set(Math.round(w - d * 0.34), Math.round(h - d * 0.16));
         this.modSelect.resize(w, h);
         this.options.resize(w, h);
+        this.manageCollections.resize(w, h);
+        this.detailsDialog.resize(w, h);
     }
 
     /** Filter control on top; the carousel runs on behind it and the footer. */
@@ -492,6 +597,9 @@ export class SongSelectScreen extends Screen {
     }
 
     private closePopups(): void {
+        ContextMenu.closeCurrent();
+        this.manageCollections.hide();
+        this.detailsDialog.hide();
         this.modSelect.hide();
         this.options.hide();
         this.filter.search.blur();
@@ -594,12 +702,12 @@ export class SongSelectScreen extends Screen {
         const track = this.game.music.currentTrack;
         if (!track || !this.isCurrent) return;
         const mods = this.game.mods.value;
-        const rate = playbackRate(mods), pitch = preservesPitch(mods);
-        const key = `${rate}|${pitch}`;
+        const rate = playbackRate(mods), pitch = preservesPitch(mods), freq = audioPitch(mods);
+        const key = `${rate}|${freq}`;
         if (track === this.rateTrack && key === this.rateKey) return;
         this.rateTrack = track;
         this.rateKey = key;
-        void track.setRate(rate, pitch).catch(() => {});
+        void track.setRate(rate, pitch, freq).catch(() => {});
     }
 
     private resetMusicRate(): void {
