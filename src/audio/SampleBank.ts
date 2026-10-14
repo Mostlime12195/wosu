@@ -51,6 +51,8 @@ export interface PlayOptions {
 
 export interface LoopHandle {
     setVolume(volume: number): void;
+    /** Playback rate (pitch and speed together, like osu!'s sample frequency). */
+    setRate(rate: number): void;
     stop(): void;
 }
 
@@ -151,7 +153,7 @@ export class SampleBank {
     /** Loop any decoded buffer; null gives a silent handle. */
     startLoopBuffer(buffer: AudioBuffer | null, volume: number, opts: PlayOptions = {}): LoopHandle {
         const ctx = this.engine.context;
-        if (!buffer) return { setVolume() { /* no sample */ }, stop() { /* no sample */ } };
+        if (!buffer) return { setVolume() { /* no sample */ }, setRate() { /* no sample */ }, stop() { /* no sample */ } };
         const src = ctx.createBufferSource();
         src.buffer = buffer;
         src.loop = true;
@@ -163,9 +165,15 @@ export class SampleBank {
         out.connect(this.engine.effectsBus);
         src.start();
         let stopped = false;
+        let rate = src.playbackRate.value;
         return {
             setVolume: (v: number) => {
                 if (!stopped) setParam(gain.gain, Math.max(0, Math.min(1, v)), ctx.currentTime, 0.01);
+            },
+            setRate: (r: number) => {
+                if (stopped || !(r > 0) || Math.abs(rate - r) < 1e-4) return;
+                rate = r;
+                setParam(src.playbackRate, r, ctx.currentTime, 0.01);
             },
             stop: () => {
                 if (stopped) return;

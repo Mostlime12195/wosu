@@ -7,7 +7,7 @@ import type { DifficultySummary } from '../../beatmap/types';
 import { clamp } from '../../core/math';
 import type { MusicTrack } from '../../audio/MusicTrack';
 import { delay, tween, tweener, type Tween } from '../../core/Tweener';
-import { audioPitch, playbackRate, preservesPitch } from '../../gameplay/mods';
+import { audioPitch, NO_MODS, playbackRate, preservesPitch } from '../../gameplay/mods';
 import type { Action } from '../../input/bindings';
 import { ModSelectOverlay } from '../../overlays/mods/ModSelectOverlay';
 import { collections } from '../../storage/Collections';
@@ -421,6 +421,8 @@ export class SongSelectScreen extends Screen {
                 count100: r.count100,
                 count50: r.count50,
                 countMiss: r.countMiss,
+                countGeki: r.countGeki,
+                countKatu: r.countKatu,
                 score: r.score,
                 maxCombo: r.maxCombo,
                 perfect: r.countMiss === 0 && r.maxCombo >= sel.diff.maxCombo,
@@ -788,52 +790,42 @@ export class SongSelectScreen extends Screen {
         if (track && track === this.game.music.currentTrack) void track.setRate(1, true).catch(() => {});
     }
 
-    override onKey(e: KeyboardEvent, action: Action | null): boolean {
-        switch (action) {
-            case 'back':
-                // lazer's search box always has focus, so Esc clears it first.
-                if (this.filter.search.value) this.filter.search.setValue('');
-                else this.goBack();
-                return true;
-            case 'select':
-                this.playSelected();
-                return true;
-            case 'up':
-                this.carousel.moveDiff(-1);
-                return true;
-            case 'down':
-                this.carousel.moveDiff(1);
-                return true;
-            case 'left':
-                this.carousel.moveSet(-1);
-                return true;
-            case 'right':
-                this.carousel.moveSet(1);
-                return true;
-            case 'pageUp':
-                this.carousel.scrollPage(-1);
-                return true;
-            case 'pageDown':
-                this.carousel.scrollPage(1);
-                return true;
-            case 'home':
-                this.carousel.first();
-                return true;
-            case 'end':
-                this.carousel.last();
-                return true;
-            case 'random':
-                this.random();
-                return true;
-            case 'randomRewind':
-                this.carousel.rewind();
-                return true;
-            case 'toggleMods':
-                this.modSelect.toggle();
-                return true;
-            case 'deleteItem':
-                void this.confirmDelete();
-                return true;
+    /** lazer's DeselectAllMods; with a search typed it deletes a character instead (type-to-search). */
+    private deselectAllMods(): void {
+        const search = this.filter.search;
+        if (search.value) search.setValue(search.value.slice(0, -1));
+        else if (this.game.mods.value.size) this.game.mods.value = NO_MODS;
+    }
+
+    override onKey(e: KeyboardEvent, _action: Action | null): boolean {
+        const is = (a: Action) => this.game.input.matches(e, a);
+        if (is('back')) {
+            // lazer's search box always has focus, so Esc clears it first.
+            if (this.filter.search.value) this.filter.search.setValue('');
+            else this.goBack();
+            return true;
+        }
+        const handlers: [Action, () => void][] = [
+            ['select', () => this.playSelected()],
+            ['toggleMods', () => this.modSelect.toggle()],
+            ['random', () => this.random()],
+            ['randomRewind', () => this.carousel.rewind()],
+            ['toggleBeatmapOptions', () => this.options.toggle()],
+            ['deselectAllMods', () => this.deselectAllMods()],
+            ['deleteItem', () => void this.confirmDelete()],
+            ['up', () => this.carousel.moveDiff(-1)],
+            ['down', () => this.carousel.moveDiff(1)],
+            ['left', () => this.carousel.moveSet(-1)],
+            ['right', () => this.carousel.moveSet(1)],
+            ['pageUp', () => this.carousel.scrollPage(-1)],
+            ['pageDown', () => this.carousel.scrollPage(1)],
+            ['home', () => this.carousel.first()],
+            ['end', () => this.carousel.last()],
+        ];
+        for (const [action, run] of handlers) {
+            if (!is(action)) continue;
+            run();
+            return true;
         }
         // Type-to-search: printable keys go to the search box.
         if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && e.key !== ' ' && !this.libraryEmpty) {

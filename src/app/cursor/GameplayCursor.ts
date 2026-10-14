@@ -1,5 +1,6 @@
 import { Container, Sprite, Texture } from 'pixi.js';
 import { STABLE_MAGIC_SCALE, type CursorSkin } from './CursorSkin';
+import { CursorRipples } from './CursorRipples';
 import { CursorTrail } from './CursorTrail';
 import { Anim, Ease } from './transforms';
 
@@ -38,12 +39,17 @@ const LEGACY_EXPAND: ExpandStyle = {
  * - shown: container fades to 1 over 300ms OutQuint, cursor scales to 1
  *   over 400ms OutQuint; hidden (paused, touch): fades to 0.05 over
  *   450ms OutQuint and scales to 0.8;
- * - the trail fades over 200ms when toggled.
+ * - the trail fades over 200ms when toggled;
+ * - with ripples on, each press leaves one under the cursor (CursorRipples).
  */
 export class GameplayCursor extends Container {
     trail: CursorTrail | null = null;
     private readonly sprite = new Sprite(Texture.EMPTY);
     private readonly middle = new Sprite(Texture.EMPTY);
+    /** Between the trail and the cursor, like lazer's OsuCursorContainer. */
+    private readonly ripples = new CursorRipples();
+    /** Presses waiting for a ripple at the next update (after this frame's moveTo). */
+    private pendingRipples = 0;
     private readonly fadeAnim = new Anim(1);
     private readonly popScaleAnim = new Anim(1);
     private readonly expandAnim = new Anim(1);
@@ -57,6 +63,8 @@ export class GameplayCursor extends Container {
     private x0 = 0;
     private y0 = 0;
 
+    /** OsuSetting ShowCursorRipples. */
+    ripplesEnabled = false;
     /** OsuSetting "cursor expand on press" (on top of the skin's CursorExpand). */
     expandEnabled = true;
     /** OsuSetting.GameplayCursorSize. */
@@ -71,7 +79,7 @@ export class GameplayCursor extends Container {
     constructor() {
         super();
         this.eventMode = 'none';
-        this.addChild(this.sprite, this.middle);
+        this.addChild(this.ripples, this.sprite, this.middle);
     }
 
     /** Use the skin's cursor, middle and trail (rebuilds the trail; keeps position and state). */
@@ -85,6 +93,7 @@ export class GameplayCursor extends Container {
         this.middle.texture = skin.middle?.texture ?? Texture.EMPTY;
         this.middle.visible = !!skin.middle;
         this.middle.anchor.set(anchor);
+        this.ripples.texture = skin.ripple;
         if (!skin.rotate) this.spin = 0;
         if (this.expandAnim.end !== 1) this.expandAnim.set(this.downCount > 0 && this.canExpand ? this.style.pressed : 1);
 
@@ -142,8 +151,16 @@ export class GameplayCursor extends Container {
     setDownCount(count: number): void {
         const prev = this.downCount;
         this.downCount = count;
-        if (count > prev) this.expand();
+        if (count > prev) {
+            this.expand();
+            this.ripple(count - prev);
+        }
         else if (count === 0 && prev > 0) this.contract();
+    }
+
+    /** CursorRippleVisualiser.OnPressed: `count` presses ripple at the cursor (when enabled). */
+    ripple(count = 1): void {
+        if (this.ripplesEnabled) this.pendingRipples += count;
     }
 
     private expand(): void {
@@ -160,6 +177,8 @@ export class GameplayCursor extends Container {
     /** Clear motion state when the cursor (re)appears for a new play. */
     reset(): void {
         this.downCount = 0;
+        this.pendingRipples = 0;
+        this.ripples.clear();
         this.expandAnim.set(1);
         this.trail?.reset();
     }
@@ -187,6 +206,8 @@ export class GameplayCursor extends Container {
         const expand = this.expandAnim.update(dt);
         const pop = this.popScaleAnim.update(dt);
         if (this.skin?.rotate) this.spin = (this.spin + (dt / REVOLUTION_DURATION) * Math.PI * 2) % (Math.PI * 2);
+        for (; this.pendingRipples > 0; this.pendingRipples--) this.ripples.add(this.x0, this.y0, this.playfieldScale * this.cursorScale);
+        this.ripples.tick(dt);
         const unit = (this.playfieldScale * this.cursorScale * pop) / STABLE_MAGIC_SCALE;
         const c = this.skin?.cursor;
         if (c) {

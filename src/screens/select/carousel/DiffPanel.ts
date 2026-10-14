@@ -6,8 +6,11 @@ import { label, fitText } from '../../../ui/text';
 import { Colors, starColor, starTextColor } from '../../../ui/theme';
 import { Triangles } from '../../../ui/Triangles';
 import { UIComponent } from '../../../ui/UIComponent';
+import type { Grade } from '../../../storage/ScoreStore';
 import type { FilterEntry } from '../filter';
+import { scoreKeyFor } from '../Leaderboard';
 import { drawStarRow, formatStars } from '../visuals';
+import { RANK_BADGE_W, RankBadge } from './RankBadge';
 
 export const DIFF_HEIGHT = 56;
 const RADIUS = 8;
@@ -31,8 +34,10 @@ function starWash(): FillGradient {
 
 /**
  * lazer's DrawableCarouselBeatmap: difficulty icon in the star colour,
- * version + mapper, star rating pill and a ten-star counter. The selected
- * difficulty lights up with triangles in its star colour.
+ * version + mapper, the best local grade (TopLocalRank), star rating pill
+ * and a ten-star counter. The rating follows the selected mods (computed
+ * lazily by the carousel). The selected difficulty lights up with
+ * triangles in its star colour.
  */
 export class DiffPanel extends UIComponent {
     entry: FilterEntry | null = null;
@@ -46,7 +51,14 @@ export class DiffPanel extends UIComponent {
     private readonly version: Text;
     private readonly mapper: Text;
     private readonly starText: Text;
+    private readonly rank = new RankBadge();
     private triangles: Triangles | null = null;
+    /** Local scores key (beatmapKeyOf) of the assigned difficulty. */
+    scoreKey = '';
+    /** Shown rating: mod-adjusted when known, else the base one. */
+    private stars: number | null = null;
+    private starsPending = false;
+    private grade: Grade | null = null;
     selectProgress = 0;
     private drawnSelect = -1;
     onClickPanel: ((entry: FilterEntry, diff: DifficultySummary) => void) | null = null;
@@ -59,16 +71,33 @@ export class DiffPanel extends UIComponent {
         this.starText = label('', { size: 12, weight: '800', color: 0xffffff });
         this.starText.anchor.set(0.5);
         this.hoverWash.alpha = 0;
-        this.addChild(this.bg, this.wash, this.hoverWash, this.decor, this.border, this.version, this.mapper, this.starText);
+        this.addChild(this.bg, this.wash, this.hoverWash, this.decor, this.border, this.version, this.mapper, this.starText, this.rank);
         this.makeInteractive();
         this.resize(460, DIFF_HEIGHT);
     }
 
     assign(entry: FilterEntry, diff: DifficultySummary): void {
         if (this.entry === entry && this.diff === diff) return;
+        if (this.diff !== diff || this.entry?.set !== entry.set) this.scoreKey = scoreKeyFor(entry.set, diff);
         this.entry = entry;
         this.diff = diff;
+        this.stars = diff.stars;
+        this.starsPending = false;
         this.drawnSelect = -1;
+        this.redraw();
+    }
+
+    /**
+     * Per frame from the carousel: the rating to show (mods) and the best
+     * local grade. Redraws only when either changed.
+     */
+    sync(stars: number | null, pending: boolean, grade: Grade | null): void {
+        if (stars === this.stars && pending === this.starsPending && grade === this.grade) return;
+        const recolour = starColor(stars) !== starColor(this.stars);
+        this.stars = stars;
+        this.starsPending = pending;
+        this.grade = grade;
+        if (recolour) this.drawnSelect = -1;
         this.redraw();
     }
 
@@ -77,6 +106,8 @@ export class DiffPanel extends UIComponent {
         this.hoverWash.alpha = 0;
         this.entry = null;
         this.diff = null;
+        this.grade = null;
+        this.rank.setGrade(null);
         if (this.triangles) this.triangles.visible = false;
     }
 
@@ -89,7 +120,8 @@ export class DiffPanel extends UIComponent {
     private redraw(): void {
         const d = this.diff;
         if (!d || !this.decor) return;
-        const color = starColor(d.stars);
+        const stars = this.stars;
+        const color = starColor(stars);
         const h = this._h;
         const g = this.decor;
         g.clear();
@@ -101,13 +133,19 @@ export class DiffPanel extends UIComponent {
         this.version.position.set(54, 8);
         fitText(this.mapper, Math.max(20, this._w - 120 - this.version.width - 54), `mapped by ${this.entry?.set.creator ?? ''}`);
         this.mapper.position.set(54 + this.version.width + 8, 11);
-        // Star pill + ten-star row on the second line.
-        this.starText.text = `★ ${formatStars(d.stars)}`;
-        this.starText.tint = starTextColor(d.stars);
+        // Best local grade, then the star pill + ten-star row on the second line.
+        this.rank.setGrade(this.grade);
+        this.rank.position.set(54, 31);
+        const pillX = this.grade ? 54 + RANK_BADGE_W + 8 : 54;
+        this.starText.text = `★ ${formatStars(stars)}`;
+        this.starText.tint = starTextColor(stars);
         const pillW = this.starText.width + 14;
-        g.roundRect(54, 32, pillW, 16, 8).fill(color);
-        this.starText.position.set(54 + pillW / 2, 40);
-        drawStarRow(g, 54 + pillW + 8, 40, d.stars, 5, 0xffffff);
+        // Still computing the mod-adjusted rating: the base one, dimmed.
+        const pillAlpha = this.starsPending ? 0.55 : 1;
+        g.roundRect(pillX, 32, pillW, 16, 8).fill({ color, alpha: pillAlpha });
+        this.starText.alpha = pillAlpha;
+        this.starText.position.set(pillX + pillW / 2, 40);
+        drawStarRow(g, pillX + pillW + 8, 40, stars, 5, 0xffffff);
         this.drawSelection();
     }
 
@@ -118,7 +156,7 @@ export class DiffPanel extends UIComponent {
         if (p === this.drawnSelect) return;
         this.drawnSelect = p;
         const w = this._w, h = this._h;
-        const color = starColor(d.stars);
+        const color = starColor(this.stars);
         this.bg.clear().roundRect(0, 0, w, h, RADIUS)
             .fill(lerpColor(0x30303e, scaleColor(color, 0.6), p));
         this.bg.alpha = 0.78 + 0.17 * p;

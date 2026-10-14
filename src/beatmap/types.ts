@@ -93,7 +93,10 @@ export interface BeatmapGeneral {
     audioFilename: string;
     audioLeadIn: number;
     previewTime: number; // ms, -1 when unset
+    /** 0 none, 1 normal, 2 half speed, 3 double speed. */
     countdown: number;
+    /** Beats the countdown starts earlier than usual. */
+    countdownOffset: number;
     sampleSet: SampleSet; // default sample set for the map (1 normal unless specified)
     stackLeniency: number;
     mode: number;

@@ -7,6 +7,7 @@ import { UIComponent } from '../../ui/UIComponent';
 const CATEGORY_COLOR: Record<ModCategory, number> = {
     reduction: 0xb2ff66,
     increase: 0xff6666,
+    conversion: 0x8c66ff,
     automation: 0x66ccff,
 };
 

@@ -5,12 +5,17 @@ import { buildPlayableBeatmap } from '../../beatmap/processing';
 import type { DifficultySummary } from '../../beatmap/types';
 import { NO_MODS, modsKey, playbackRate, withSettings, type ModSet } from '../../gameplay/mods';
 
-/** Mods that change the star rating (Hidden/Flashlight don't, in the classic model). */
-const RATING_MODS = ['EZ', 'HR', 'HT', 'DC', 'DT', 'NC'] as const;
+/**
+ * Mods that change the star rating: the difficulty mods (EZ/HR and
+ * Difficulty Adjust's CS/AR/OD/HP overrides, extended limits included)
+ * and the rate mods. Hidden (any setting) and Flashlight don't, in the
+ * classic model.
+ */
+const RATING_MODS = ['EZ', 'HR', 'DA', 'HT', 'DC', 'DT', 'NC'] as const;
 const cache = new Map<string, Promise<number | null>>();
 const CACHE_LIMIT = 200;
 
-/** The subset of `mods` that affects difficulty (with a rate mod's custom speed), or null when none does. */
+/** The subset of `mods` that affects difficulty (with a rate mod's custom speed and DA's values), or null when none does. */
 export function ratingMods(mods: ModSet): ModSet | null {
     const relevant = RATING_MODS.filter(m => mods.has(m));
     return relevant.length ? withSettings(relevant, mods.settings ?? {}) : null;

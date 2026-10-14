@@ -20,6 +20,7 @@ describe('GameplayInput mouse buttons', () => {
             mouseButtons: { value: true },
             keyLeft: { value: 'KeyZ' },
             keyRight: { value: 'KeyX' },
+            keySmoke: { value: 'KeyC' },
         } as unknown as GameSettings;
         input = new GameplayInput(app, settings, () => 0, { x: 0, y: 0 });
         input.enabled = true;
@@ -57,5 +58,21 @@ describe('GameplayInput mouse buttons', () => {
         win.dispatchEvent(pointer('pointerdown', 0, 1));
         win.dispatchEvent(pointer('pointermove', -1, 0));
         expect(input.down.M1).toBe(false);
+    });
+
+    it('holds the smoke key without pressing a gameplay button', () => {
+        const presses: string[] = [];
+        input.pressed.add((_t, _x, _y, b) => presses.push(b));
+        const key = (code: string) => ({ code, repeat: false }) as KeyboardEvent;
+        expect(input.keyDown(key('KeyC'))).toBe(true);
+        expect(input.smoke).toBe(true);
+        expect(input.held).toBe(false);
+        expect(input.keyDown(key('KeyQ'))).toBe(false);
+        input.keyUp(key('KeyC'));
+        expect(input.smoke).toBe(false);
+        input.keyDown(key('KeyC'));
+        input.releaseAll();
+        expect(input.smoke).toBe(false);
+        expect(presses).toEqual([]);
     });
 });

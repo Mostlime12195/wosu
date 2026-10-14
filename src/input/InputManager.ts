@@ -1,7 +1,7 @@
 import { Bindable } from '../core/Bindable';
 import { Signal } from '../core/Signal';
 import type { App } from '../app/App';
-import { actionFor, DEFAULT_BINDINGS, type Action } from './bindings';
+import { actionFor, bindingFromEvent, DEFAULT_BINDINGS, type Action, type Bindings } from './bindings';
 import { PointerLockController, type PointerLockTarget } from './PointerLock';
 import type { TextInputProxy } from './TextInputProxy';
 
@@ -43,7 +43,8 @@ export class InputManager {
     readonly keysDown = new Set<string>();
     /** False until the first pointer event (keeps the cursor hidden at 0,0). */
     pointerSeen = false;
-    bindings: Record<Action, string[]> = DEFAULT_BINDINGS;
+    /** Effective global action bindings (Game keeps them in sync with the settings). */
+    bindings: Bindings = DEFAULT_BINDINGS;
     /** Gameplay pointer lock (high precision mouse / confine); while locked, mouse positions are its virtual cursor. */
     readonly pointerLock: PointerLockController;
 
@@ -65,11 +66,21 @@ export class InputManager {
         window.addEventListener('pointerdown', e => {
             this.onPointer(e);
             this.pointer.down = true;
-        }, opts);
+            this.onMouseButton(e, true);
+        });
         window.addEventListener('pointerup', e => {
             this.onPointer(e);
             this.pointer.down = false;
+            this.onMouseButton(e, false);
+        });
+        // Chorded presses arrive as pointermove with `button` set.
+        window.addEventListener('pointermove', e => {
+            if (e.button > 0) this.onMouseButton(e, (e.buttons & buttonMask(e.button)) !== 0);
         }, opts);
+        // The back/forward buttons would navigate the page when bound (Chrome acts on mouseup).
+        window.addEventListener('mouseup', e => {
+            if (this.handledMouse.delete(e.button)) e.preventDefault();
+        });
         document.addEventListener('pointerleave', () => (this.pointer.inside = false));
         document.addEventListener('pointerenter', () => (this.pointer.inside = true));
         window.addEventListener('keydown', e => this.onKeyDown(e));
@@ -92,6 +103,43 @@ export class InputManager {
         return this.keysDown.has(code);
     }
 
+    /** Whether the event is one of `action`'s bindings (handlers check their own actions with this). */
+    matches(e: Pick<KeyboardEvent, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey' | 'code'>, action: Action): boolean {
+        return this.bindings[action]?.includes(bindingFromEvent(e)) ?? false;
+    }
+
+    /** Whether a key-up ends a hold of `action` (its key without modifiers: those may be released first). */
+    releases(e: Pick<KeyboardEvent, 'code'>, action: Action): boolean {
+        return this.bindings[action]?.some(b => b === e.code || b.endsWith(`+${e.code}`)) ?? false;
+    }
+
+    private readonly mouseDown = new Set<number>();
+    private readonly handledMouse = new Set<number>();
+
+    /**
+     * The middle and side mouse buttons can be bound like keys (lazer's
+     * MouseMiddle / ExtraMouseButton bindings): they're routed through the
+     * key handlers as keydown/keyup of a `Mouse…` code.
+     */
+    private onMouseButton(e: PointerEvent, down: boolean): void {
+        if (e.pointerType !== 'mouse') return;
+        const code = MOUSE_CODES[e.button];
+        if (!code || this.mouseDown.has(e.button) === down) return;
+        const init = { code, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, bubbles: false, cancelable: true };
+        if (down) {
+            this.mouseDown.add(e.button);
+            const ke = new KeyboardEvent('keydown', init);
+            if (this.dispatchKey(ke)) {
+                this.handledMouse.add(e.button);
+                // No autoscroll on middle click.
+                if (e.cancelable) e.preventDefault();
+            }
+        } else {
+            this.mouseDown.delete(e.button);
+            this.onKeyUp(new KeyboardEvent('keyup', init));
+        }
+    }
+
     private onPointer(e: PointerEvent): void {
         this.pointerSeen = true;
         const lock = this.pointerLock;
@@ -108,26 +156,43 @@ export class InputManager {
     }
 
     private onKeyDown(e: KeyboardEvent): void {
-        this.keysDown.add(e.code);
-        if (this.textInput.focused && isTextEditingKey(e)) return;
+        if (this.textInput.focused && isTextEditingKey(e)) {
+            this.keysDown.add(e.code);
+            return;
+        }
         if (e.isComposing) return;
-        const action = actionFor(e, this.bindings);
-        // Snapshot: handlers may register/unregister while dispatching.
-        for (const entry of this.entries.slice()) {
-            if (entry.fn(e, action)) {
-                e.preventDefault();
-                e.stopPropagation();
-                return;
-            }
+        if (this.dispatchKey(e)) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
         }
         // Keep focus inside the canvas; Tab would otherwise escape it.
         if (e.code === 'Tab') e.preventDefault();
+    }
+
+    /** Offer a key press to the handler stack; true when one took it. */
+    private dispatchKey(e: KeyboardEvent): boolean {
+        this.keysDown.add(e.code);
+        const action = actionFor(e, this.bindings);
+        // Snapshot: handlers may register/unregister while dispatching.
+        for (const entry of this.entries.slice()) {
+            if (entry.fn(e, action)) return true;
+        }
+        return false;
     }
 
     private onKeyUp(e: KeyboardEvent): void {
         this.keysDown.delete(e.code);
         for (const entry of this.entries.slice()) entry.keyUp?.(e);
     }
+}
+
+/** Pointer buttons that bind like keys. */
+const MOUSE_CODES: Record<number, string> = { 1: 'MouseMiddle', 3: 'MouseBack', 4: 'MouseForward' };
+
+function buttonMask(button: number): number {
+    // PointerEvent.buttons bits: 1 left, 2 right, 4 middle, 8 back, 16 forward.
+    return button === 1 ? 4 : button === 2 ? 2 : 1 << button;
 }
 
 /** Keys a focused text box consumes itself (typing, caret, deletion). */

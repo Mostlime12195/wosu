@@ -1,4 +1,4 @@
-import { adjustDifficulty, sanitizeMods, type ModAcronym } from '../../gameplay/mods';
+import { adjustDifficulty, sanitizeMods, type ModAcronym, type ModSettingsMap } from '../../gameplay/mods';
 
 /** Pure helpers for the results screen (kept separate so they're testable). */
 
@@ -14,9 +14,9 @@ export interface HitWindows {
     w50: number;
 }
 
-/** Stable hit windows for the difficulty's OD after EZ/HR. */
-export function hitWindowsFor(od: number, mods: readonly ModAcronym[]): HitWindows {
-    const adj = adjustDifficulty({ cs: 5, ar: 5, od, hp: 5 }, sanitizeMods(mods));
+/** Stable hit windows for the difficulty's OD after EZ/HR or Difficulty Adjust (`settings`). */
+export function hitWindowsFor(od: number, mods: readonly ModAcronym[], settings?: ModSettingsMap): HitWindows {
+    const adj = adjustDifficulty({ cs: 5, ar: 5, od, hp: 5 }, sanitizeMods(mods, settings));
     return { w300: 80 - 6 * adj.od, w100: 140 - 8 * adj.od, w50: 200 - 10 * adj.od };
 }
 

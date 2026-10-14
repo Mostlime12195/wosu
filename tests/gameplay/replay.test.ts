@@ -22,7 +22,7 @@ const fixture = parseOsu(readFileSync(join(FIXDIR, osuFile), 'utf8'));
 /** Rules + driver as the Player builds them, with every judgement logged. */
 function setup(mods: ModSet, mechanics: GameplayMechanics) {
     const beatmap = buildPlayableBeatmap(fixture, mods, playableOptions(mechanics));
-    const score = new ScoreProcessor({ difficultyMultiplier: 4, modMultiplier: scoreMultiplier(mods) });
+    const score = new ScoreProcessor({ difficultyMultiplier: 4, modMultiplier: scoreMultiplier(mods), mechanics });
     const health = new HealthProcessor({
         hpDifficulty: beatmap.difficulty.hp, breaks: beatmap.breaks,
         drainStart: beatmap.startTime, drainEnd: beatmap.endTime,

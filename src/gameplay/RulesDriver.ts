@@ -1,7 +1,7 @@
 import type { CursorState, GameplayRules } from './GameplayRules';
 import type { AutoPlayer } from './input/AutoPlayer';
 import type { InputMode } from './mods';
-import type { ReplayEvent } from './replay/Replay';
+import { PRESS_BITS, type ReplayEvent } from './replay/Replay';
 
 /**
  * Judgement runs in steps of at most this many ms whatever the frame rate
@@ -75,7 +75,7 @@ export class RulesDriver {
     }
 
     apply(e: ReplayEvent): void {
-        if (e.kind === 'frame') this.step(e.time, { x: e.x, y: e.y, held: e.buttons !== 0 });
+        if (e.kind === 'frame') this.step(e.time, { x: e.x, y: e.y, held: (e.buttons & PRESS_BITS) !== 0 });
         else if (e.kind === 'press') this.press(e.time, e.x, e.y);
         else this.resume();
     }

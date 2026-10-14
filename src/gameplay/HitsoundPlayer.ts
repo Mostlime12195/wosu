@@ -7,6 +7,18 @@ import type { LegacySkin } from '../skin/LegacySkin';
 const PAN_AMOUNT = 0.8;
 
 /**
+ * osu!stable's spinnerspin frequency (AudioEngine, as lazer's
+ * DrawableSpinner ports it): 20 kHz plus 40 kHz per spin progress (past 1
+ * for bonus spins), at most 100 kHz, over the sample's nominal 44.1 kHz,
+ * so the pitch starts low and climbs as the spinner fills up. Without
+ * SpinnerFrequencyModulate it plays at its own pitch.
+ */
+export function spinnerSpinRate(progress: number, modulate: boolean): number {
+    if (!modulate) return 1;
+    return Math.min(100_000, 20_000 + Math.max(0, progress) * 40_000) / 44_100;
+}
+
+/**
  * Turns judgements into hitsounds with osu!'s sample rules: the normal
  * sample always plays from the normal set, whistle/finish/clap from the
  * addition set; set 0 inherits from the timing point (whose own 0 is the
@@ -22,6 +34,8 @@ export class HitsoundPlayer {
      * Sample sets (normal/soft/drum) always follow the map, as in osu!.
      */
     useBeatmapSamples = true;
+    /** skin.ini SpinnerFrequencyModulate (on unless the skin turns it off). */
+    spinnerFrequencyModulate = true;
 
     constructor(
         private readonly samples: SampleBank,
@@ -133,7 +147,12 @@ export class HitsoundPlayer {
         this.slides.set(h.index, loops);
     }
 
-    /** Spinner spin loop; pitch rises with progress like stable. */
+    /**
+     * Spinner spin loop while the spinner turns. With skin.ini
+     * SpinnerFrequencyModulate (the default) its pitch rises with the spin
+     * progress like osu!stable's (see spinnerSpinRate); `progress` is spins
+     * done over spins required, past 1 for bonus spins.
+     */
     setSpinning(h: PlayableHitObject, on: boolean, progress: number): void {
         if (!on) {
             if (this.spinIndex === h.index) this.stopSpin();
@@ -145,7 +164,7 @@ export class HitsoundPlayer {
             this.spin = this.loop(s.normal, 'spinnerspin', this.indexAt(h.time, h.hitSample.index), this.volumeFor(h, s.volume) * 0.5);
             this.spinIndex = h.index;
         }
-        this.spin?.setVolume(0.25 + 0.25 * Math.min(1, progress));
+        this.spin?.setRate(spinnerSpinRate(progress, this.spinnerFrequencyModulate));
     }
 
     spinnerBonus(h: PlayableHitObject): void {

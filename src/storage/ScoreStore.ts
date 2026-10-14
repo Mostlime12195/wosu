@@ -34,6 +34,9 @@ export interface ScoreRecord {
     count100: number;
     count50: number;
     countMiss: number;
+    /** osu!stable's gekis and katus (absent on scores set before they were counted). */
+    countGeki?: number;
+    countKatu?: number;
     grade: Grade;
     passed: boolean;
     date: number;
@@ -113,6 +116,35 @@ export function migrateHistoryEntry(h: LegacyHistoryEntry): ScoreRecord | null {
     };
 }
 
+/**
+ * lazer's TopLocalRank: the grade of the best passed score (highest total
+ * score; ties: the older one) on a difficulty, or null when it has none.
+ */
+export function topLocalGrade(records: readonly Pick<ScoreRecord, 'score' | 'date' | 'grade' | 'passed'>[]): Grade | null {
+    let best: Pick<ScoreRecord, 'score' | 'date' | 'grade' | 'passed'> | null = null;
+    for (const r of records) {
+        if (!r.passed || r.grade === 'F') continue;
+        if (!best || r.score > best.score || (r.score === best.score && r.date < best.date)) best = r;
+    }
+    return best?.grade ?? null;
+}
+
+/** topLocalGrade for every difficulty at once (beatmapKey → grade). */
+export function topLocalGrades(records: readonly ScoreRecord[]): Map<string, Grade> {
+    const byKey = new Map<string, ScoreRecord[]>();
+    for (const r of records) {
+        let list = byKey.get(r.beatmapKey);
+        if (!list) byKey.set(r.beatmapKey, (list = []));
+        list.push(r);
+    }
+    const out = new Map<string, Grade>();
+    for (const [key, list] of byKey) {
+        const g = topLocalGrade(list);
+        if (g) out.set(key, g);
+    }
+    return out;
+}
+
 export interface ScoreStoreOptions {
     legacy?: LegacySource;
 }
@@ -125,6 +157,9 @@ export class ScoreStore {
     private db: AppDatabase | null = null;
     private ready: Promise<void> | null = null;
     private readonly legacySource: LegacySource;
+    /** topLocalGrades of `records`, rebuilt lazily after any change. */
+    private grades: Map<string, Grade> | null = null;
+    private loaded = false;
 
     constructor(private readonly dbSource: AppDatabase | Promise<AppDatabase> = openAppDatabase(), options: ScoreStoreOptions = {}) {
         this.legacySource = options.legacy ?? readLegacyData;
@@ -154,6 +189,19 @@ export class ScoreStore {
                 this.records.push(rec);
             }
         }, this.legacySource);
+        this.loaded = true;
+        this.grades = null;
+    }
+
+    /**
+     * The grade of the best local score on a difficulty (lazer's
+     * TopLocalRank), synchronously for song select's panels; null until
+     * the store has loaded. Kept current as scores are added or deleted.
+     */
+    topGrade(key: string): Grade | null {
+        if (!this.loaded) return null;
+        this.grades ??= topLocalGrades(this.records);
+        return this.grades.get(key) ?? null;
     }
 
     /** Persist a new record, with its encoded replay if any; resolves with it (id assigned). */
@@ -179,6 +227,7 @@ export class ScoreStore {
             console.warn('[scores] save failed', e);
         }
         this.records.push(rec);
+        this.grades = null;
         this.changed.emit(rec);
         return rec;
     }
@@ -221,6 +270,7 @@ export class ScoreStore {
     async delete(id: number): Promise<void> {
         await this.init();
         this.records = this.records.filter(r => r.id !== id);
+        this.grades = null;
         try {
             await this.db!.scores.delete(id);
             await this.db!.replays.delete(id);
@@ -233,6 +283,7 @@ export class ScoreStore {
     async clear(): Promise<void> {
         await this.init();
         this.records = [];
+        this.grades = null;
         try {
             await this.db!.scores.clear();
             await this.db!.replays.clear();

@@ -5,6 +5,7 @@ import type { KeyOverlayStyle } from '../../settings/Settings';
 import type { SkinTexture } from '../../skin/LegacySkin';
 import type { SkinChain } from '../../skin/SkinChain';
 import { counterText } from '../../ui/text';
+import { fallbackBackgroundTexture, fallbackKeyTexture } from './keyOverlayFallback';
 import type { GameplayButton } from '../input/GameplayInput';
 
 const SIZE = 40;
@@ -191,7 +192,9 @@ interface LegacyKey {
  * down, the whole display's top-right 64 units above the screen's middle
  * right. A press shrinks the key to 0.8 (160 ms, Out) and tints it
  * yellow (keys) or pink (mouse buttons); the first press swaps the key's
- * name for its count. Text is black (osu!'s InputOverlayText default).
+ * name for its count. Text is the skin's InputOverlayText colour (black
+ * by default). In the legacy HUD layout a skin without the images gets
+ * wosu!-drawn ones (keyOverlayFallback), so it always has this overlay.
  */
 export class LegacyKeyCounter extends Container implements KeyOverlay {
     private readonly bgSprite = new Sprite();
@@ -201,14 +204,22 @@ export class LegacyKeyCounter extends Container implements KeyOverlay {
     private style: KeyOverlayStyle | null = null;
     private clock = 0;
 
-    /** The skin's key overlay, or null when no skin in the chain has one (use wosu!'s). */
-    static create(chain: SkinChain, style: KeyOverlayStyle): LegacyKeyCounter | null {
-        const key = chain.texture('inputoverlay-key');
-        const bg = chain.texture('inputoverlay-background');
-        return key && bg ? new LegacyKeyCounter(key, bg, style) : null;
+    /**
+     * The skin's key overlay. Outside the legacy layout, null when no skin
+     * in the chain has both images (use wosu!'s); in it, missing images
+     * are wosu!'s stand-ins.
+     */
+    static create(chain: SkinChain, style: KeyOverlayStyle, legacyLayout = false): LegacyKeyCounter | null {
+        let key = chain.texture('inputoverlay-key');
+        let bg = chain.texture('inputoverlay-background');
+        if (legacyLayout) {
+            key ??= fallbackKeyTexture();
+            bg ??= fallbackBackgroundTexture();
+        }
+        return key && bg ? new LegacyKeyCounter(key, bg, style, chain.config('inputOverlayText')) : null;
     }
 
-    private constructor(private readonly keyTex: SkinTexture, bg: SkinTexture, style: KeyOverlayStyle) {
+    private constructor(private readonly keyTex: SkinTexture, bg: SkinTexture, style: KeyOverlayStyle, private readonly textColour: number) {
         super();
         this.eventMode = 'none';
         this.bgSprite.texture = bg.texture;
@@ -232,8 +243,8 @@ export class LegacyKeyCounter extends Container implements KeyOverlay {
             const sprite = new Sprite(this.keyTex.texture);
             sprite.anchor.set(0.5);
             sprite.scale.set(this.keyTex.scale);
-            const name = counterText(def.name, { size: 15, color: 0x000000 });
-            const count = counterText('0', { size: 15, color: 0x000000 });
+            const name = counterText(def.name, { size: 15, color: this.textColour });
+            const count = counterText('0', { size: 15, color: this.textColour });
             name.anchor.set(0.5);
             count.anchor.set(0.5);
             count.alpha = 0;

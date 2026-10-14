@@ -163,8 +163,13 @@ export class ScorePanel extends UIComponent {
             { title: 'MEH', value: r.count50, format: int, color: Colors.meh },
             { title: 'MISS', value: r.countMiss, format: int, color: Colors.miss },
         ], GRID_Y + ROW_H, 1);
+        const endsTotal = r.sliderEndsTotal;
         this.grid([
             { title: 'SLIDER TICKS', value: r.sliderTicksHit, format: v => `${int(v)}/${int(r.sliderTicksTotal)}`, color: Colors.grayC },
+            // lazer mechanics: its "Slider End" statistic (tails count toward accuracy there).
+            ...(endsTotal !== undefined
+                ? [{ title: 'SLIDER ENDS', value: r.sliderEndsHit ?? 0, format: (v: number) => `${int(v)}/${int(endsTotal)}`, color: Colors.grayC }]
+                : []),
             { title: 'UNSTABLE RATE', value: r.unstableRate, format: v => v.toFixed(2), color: Colors.grayC, integer: false },
         ], GRID_Y + ROW_H * 2, 2);
 

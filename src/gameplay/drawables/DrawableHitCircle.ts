@@ -29,7 +29,7 @@ export class DrawableHitCircle extends Container implements Drawable {
         this.piece = new CirclePiece(ctx, h, true);
         this.addChild(this.piece);
         this.approach = new ApproachCircle(ctx, comboColor(ctx, h));
-        if (!(ctx.hidden && hiddenApplies)) ctx.approachLayer.addChild(this.approach);
+        if (!(ctx.hideApproachCircles && hiddenApplies)) ctx.approachLayer.addChild(this.approach);
         this.eventMode = 'none';
     }
 

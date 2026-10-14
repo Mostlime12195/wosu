@@ -1,7 +1,7 @@
 import { lzmaCompress } from '../../core/lzma';
 import { md5Hex } from '../../core/md5';
 import type { ModAcronym } from '../mods';
-import { BUTTON_BITS, type ReplayEvent } from './Replay';
+import { BUTTON_BITS, SMOKE_BIT, type ReplayEvent } from './Replay';
 
 /**
  * Export to osu!'s .osr replay format (lazer's LegacyScoreEncoder, as a
@@ -17,19 +17,22 @@ const OSR_VERSION = 20240411;
 const LEGACY_MODS: Record<ModAcronym, number> = {
     NF: 1, EZ: 2, HD: 8, HR: 16, SD: 32, DT: 64, RX: 128, HT: 256, DC: 256,
     NC: 64 | 512, FL: 1024, AT: 2048, SO: 4096, AP: 8192, PF: 32 | 16384,
+    // lazer-only mods have no stable bit.
+    DA: 0,
 };
 
 export function legacyModBits(mods: readonly ModAcronym[]): number {
     return mods.reduce((n, m) => n | (LEGACY_MODS[m] ?? 0), 0);
 }
 
-/** osu!'s ReplayButtonState: M1 = 1, M2 = 2, and K1 / K2 set their mouse bit too (5 / 10). */
+/** osu!'s ReplayButtonState: M1 = 1, M2 = 2, K1 / K2 set their mouse bit too (5 / 10), Smoke = 16. */
 function legacyButtons(buttons: number): number {
     let z = 0;
     if (buttons & BUTTON_BITS.M1) z |= 1;
     if (buttons & BUTTON_BITS.M2) z |= 2;
     if (buttons & BUTTON_BITS.K1) z |= 4 | 1;
     if (buttons & BUTTON_BITS.K2) z |= 8 | 2;
+    if (buttons & SMOKE_BIT) z |= 16;
     return z;
 }
 
@@ -72,6 +75,9 @@ export interface OsrScore {
     count100: number;
     count50: number;
     countMiss: number;
+    /** osu!stable's combo-end counts (0 when unknown). */
+    countGeki?: number;
+    countKatu?: number;
     score: number;
     maxCombo: number;
     perfect: boolean;
@@ -157,12 +163,13 @@ export function encodeOsr(s: OsrScore): Uint8Array<ArrayBuffer> {
     w.string(s.beatmapMd5);
     w.string(s.player);
     // stable's replay hash; nothing checks it for local replays, so any summary of the score does.
-    w.string(md5Hex(`${s.count100 + s.count300}p${s.count50}o0o0t${s.countMiss}a${s.beatmapMd5}r${s.maxCombo}e${s.perfect}y${s.player}o${s.score}u${mods}`));
+    const geki = s.countGeki ?? 0, katu = s.countKatu ?? 0;
+    w.string(md5Hex(`${s.count100 + s.count300}p${s.count50}o${geki}o${katu}t${s.countMiss}a${s.beatmapMd5}r${s.maxCombo}e${s.perfect}y${s.player}o${s.score}u${mods}`));
     w.short(s.count300);
     w.short(s.count100);
     w.short(s.count50);
-    w.short(0); // gekis
-    w.short(0); // katus
+    w.short(geki);
+    w.short(katu);
     w.short(s.countMiss);
     w.int(Math.min(2 ** 31 - 1, Math.round(s.score)));
     w.short(s.maxCombo);

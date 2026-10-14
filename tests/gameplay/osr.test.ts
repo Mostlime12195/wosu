@@ -95,7 +95,7 @@ describe('.osr export', () => {
     it('writes the header and the compressed frames', () => {
         const osr = encodeOsr({
             beatmapMd5: 'd41d8cd98f00b204e9800998ecf8427e', player: 'Guest', count300: 10, count100: 2, count50: 1, countMiss: 0,
-            score: 12345, maxCombo: 13, perfect: true, mods: ['HD'], date: 0, events,
+            countGeki: 3, countKatu: 4, score: 12345, maxCombo: 13, perfect: true, mods: ['HD'], date: 0, events,
         });
         const view = new DataView(osr.buffer);
         expect(osr[0]).toBe(0);
@@ -107,7 +107,8 @@ describe('.osr export', () => {
         let p = 39;
         const str = () => { if (osr[p++] === 0) return; const n = osr[p++]; p += n; };
         str(); str();
-        expect(view.getUint16(p, true)).toBe(10);
+        // 300s, 100s, 50s, gekis, katus, misses.
+        expect([0, 2, 4, 6, 8, 10].map(o => view.getUint16(p + o, true))).toEqual([10, 2, 1, 3, 4, 0]);
         p += 12;
         expect(view.getInt32(p, true)).toBe(12345);
         p += 4 + 2 + 1;

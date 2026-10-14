@@ -1,4 +1,4 @@
-import { Container, Graphics, RenderTexture } from 'pixi.js';
+import { Container, Graphics, RenderTexture, type Text } from 'pixi.js';
 import { Screen } from '../../app/Screen';
 import type { Game, Selection } from '../../app/Game';
 import type { MusicTrack } from '../../audio/MusicTrack';
@@ -12,29 +12,39 @@ import { clamp01 } from '../../core/math';
 import { tween, tweener } from '../../core/Tweener';
 import { comboColor } from '../../gameplay/drawables/context';
 import { PLAYFIELD_H, PLAYFIELD_W, Playfield } from '../../gameplay/drawables/Playfield';
+import { SmokeLayer } from '../../gameplay/drawables/Smoke';
 import { BackgroundVideo } from '../../gameplay/BackgroundVideo';
 import { StoryboardView } from '../../gameplay/StoryboardView';
 import { GameplayClock } from '../../gameplay/GameplayClock';
 import { GameplayRules, type CursorState, type SliderState, type SpinnerState } from '../../gameplay/GameplayRules';
 import { RulesDriver } from '../../gameplay/RulesDriver';
-import { buttonMask, encodeReplay, type ReplayInfo } from '../../gameplay/replay/Replay';
+import { buttonMask, encodeReplay, SMOKE_BIT, type ReplayInfo } from '../../gameplay/replay/Replay';
 import { ReplayPlayback } from '../../gameplay/replay/ReplayPlayback';
 import { ReplayRecorder } from '../../gameplay/replay/ReplayRecorder';
 import { HitsoundPlayer } from '../../gameplay/HitsoundPlayer';
 import { HUDOverlay } from '../../gameplay/hud/HUDOverlay';
+import { StablePlayOverlay } from '../../gameplay/hud/StablePlayOverlay';
+import { countdownSchedule } from '../../gameplay/legacyPlayEvents';
+import type { LoopHandle } from '../../audio/SampleBank';
+import { ComboBursts, comboBurstSounds } from '../../gameplay/hud/ComboBursts';
+import { NightcoreBeats, nightcorePlaysHats } from '../../gameplay/NightcoreBeats';
 import { AutoPlayer } from '../../gameplay/input/AutoPlayer';
 import { GameplayInput, type GameplayButton } from '../../gameplay/input/GameplayInput';
-import { NO_MODS, extraLives, flashlightSettings, inputMode, modSettingsOf, restartOnFail, scoreMultiplier, sortedMods, type InputMode, type ModSet } from '../../gameplay/mods';
+import { NO_MODS, extraLives, flashlightSettings, hiddenSettings, inputMode, modSettingsOf, restartOnFail, scoreMultiplier, sortedMods, type InputMode, type ModSet } from '../../gameplay/mods';
 import { Flashlight } from '../../gameplay/Flashlight';
 import type { ScoreResult } from '../../gameplay/ScoreResult';
 import { HealthProcessor } from '../../gameplay/scoring/HealthProcessor';
 import { difficultyMultiplier, ScoreProcessor } from '../../gameplay/scoring/ScoreProcessor';
 import type { Action } from '../../input/bindings';
+import { formatBeatmapOffset, type PlayTiming } from '../../gameplay/offsetCalibration';
+import { beatmapOffsets, offsetKeyFor } from '../../storage/BeatmapOffsets';
+import { label } from '../../ui/text';
 import { beatmapKeyOf } from '../../storage/ScoreStore';
 import { Colors } from '../../ui/theme';
-import { ResultsScreen } from '../results/ResultsScreen';
+import { ResultsScreen, skinApplause } from '../results/ResultsScreen';
 import { ratingMods } from '../select/modStars';
 import { GameplayMenu } from './GameplayMenu';
+import { LegacyGameplayMenu } from './LegacyGameplayMenu';
 import { HoldForMenuButton } from './HoldForMenuButton';
 import { ReplayIndicator } from './ReplayIndicator';
 import { ResumeOverlay } from './ResumeOverlay';
@@ -55,16 +65,29 @@ export interface PlayerOptions {
     beatmapSkin?: LegacySkin | null;
     /** Watch this replay (lazer's ReplayPlayer) instead of playing; `mods` are the score's. */
     replay?: ReplayInfo | null;
+    /** Replays: start watching from this song time (a backward seek). */
+    startAt?: number;
 }
 
 /** How a Player ended, read by the loader when it resumes. */
-export type PlayerOutcome = 'none' | 'quit' | 'retry' | 'completed';
+/**
+ * How a Player ended, read by the loader when it resumes. `retry` goes
+ * back through the loader's screen (lazer's Restart()); `quickRetry` (the
+ * hold-to-retry hotkey, "restart on fail") restarts at once.
+ */
+export type PlayerOutcome = 'none' | 'quit' | 'retry' | 'quickRetry' | 'completed';
 
 type Phase = 'loading' | 'playing' | 'paused' | 'resuming' | 'failed' | 'completed';
 
 /** Results appear this long after the last judgement (lazer). */
 const RESULTS_DELAY = 1000;
+/** lazer's replay keyboard seek amount. */
+const REPLAY_SEEK_MS = 5000;
+/** Replay events this far behind the clock are a seek's catch-up (no hitsounds). */
+const CATCH_UP_MS = 1000;
 const FAIL_DURATION = 2500;
+/** The pause-loop's fade in and out (ms). */
+const PAUSE_LOOP_FADE = 200;
 /** Sample HP this often for the results graph. */
 const HEALTH_SAMPLE_MS = 250;
 
@@ -90,6 +113,12 @@ export class PlayerScreen extends Screen {
     private hitsounds!: HitsoundPlayer;
     private playfield!: Playfield;
     private hud!: HUDOverlay;
+    /** osu!stable's combo bursts (skins with comboburst art), between the background and the playfield. */
+    private bursts!: ComboBursts;
+    /** The Nightcore mod's beat (with the selected skin's nightcore samples). */
+    private nightcore: NightcoreBeats | null = null;
+    /** Cursor smoke, under the hit objects (lazer's SmokeContainer). */
+    private smoke!: SmokeLayer;
     private auto: AutoPlayer | null = null;
     private mode: InputMode = 'normal';
     /** Feeds the rules (sub-stepped frames, presses, resumes); see RulesDriver. */
@@ -113,8 +142,14 @@ export class PlayerScreen extends Screen {
     private restartPending = false;
     private readonly failFlash = new Graphics();
     private readonly retryFade = new Graphics();
-    private menu!: GameplayMenu;
+    /** wosu!'s pause / fail menu, or stable's when the skin draws one. */
+    private menu!: GameplayMenu | LegacyGameplayMenu;
     private skip!: SkipButton;
+    /** stable's countdown, section pass / fail and break warning arrows. */
+    private stablePlay!: StablePlayOverlay;
+    /** The skin's pause-loop while the pause menu is up, and its volume. */
+    private pauseLoop: LoopHandle | null = null;
+    private pauseLoopVolume = 0;
     private resume!: ResumeOverlay;
     private holdButton!: HoldForMenuButton;
 
@@ -132,7 +167,11 @@ export class PlayerScreen extends Screen {
     private failClock = 0;
     private failedAtTime = 0;
     private quickRetryHeld = 0;
-    private quickRetryActive = false;
+    private catchingUp = false;
+    private lastFedTime = -Infinity;
+    /** The hold-to-confirm hotkey being held (quick retry / quick exit). */
+    private holdAction: 'quickRetry' | 'quickExit' | null = null;
+    private fadingFor: 'quickRetry' | 'quickExit' | null = null;
     private readonly healthGraph: [number, number][] = [];
     private nextHealthSample = -Infinity;
     private pausedCursor = { x: 0, y: 0 };
@@ -215,6 +254,7 @@ export class PlayerScreen extends Screen {
             difficultyMultiplier: difficultyMultiplier(
                 { hp: d.hpDrainRate, cs: d.circleSize, od: d.overallDifficulty }, objectCount, beatmap.endTime - beatmap.startTime - breakTime),
             modMultiplier: scoreMultiplier(mods),
+            mechanics,
         });
         const noFail = mods.has('NF') || this.mode === 'autoplay' || this.mode === 'relax' || this.mode === 'autopilot';
         this.health = new HealthProcessor({
@@ -238,8 +278,10 @@ export class PlayerScreen extends Screen {
         const first = beatmap.hitObjects[0];
         const preempt = beatmap.difficulty.preempt;
         const leadIn = Math.max(o.data.general.audioLeadIn, 0);
-        const start = Math.min(0, -leadIn, first.time - preempt - 1500);
-        this.skipTarget = first.time - preempt - 1000;
+        // The map's countdown (stable): the intro makes room for it, and skipping lands just before it.
+        const countdown = countdownSchedule(first.time, beatmap.controlPoints.at(first.time).beatLength, o.data.general.countdown, o.data.general.countdownOffset);
+        const start = Math.min(0, -leadIn, first.time - preempt - 1500, countdown ? countdown.start - 500 : 0);
+        this.skipTarget = Math.min(first.time - preempt - 1000, countdown ? countdown.start - 100 : Infinity);
         this.playStart = first.time - preempt;
         this.clock = new GameplayClock(o.track, start);
 
@@ -257,13 +299,25 @@ export class PlayerScreen extends Screen {
         };
         this.hitsounds = new HitsoundPlayer(g.samples, beatmap, o.beatmapSkin ?? null, g.skins.current.value);
         this.hitsounds.useBeatmapSamples = g.settings.beatmapHitsounds.value;
+        this.hitsounds.spinnerFrequencyModulate = chain.config('spinnerFrequencyModulate');
+        // Nightcore's beat comes from the selected skin only, never a beatmap's (osu! wiki, Skinning/Sounds);
+        // wosu!'s default skin has no nightcore samples, so it stays silent there.
+        const userSkin = g.skins.current.value;
+        if (mods.has('NC') && userSkin) {
+            this.nightcore = new NightcoreBeats(raw.timingPoints, nightcorePlaysHats(raw.difficulty.sliderTickRate), name => {
+                const buf = userSkin.sample(name);
+                if (buf) g.samples.playBuffer(buf, 1);
+            });
+        }
 
         this.playfield = new Playfield({
             renderer: g.app.renderer,
             skin: chain,
             beatmap,
             rules: this.rules,
-            hidden: mods.has('HD'),
+            // HD's "Only fade approach circles" keeps the objects' normal fading.
+            hidden: mods.has('HD') && !hiddenSettings(mods).onlyFadeApproachCircles,
+            hideApproachCircles: mods.has('HD'),
             hideNumbers: g.settings.hideNumbers.value,
             hideFollowPoints: g.settings.hideFollowPoints.value,
             snakingIn: g.settings.snakingIn.value,
@@ -272,7 +326,8 @@ export class PlayerScreen extends Screen {
         });
         this.playfield.judgements.hideGreat = g.settings.hideGreat.value;
         this.playfield.judgements.hitLighting = g.settings.hitLighting.value;
-        this.fieldWrap.addChild(this.playfield);
+        this.smoke = new SmokeLayer(chain);
+        this.fieldWrap.addChild(this.smoke, this.playfield);
 
         if (mods.has('FL')) {
             this.flashlight = new Flashlight(flashlightSettings(mods));
@@ -287,13 +342,18 @@ export class PlayerScreen extends Screen {
             playerName: this.mode === 'autoplay' ? 'Autoplay' : o.replay ? o.replay.player || 'Guest' : g.settings.playerName.value || 'Guest',
             introStart: start,
         });
+        this.stablePlay = new StablePlayOverlay(chain, countdown, beatmap.breaks);
+        this.stablePlay.playSample = names => this.playSkinSample(names);
         // The gameplay leaderboard lists this difficulty's local scores (lazer's solo leaderboard provider).
         const { set: lbSet, diff: lbDiff } = o.selection;
         void g.scores.forBeatmap(beatmapKeyOf({ beatmapId: lbDiff.beatmapId, title: lbSet.title, version: lbDiff.version, setId: lbSet.onlineSetId ?? 0 }))
             .then(list => { if (!this.destroyed) this.hud.setLeaderboardScores(list); })
             .catch(e => console.warn('[leaderboard] scores unavailable', e));
-        this.menu = new GameplayMenu(g.skin.tex('triangle'));
-        this.skip = new SkipButton();
+        this.menu = LegacyGameplayMenu.available(chain)
+            ? new LegacyGameplayMenu(chain, names => this.playSkinSample(names))
+            : new GameplayMenu(g.skin.tex('triangle'));
+        const skipFrames = chain.frames('play-skip');
+        this.skip = new SkipButton(skipFrames.length ? { frames: skipFrames, frameDuration: chain.frameDuration(skipFrames.length) } : null);
         this.skip.onActivate = () => this.doSkip();
         this.resume = new ResumeOverlay();
         this.holdButton = new HoldForMenuButton();
@@ -302,7 +362,12 @@ export class PlayerScreen extends Screen {
         this.failFlash.alpha = 0;
         this.retryFade.alpha = 0;
         this.failBacking.visible = false;
-        this.failContent.addChild(this.failBacking, this.fieldWrap, this.flashlightLayer, this.hud);
+        this.failContent.addChild(this.failBacking, this.fieldWrap, this.flashlightLayer, this.stablePlay, this.hud, this.stablePlay.arrowLayer);
+        // A beatmap's comboburst sounds play with "Beatmap hitsounds" on (like its other samples).
+        const burstSounds = comboBurstSounds([set.beatmapHitsounds.value ? o.beatmapSkin : null, g.skins.current.value]);
+        this.bursts = new ComboBursts(chain, burstSounds, buf => g.samples.playBuffer(buf, 1));
+        this.failContent.addChildAt(this.bursts, this.failContent.getChildIndex(this.fieldWrap));
+        this.offs.push(set.comboBursts.bind(v => (this.bursts.enabled = v), true));
         if (o.replay) {
             const { set, diff } = o.selection;
             this.replayIndicator = new ReplayIndicator(`Watching ${o.replay.player || 'Guest'} play ${set.artist} - ${set.title} [${diff.version}]`);
@@ -392,12 +457,14 @@ export class PlayerScreen extends Screen {
         rules.objectJudged.add(info => {
             const h = objs[info.index];
             this.lastJudgementTime = Math.max(this.lastJudgementTime, info.time);
-            this.playfield.judgements.add(info.result, info.x, info.y, info.time, comboColor(this.playfield.ctx, h));
-            if (info.result === 'miss') return;
+            this.playfield.judgements.add(info.result, info.x, info.y, info.time, comboColor(this.playfield.ctx, h), info.variant);
+            if (info.result === 'miss' || this.catchingUp) return;
             if (h.kind === 'circle' || h.kind === 'spinner') this.hitsounds.hit(h);
         });
         rules.nestedJudged.add((index, ev, hit) => {
-            if (!hit) return;
+            // lazer's slider end isn't an objectJudged (its judgement was the head's); its tail is the last.
+            this.lastJudgementTime = Math.max(this.lastJudgementTime, ev.time);
+            if (!hit || this.catchingUp) return;
             const h = objs[index] as PlayableSlider;
             if (ev.kind === 'tick') this.hitsounds.tick(h, ev.time, ev.x);
             else if (ev.kind === 'head') this.hitsounds.sliderEdge(h, 0, h.x);
@@ -415,6 +482,7 @@ export class PlayerScreen extends Screen {
         this.score.comboBroken.add(previous => {
             if (previous >= 20) this.hitsounds.comboBreak();
         });
+        this.score.comboIncreased.add(combo => this.bursts.onCombo(combo));
         this.health.failedSignal.add(() => this.startFail());
         this.input.pressed.add((time, x, y, button) => {
             // Only a real play takes presses: Autoplay and replays ignore the user's
@@ -478,11 +546,13 @@ export class PlayerScreen extends Screen {
         this.fieldWrap.position.set(x, y);
         this.playfield.setPixelsPerUnit(scale * this.game.app.uiScale * this.game.app.renderer.resolution);
         this.hud.layout(w, h);
+        this.bursts.layout(w, h);
         this.video?.cover(w, h);
         this.storyboard?.layout(w, h);
         this.bgBacking.clear().rect(0, 0, w, h).fill(0x000000);
         this.menu.resize(w, h);
-        this.skip.position.set(w - this.skip.w - 24, h - this.skip.h - 130);
+        this.skip.layout(w, h);
+        this.stablePlay.layout(w, h);
         this.holdButton.position.set(w - this.holdButton.w - 16, h - this.holdButton.h - 64);
         this.failFlash.clear().rect(0, 0, w, h).fill(0xff0000);
         this.failBacking.clear().rect(0, 0, w, h).fill(0x000000);
@@ -532,6 +602,8 @@ export class PlayerScreen extends Screen {
         this.phase = 'playing';
         this.input.enabled = this.mode !== 'autoplay' && !this.replay;
         this.clock.start();
+        const at = this.options.startAt;
+        if (this.replay && at !== undefined && at > this.clock.frameTime) this.clock.seek(at);
     }
 
     override onSuspending(): void {
@@ -541,6 +613,9 @@ export class PlayerScreen extends Screen {
     }
 
     override onExiting(): number {
+        // The loader offers "Calibrate using last play" from this (also after results → song select → play again).
+        const timing = this.playTiming;
+        if (timing && this.phase !== 'loading') beatmapOffsets().recordPlay(offsetKeyFor(this.options.selection.set, this.options.selection.diff), timing);
         this.releaseGameplay();
         if (this.outcome !== 'completed') this.clock?.pause();
         this.fadeOut(250);
@@ -555,6 +630,7 @@ export class PlayerScreen extends Screen {
         this.root.interactiveChildren = true;
         this.input?.dispose();
         this.hitsounds?.stopAll();
+        this.stopPauseLoop();
         for (const off of this.offs) off();
         this.offs.length = 0;
         this.game.background.releaseParallax(this);
@@ -587,9 +663,12 @@ export class PlayerScreen extends Screen {
         if (this.phase === 'playing') {
             this.feedRules(time, cursor);
             this.updateLoops(time);
+            this.bursts.update(dt);
+            this.nightcore?.update(time);
             this.sampleHealth(time);
             if (this.rules.finished && time >= this.lastJudgementTime + RESULTS_DELAY && time >= this.beatmap.endTime) this.complete();
         }
+        this.updateSmoke(time, cursor);
         this.renderState(time, dt);
         this.updateSkip(time, dt);
         this.holdButton.visible = this.phase === 'playing' || this.phase === 'resuming';
@@ -599,10 +678,11 @@ export class PlayerScreen extends Screen {
         if (this.restartPending) {
             // Outside the judgement loop that raised the fail.
             this.restartPending = false;
-            this.retry();
+            this.retry(true);
             return;
         }
         if (this.phase === 'failed') this.updateFail(dt);
+        this.updatePauseLoop(dt);
         this.updateQuickRetry(dt);
     }
 
@@ -626,6 +706,7 @@ export class PlayerScreen extends Screen {
             // lazer's localUserPlaying (breaks and the intro count as "not playing").
             playing: this.phase === 'playing' && time >= this.playStart && !this.hud.isBreak(time) && !this.rules.finished,
         });
+        this.stablePlay.update(this.phase === 'failed' ? this.failedAtTime : time, this.health.hp);
     }
 
     /**
@@ -715,13 +796,28 @@ export class PlayerScreen extends Screen {
      */
     private feedRules(time: number, cursor: CursorState): void {
         if (this.replay) {
+            // A seek catches up many events in one frame: judge them without a burst of hitsounds.
+            this.catchingUp = time - this.lastFedTime > CATCH_UP_MS;
             this.replay.advance(time, e => this.driver.apply(e));
+            this.catchingUp = false;
+            this.lastFedTime = time;
         } else if (this.recorder) {
-            const f = this.recorder.frame(time, cursor.x, cursor.y, buttonMask(this.input.down));
+            const f = this.recorder.frame(time, cursor.x, cursor.y, buttonMask(this.input.down) | (this.input.smoke ? SMOKE_BIT : 0));
             if (f) this.driver.apply(f);
         } else {
             this.driver.step(time, cursor);
         }
+    }
+
+    /**
+     * The smoke key draws along the cursor on the gameplay clock: the
+     * player's own key, or the replay's recorded one. Autoplay has none.
+     * A press also ripples the cursor, like every osu! action in lazer.
+     */
+    private updateSmoke(time: number, cursor: { x: number; y: number }): void {
+        const on = this.replay ? this.replay.smoke : this.mode !== 'autoplay' && this.input.smoke;
+        if (this.smoke.input(time, on, cursor.x, cursor.y)) this.game.cursor.gameplay.ripple();
+        this.smoke.draw(time);
     }
 
     private feedAutoplay(time: number): void {
@@ -784,6 +880,79 @@ export class PlayerScreen extends Screen {
         if (!this.skip.available) return;
         this.game.uiSounds.click();
         this.clock.seek(this.skipTarget);
+        this.stablePlay.seeked();
+    }
+
+    // ------------------------------------------------------------------
+    // Beatmap offset (lazer's IncreaseOffset / DecreaseOffset in gameplay)
+    // ------------------------------------------------------------------
+
+    /**
+     * Nudge this difficulty's offset by `step` ms. Like lazer, only while
+     * it can't affect a judgement already under way: before the first
+     * object, in breaks, or paused.
+     */
+    private adjustBeatmapOffset(step: number): void {
+        if (this.options.replay) return;
+        const time = this.clock.frameTime;
+        const first = this.beatmap.hitObjects[0];
+        const quiet = this.phase === 'paused' || this.phase === 'loading' ||
+            (this.phase === 'playing' && (time < first.time - this.beatmap.difficulty.preempt || this.hud.isBreak(time)));
+        const store = beatmapOffsets();
+        const key = offsetKeyFor(this.options.selection.set, this.options.selection.diff);
+        if (quiet) store.set(key, store.get(key) + step);
+        this.showOffsetToast(quiet ? null : 'Offset can only be adjusted before the first object, in breaks or while paused');
+    }
+
+    private offsetToast: Text | null = null;
+
+    private showOffsetToast(warning: string | null): void {
+        if (!this.offsetToast) {
+            this.offsetToast = label('', { size: 16, weight: '700', shadow: true });
+            this.offsetToast.anchor.set(0.5, 0);
+            this.root.addChild(this.offsetToast);
+        }
+        const t = this.offsetToast;
+        const v = beatmapOffsets().get(offsetKeyFor(this.options.selection.set, this.options.selection.diff));
+        t.text = warning ?? `Beatmap offset: ${formatBeatmapOffset(v)}`;
+        t.tint = warning ? Colors.yellow : 0xffffff;
+        t.position.set(this._w / 2, 64);
+        tweener.kill(t, ['alpha']);
+        t.alpha = 1;
+        tween(t, { alpha: 0 }, { duration: 600, delay: 1400 });
+    }
+
+    // ------------------------------------------------------------------
+    // Replay controls (lazer's ReplayPlayer)
+    // ------------------------------------------------------------------
+
+    private replayPaused = false;
+    /** A backward seek rebuilds the Player from the loader at this time (judgement can't run backwards). */
+    replayRestartAt: number | null = null;
+
+    private toggleReplayPause(): void {
+        if (this.phase !== 'playing') return;
+        this.replayPaused = !this.replayPaused;
+        if (this.replayPaused) {
+            this.clock.pause();
+            this.hitsounds.stopAll();
+        } else {
+            this.clock.resume();
+        }
+    }
+
+    private seekReplay(delta: number): void {
+        if (this.phase !== 'playing' || !this.replay) return;
+        const time = this.clock.frameTime;
+        const target = Math.max(this.clock.startTime, Math.min(this.beatmap.endTime, time + delta));
+        if (delta > 0) {
+            // Forward: the replay's events catch up (silently) on the next frame.
+            if (target > time) this.clock.seek(target);
+            return;
+        }
+        if (time - target < 50) return;
+        this.replayRestartAt = target;
+        this.retry(true);
     }
 
     /**
@@ -841,13 +1010,56 @@ export class PlayerScreen extends Screen {
             title: 'paused',
             description: "you're not going to do what i think you're going to do, are ya?",
             entries: [
-                { caption: 'Continue', color: Colors.green, action: () => this.continuePlay() },
-                { caption: 'Retry', color: Colors.yellowDark, action: () => this.retry() },
-                { caption: 'Quit', color: 0xaa1b27, action: () => this.quit() },
+                { caption: 'Continue', color: Colors.green, action: () => this.continuePlay(), element: 'continue' },
+                { caption: 'Retry', color: Colors.yellowDark, action: () => this.retry(), element: 'retry' },
+                { caption: 'Quit', color: 0xaa1b27, action: () => this.quit(), element: 'back' },
             ],
             back: 'first',
             ...this.menuInfo(),
         });
+    }
+
+    /**
+     * The skin's pause-loop while the pause menu is up (stable's pause
+     * music; lazer fades it in and out with the menu). Only a skin's:
+     * wosu!'s default skin has none.
+     */
+    private updatePauseLoop(dt: number): void {
+        const want = this.phase === 'paused' && this.menu.shown && !this.released;
+        if (want && !this.pauseLoop) {
+            const buf = this.skinSample('pause-loop');
+            if (!buf) return;
+            this.pauseLoop = this.game.samples.startLoopBuffer(buf, 0);
+            this.pauseLoopVolume = 0;
+        }
+        const loop = this.pauseLoop;
+        if (!loop) return;
+        this.pauseLoopVolume = clamp01(this.pauseLoopVolume + (want ? dt : -dt) / PAUSE_LOOP_FADE);
+        loop.setVolume(this.pauseLoopVolume);
+        if (!want && this.pauseLoopVolume <= 0) this.stopPauseLoop();
+    }
+
+    private stopPauseLoop(): void {
+        this.pauseLoop?.stop();
+        this.pauseLoop = null;
+    }
+
+    /** A skin sound: the map's own (with beatmap hitsounds on), else the skins in the chain. */
+    private skinSample(name: string): AudioBuffer | null | undefined {
+        const fromMap = this.game.settings.beatmapHitsounds.value ? this.options.beatmapSkin?.sample(name) : undefined;
+        return fromMap !== undefined ? fromMap : this.skinChain.sample(name);
+    }
+
+    /** Play the first of `names` a skin has (a deliberately blank one stays silent); false when none has any. */
+    private playSkinSample(names: readonly string[]): boolean {
+        if (this.released) return false;
+        for (const n of names) {
+            const buf = this.skinSample(n);
+            if (buf === undefined) continue;
+            if (buf) this.game.samples.playBuffer(buf, 1);
+            return true;
+        }
+        return false;
     }
 
     /** lazer's play info under the menu buttons. */
@@ -881,6 +1093,7 @@ export class PlayerScreen extends Screen {
     private finishResume(): void {
         this.resume.hide();
         this.phase = 'playing';
+        this.replayPaused = false;
         // A replay's own pauses are among its events; pausing while watching changes nothing.
         if (this.recorder) this.driver.apply(this.recorder.resume(this.clock.frameTime));
         else if (!this.replay) this.driver.resume();
@@ -959,8 +1172,8 @@ export class PlayerScreen extends Screen {
                 title: 'failed',
                 description: "you're dead, try again?",
                 entries: [
-                    { caption: 'Retry', color: Colors.yellowDark, action: () => this.retry() },
-                    { caption: 'Quit', color: 0xaa1b27, action: () => this.quit() },
+                    { caption: 'Retry', color: Colors.yellowDark, action: () => this.retry(), element: 'retry' },
+                    { caption: 'Quit', color: 0xaa1b27, action: () => this.quit(), element: 'back' },
                 ],
                 // lazer's fail overlay: Back presses its last button (Quit).
                 back: 'last',
@@ -988,7 +1201,16 @@ export class PlayerScreen extends Screen {
         }
         tween(this.root, { alpha: 0 }, { duration: 400 }).finished.then(() => {
             if (this.destroyed || !this.isCurrent) return;
-            this.push(new ResultsScreen(result, this.options.selection, { replay, allowRetry: !watched }));
+            this.push(new ResultsScreen(result, this.options.selection, {
+                replay,
+                allowRetry: !watched,
+                // The skin's applause (a beatmap's with "Beatmap hitsounds" on), like osu!stable's.
+                applause: skinApplause([
+                    this.game.settings.beatmapHitsounds.value ? this.options.beatmapSkin : null, this.game.skins.current.value,
+                ], result.grade),
+                // Back through the loader beneath (lazer's Player.Restart from results).
+                onRetry: quick => this.restartFromResults(quick),
+            }));
         });
     }
 
@@ -1020,8 +1242,12 @@ export class PlayerScreen extends Screen {
             count100: s.count100,
             count50: s.count50,
             countMiss: s.countMiss,
+            countGeki: s.countGeki,
+            countKatu: s.countKatu,
             sliderTicksHit: s.sliderTicksHit,
             sliderTicksTotal: s.sliderTicksTotal,
+            // lazer's "slider end" statistic (tails count toward its accuracy).
+            ...(s.mechanics === 'lazer' ? { sliderEndsHit: s.sliderEndsHit, sliderEndsTotal: s.sliderEndsTotal } : {}),
             grade: s.grade(o.mods.has('HD') || o.mods.has('FL')),
             passed: true,
             perfect: s.countMiss === 0 && s.maxCombo >= mapMaxCombo,
@@ -1038,10 +1264,12 @@ export class PlayerScreen extends Screen {
     /** The difficulty's rating scaled to the mods played (see select/modStars). */
     private playedStars(): number | null {
         const base = this.options.selection.diff.stars;
-        if (base === null || !ratingMods(this.options.mods)) return base;
+        const relevant = ratingMods(this.options.mods);
+        if (base === null || !relevant) return base;
         try {
+            // Built as song select's modAdjustedStars does (legacy tails), so the figures match.
             const nomod = calculateDifficulty(buildPlayableBeatmap(this.options.data, NO_MODS)).stars;
-            const played = calculateDifficulty(this.beatmap, this.clock.rate).stars;
+            const played = calculateDifficulty(buildPlayableBeatmap(this.options.data, relevant), this.clock.rate).stars;
             return nomod > 0 ? Math.round(base * (played / nomod) * 100) / 100 : base;
         } catch {
             return base;
@@ -1073,6 +1301,8 @@ export class PlayerScreen extends Screen {
                 count100: r.count100,
                 count50: r.count50,
                 countMiss: r.countMiss,
+                countGeki: r.countGeki,
+                countKatu: r.countKatu,
                 grade: r.grade,
                 passed: r.passed,
                 date: r.date,
@@ -1085,11 +1315,25 @@ export class PlayerScreen extends Screen {
         }
     }
 
-    retry(): void {
+    /** `quick`: straight back into gameplay; otherwise through the loader's screen (lazer's Restart(quickRestart)). */
+    retry(quick = false): void {
         if (this.outcome !== 'none') return;
-        this.outcome = 'retry';
+        this.outcome = quick ? 'quickRetry' : 'retry';
         this.menu.hide();
         this.exit();
+    }
+
+    /** Results' Retry: the results screen goes with this Player, and the loader restarts. */
+    private restartFromResults(quick: boolean): void {
+        if (this.outcome !== 'completed' || this.destroyed) return;
+        this.outcome = quick ? 'quickRetry' : 'retry';
+        this.exit();
+    }
+
+    /** The play's timing for the loader's offset calibration (null: not the player's own timed play). */
+    get playTiming(): PlayTiming | null {
+        if (!this.rules || this.options.replay || this.mode === 'autoplay' || this.mode === 'relax') return null;
+        return { hitErrors: this.rules.hitErrors, rate: this.clock?.rate ?? 1, offset: beatmapOffsets().get(offsetKeyFor(this.options.selection.set, this.options.selection.diff)) };
     }
 
     quit(): void {
@@ -1111,18 +1355,19 @@ export class PlayerScreen extends Screen {
         if (this.phase === 'resuming' || this.phase === 'playing') {
             if (this.input.keyDown(e)) return true;
         }
-        if (action === 'quickRetry') {
-            if (!e.repeat && this.phase !== 'completed') this.quickRetryActive = true;
+        const is = (a: Action) => this.game.input.matches(e, a);
+        if (is('quickRetry') || is('quickExit')) {
+            if (!e.repeat && this.phase !== 'completed') this.holdAction = is('quickRetry') ? 'quickRetry' : 'quickExit';
             return true;
         }
-        if (e.code === 'Tab' && e.shiftKey) {
+        if (is('toggleInGameInterface')) {
             // lazer's ToggleInGameInterface: cycles the (persisted) HUD visibility mode.
             const mode = this.hud.cycleVisibilityMode();
             const names = { always: 'Always', hideDuringGameplay: 'Hide during gameplay', never: 'Never' } as const;
             this.game.notifications.info(`HUD visibility: ${names[mode]}`);
             return true;
         }
-        if (e.code === 'Tab') {
+        if (is('toggleInGameLeaderboard')) {
             // lazer's ToggleInGameLeaderboard (persisted, like the setting).
             if (!e.repeat) {
                 const on = this.hud.toggleLeaderboard();
@@ -1130,40 +1375,71 @@ export class PlayerScreen extends Screen {
             }
             return true;
         }
+        if (is('increaseOffset') || is('decreaseOffset')) {
+            this.adjustBeatmapOffset(is('increaseOffset') ? 1 : -1);
+            return true;
+        }
+        if (this.replay && this.onReplayKey(e, is)) return true;
         if (e.key === 'Control') {
             // lazer's HoldForHUD.
             this.hud.holdingForHud = true;
             return false;
         }
-        switch (action) {
-            case 'back':
-                if (this.phase === 'playing' || this.phase === 'resuming') this.pause();
-                else if (this.phase === 'failed' && !this.menu.shown) this.skipFailAnimation();
-                return true;
-            case 'skip':
-                this.doSkip();
-                return true;
-            default:
-                return false;
+        if (is('back')) {
+            if (this.phase === 'playing' || this.phase === 'resuming') this.pause();
+            else if (this.phase === 'failed' && !this.menu.shown) this.skipFailAnimation();
+            return true;
         }
+        if (is('pauseGameplay')) {
+            if (this.phase === 'playing') this.pause();
+            return true;
+        }
+        if (is('skip')) {
+            this.doSkip();
+            return true;
+        }
+        return false;
+    }
+
+    /** lazer's ReplayPlayer keys: pause the replay (Space doubles as skip while the intro can be skipped) and seek. */
+    private onReplayKey(e: KeyboardEvent, is: (a: Action) => boolean): boolean {
+        if (is('togglePauseReplay') && !(is('skip') && this.skip.available)) {
+            if (!e.repeat) this.toggleReplayPause();
+            return true;
+        }
+        if (is('seekReplayForward') || is('seekReplayBackward')) {
+            this.seekReplay(is('seekReplayForward') ? REPLAY_SEEK_MS : -REPLAY_SEEK_MS);
+            return true;
+        }
+        return false;
     }
 
     override onKeyUp(e: KeyboardEvent): void {
         this.input?.keyUp(e);
         if (e.key === 'Control' && this.hud) this.hud.holdingForHud = false;
-        if (e.code === 'Backquote') this.quickRetryActive = false;
+        if (this.holdAction && this.game.input.releases(e, this.holdAction)) this.holdAction = null;
     }
 
-    /** Hold ` to retry: the screen fades to black, release cancels (lazer). */
+    /**
+     * Hold ` to retry or Ctrl+` to exit (lazer's HotkeyRetryOverlay /
+     * HotkeyExitOverlay): the screen fades to black, release cancels.
+     */
     private updateQuickRetry(dt: number): void {
-        if (this.quickRetryActive) this.quickRetryHeld += dt;
-        else this.quickRetryHeld = Math.max(0, this.quickRetryHeld - dt * 2);
+        const action = this.holdAction;
+        if (action) {
+            if (action !== this.fadingFor) this.quickRetryHeld = 0;
+            this.fadingFor = action;
+            this.quickRetryHeld += dt;
+        } else {
+            this.quickRetryHeld = Math.max(0, this.quickRetryHeld - dt * 2);
+        }
         const hold = this.game.settings.holdToConfirmMs.value;
         this.retryFade.alpha = hold > 0 ? clamp01(this.quickRetryHeld / hold) : 0;
-        // Only while ` is down: with a 0 ms hold time, "held ≥ 0" is always true.
-        if (this.quickRetryActive && this.quickRetryHeld >= hold && this.outcome === 'none') {
-            this.quickRetryActive = false;
-            this.retry();
+        // Only while the key is down: with a 0 ms hold time, "held ≥ 0" is always true.
+        if (action && this.quickRetryHeld >= hold && this.outcome === 'none') {
+            this.holdAction = null;
+            if (action === 'quickRetry') this.retry(true);
+            else this.quit();
         }
     }
 

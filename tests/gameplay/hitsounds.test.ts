@@ -5,7 +5,7 @@ import type { SampleBank } from '../../src/audio/SampleBank';
 import { parseOsu } from '../../src/beatmap/parser';
 import { buildPlayableBeatmap } from '../../src/beatmap/processing';
 import type { PlayableSlider } from '../../src/beatmap/types';
-import { HitsoundPlayer } from '../../src/gameplay/HitsoundPlayer';
+import { HitsoundPlayer, spinnerSpinRate } from '../../src/gameplay/HitsoundPlayer';
 import { NO_MODS } from '../../src/gameplay/mods';
 import type { LegacySkin } from '../../src/skin/LegacySkin';
 
@@ -18,11 +18,11 @@ interface Call { fn: string; args: unknown[] }
 /** Records what the player asks the sample bank to do. */
 function fakeBank() {
     const calls: Call[] = [];
-    const loops: { name: string; stopped: boolean; volume: number }[] = [];
+    const loops: { name: string; stopped: boolean; volume: number; rate: number }[] = [];
     const loop = (name: string, volume: number) => {
-        const l = { name, stopped: false, volume };
+        const l = { name, stopped: false, volume, rate: 1 };
         loops.push(l);
-        return { setVolume: (v: number) => (l.volume = v), stop: () => (l.stopped = true) };
+        return { setVolume: (v: number) => (l.volume = v), setRate: (r: number) => (l.rate = r), stop: () => (l.stopped = true) };
     };
     const bank = {
         play: (...args: unknown[]) => calls.push({ fn: 'play', args }),
@@ -119,5 +119,32 @@ describe('HitsoundPlayer', () => {
         player.stopAll();
         expect(loops.length).toBeGreaterThan(0);
         expect(loops.every(l => l.stopped)).toBe(true);
+    });
+
+    it("raises the spinnerspin pitch with spin progress (SpinnerFrequencyModulate)", () => {
+        const { bank, loops } = fakeBank();
+        const player = new HitsoundPlayer(bank, beatmap);
+        const h = beatmap.hitObjects[0];
+        player.setSpinning(h, true, 0);
+        expect(loops[0].rate).toBeCloseTo(20_000 / 44_100);
+        player.setSpinning(h, true, 0.5);
+        expect(loops[0].rate).toBeCloseTo(40_000 / 44_100);
+        player.setSpinning(h, true, 1);
+        expect(loops[0].rate).toBeCloseTo(60_000 / 44_100);
+        player.spinnerFrequencyModulate = false;
+        player.setSpinning(h, true, 0.7);
+        expect(loops[0].rate).toBe(1);
+        expect(loops).toHaveLength(1);
+    });
+});
+
+describe('spinnerSpinRate', () => {
+    it("follows stable's 20 kHz + 40 kHz × progress, capped at 100 kHz", () => {
+        expect(spinnerSpinRate(0, true)).toBeCloseTo(0.4535, 3);
+        expect(spinnerSpinRate(1.5, true)).toBeCloseTo(80_000 / 44_100);
+        expect(spinnerSpinRate(2, true)).toBeCloseTo(100_000 / 44_100);
+        expect(spinnerSpinRate(5, true)).toBeCloseTo(100_000 / 44_100);
+        expect(spinnerSpinRate(-1, true)).toBeCloseTo(20_000 / 44_100);
+        expect(spinnerSpinRate(0.3, false)).toBe(1);
     });
 });

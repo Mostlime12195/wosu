@@ -25,6 +25,11 @@ export class GameplayInput {
     /** Presses per button (key overlay). */
     readonly counts: Record<GameplayButton, number> = { K1: 0, K2: 0, M1: 0, M2: 0 };
     readonly down: Record<GameplayButton, boolean> = { K1: false, K2: false, M1: false, M2: false };
+    /**
+     * The smoke key is held (lazer's OsuAction.Smoke). Not a gameplay button:
+     * it never judges, and like lazer's it works while presses are disabled.
+     */
+    smoke = false;
     /** Logical cursor position (last pointer / touch). */
     x = 0;
     y = 0;
@@ -66,7 +71,11 @@ export class GameplayInput {
     /** Keyboard down (from the screen's key routing). Returns true if it was a gameplay key. */
     keyDown(e: KeyboardEvent): boolean {
         const button = this.keyButton(e.code);
-        if (!button) return false;
+        if (!button) {
+            if (e.code !== this.settings.keySmoke.value) return false;
+            this.smoke = true;
+            return true;
+        }
         if (!e.repeat && !this.down[button]) this.press(button);
         return true;
     }
@@ -74,6 +83,7 @@ export class GameplayInput {
     keyUp(e: KeyboardEvent): void {
         const button = this.keyButton(e.code);
         if (button) this.release(button);
+        else if (e.code === this.settings.keySmoke.value) this.smoke = false;
     }
 
     private keyButton(code: string): GameplayButton | null {
@@ -167,6 +177,7 @@ export class GameplayInput {
     /** Forget held state (focus loss, pause) so nothing stays stuck down. */
     releaseAll(): void {
         for (const b of GAMEPLAY_BUTTONS) this.release(b);
+        this.smoke = false;
         this.touches.clear();
     }
 

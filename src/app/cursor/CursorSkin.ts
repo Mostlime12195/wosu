@@ -36,6 +36,8 @@ export interface CursorSkin {
     /** CursorExpand: grow on each press. */
     expand: boolean;
     trail: TrailSkin | null;
+    /** cursor-ripple from the first skin that has it (lazer's LegacyCursorRipple); null for the default ring. */
+    ripple: SkinTexture | null;
 }
 
 /** The first layer that may provide images and has `name` (lazer's per-component skin lookup). */
@@ -80,5 +82,6 @@ export function resolveCursorSkin(chain: SkinChain, builtin: LegacySkin | null):
         // OsuCursor reads CursorExpand from the whole skin source, first skin that sets it.
         expand: chain.config('cursorExpand'),
         trail,
+        ripple: chain.frames('cursor-ripple', false)[0] ?? null,
     };
 }

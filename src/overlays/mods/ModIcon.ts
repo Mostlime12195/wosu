@@ -7,6 +7,7 @@ export function modCategoryColor(category: ModCategory): number {
     switch (category) {
         case 'reduction': return 0xb2ff66;
         case 'increase': return 0xff6666;
+        case 'conversion': return 0x8c66ff;
         case 'automation': return 0x66ccff;
     }
 }

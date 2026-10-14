@@ -50,10 +50,14 @@ const ELEMENTS = [
     'spinner-background', 'spinner-circle', 'spinner-metre', 'spinner-approachcircle',
     'spinner-clear', 'spinner-spin', 'spinner-rpm', 'spinner-osu',
     // cursor
-    'cursor', 'cursormiddle', 'cursortrail',
+    'cursor', 'cursormiddle', 'cursortrail', 'cursor-smoke', 'cursor-ripple',
     // HUD
     'scorebar-bg', 'scorebar-colour', 'scorebar-ki', 'scorebar-kidanger', 'scorebar-kidanger2', 'scorebar-marker',
     'inputoverlay-key', 'inputoverlay-background', 'play-skip', 'comboburst',
+    // play screen: countdown, breaks, pause / fail menus
+    'ready', 'count3', 'count2', 'count1', 'go', 'section-pass', 'section-fail',
+    'play-warningarrow', 'arrow-warning', 'arrow-pause',
+    'pause-overlay', 'fail-background', 'pause-continue', 'pause-retry', 'pause-back',
 ];
 /** Font glyph suffixes (prefix-0 … prefix-x). */
 const GLYPHS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'comma', 'dot', 'percent', 'x'];
@@ -61,9 +65,13 @@ const GLYPHS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'comma', 'dot'
 const IMAGE_RE = /\.(png|jpe?g)$/i;
 const AUDIO_RE = /\.(wav|ogg|mp3)$/i;
 const HITSOUND_RE = /^(normal|soft|drum)-(hitnormal|hitwhistle|hitfinish|hitclap|slidertick|sliderslide|sliderwhistle|spinnerspin|spinnerbonus)(\d*)$/;
-const OTHER_SAMPLES = new Set(['combobreak', 'spinnerspin', 'spinnerbonus', 'failsound', 'sectionpass', 'sectionfail', 'applause', 'comboburst']);
-/** comboburst-0, comboburst-1… and the Nightcore mod's beat samples. */
-const NUMBERED_SAMPLES_RE = /^(comboburst-\d+|nightcore-(kick|clap|hat|finish))$/;
+const OTHER_SAMPLES = new Set([
+    'combobreak', 'spinnerspin', 'spinnerbonus', 'failsound', 'sectionpass', 'sectionfail', 'applause', 'comboburst',
+    'readys', 'count3s', 'count2s', 'count1s', 'count', 'gos', 'pause-loop', 'pause-hover',
+    'pause-continue-hover', 'pause-retry-hover', 'pause-back-hover', 'pause-continue-click', 'pause-retry-click', 'pause-back-click',
+]);
+/** comboburst-0, comboburst-1…, the Nightcore mod's beat samples and lazer's per-grade applause. */
+const NUMBERED_SAMPLES_RE = /^(comboburst-\d+|nightcore-(kick|clap|hat|finish)|applause-[sabcd])$/;
 
 export class LegacySkin {
     readonly config: SkinConfig;

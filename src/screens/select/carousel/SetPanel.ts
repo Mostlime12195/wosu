@@ -8,7 +8,7 @@ import { coverFill, setThumbnail, shadeGradient } from '../visuals';
 
 export const SET_HEIGHT = 80;
 const RADIUS = 10;
-const MAX_DOTS = 18;
+export const MAX_DOTS = 18;
 
 /**
  * lazer's DrawableCarouselBeatmapSet: thumbnail panel with title, artist,
@@ -34,6 +34,9 @@ export class SetPanel extends UIComponent {
     /** Animated in update: horizontal offset applied by the carousel. */
     xOffset = 0;
     onClickPanel: ((entry: FilterEntry) => void) | null = null;
+    /** Ratings for the dots, filled by the carousel each frame (mod-adjusted when known). */
+    readonly dotStars: (number | null)[] = [];
+    private readonly drawnDots: (number | null)[] = [];
 
     constructor(private readonly game: Game) {
         super();
@@ -65,7 +68,16 @@ export class SetPanel extends UIComponent {
             this.layoutTexts();
             this.drawBg();
         }
+        this.dotStars.length = 0;
         this.drawDots();
+    }
+
+    /** Redraw the dots if `dotStars` changed since they were drawn. */
+    commitDots(): void {
+        const a = this.dotStars, b = this.drawnDots;
+        let same = a.length === b.length;
+        for (let i = 0; same && i < a.length; i++) same = a[i] === b[i];
+        if (!same) this.drawDots();
     }
 
     release(): void {
@@ -118,8 +130,11 @@ export class SetPanel extends UIComponent {
         g.clear();
         const n = Math.min(MAX_DOTS, e.diffs.length);
         const y = this._h - 15;
+        this.drawnDots.length = 0;
         for (let i = 0; i < n; i++) {
-            const c = starColor(e.diffs[i].stars);
+            const stars = i < this.dotStars.length ? this.dotStars[i] : e.diffs[i].stars;
+            this.drawnDots.push(i < this.dotStars.length ? stars : e.diffs[i].stars);
+            const c = starColor(stars);
             const x = 26 + i * 18;
             g.circle(x, y, 6.5).fill(c);
             g.circle(x, y, 6.5).stroke({ width: 1.5, color: 0xffffff, alpha: 0.85 });

@@ -13,6 +13,19 @@ export type ComboEndVariant = 'geki' | 'katu';
 
 const RANK: Record<HitResult, number> = { great: 0, ok: 1, meh: 2, miss: 3 };
 
+/** The judgement images for the variants: hit300g, hit300k and hit100k. */
+export type ComboEndKind = 'geki' | 'katuGreat' | 'katuOk';
+
+/**
+ * The image a judgement shows: a combo's last object shows stable's geki
+ * (hit300g) or katu (hit300k for a GREAT, hit100k for an OK) instead.
+ */
+export function comboEndKind(result: HitResult, variant: ComboEndVariant | null): ComboEndKind | null {
+    if (variant === 'geki' && result === 'great') return 'geki';
+    if (variant === 'katu') return result === 'great' ? 'katuGreat' : result === 'ok' ? 'katuOk' : null;
+    return null;
+}
+
 /** The variant for a combo's last judgement `last`, given the worst judgement of the whole combo (`last` included). */
 export function comboEndVariant(worst: HitResult, last: HitResult): ComboEndVariant | null {
     if (worst === 'great') return 'geki';

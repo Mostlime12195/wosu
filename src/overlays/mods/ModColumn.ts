@@ -16,6 +16,7 @@ const RADIUS = 10;
 const TITLES: Record<ModCategory, string> = {
     reduction: 'Difficulty Reduction',
     increase: 'Difficulty Increase',
+    conversion: 'Conversion',
     automation: 'Automation',
 };
 

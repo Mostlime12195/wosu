@@ -4,15 +4,13 @@ import type { ModSet } from './mods';
 import type { HealthProcessor } from './scoring/HealthProcessor';
 import { ComboEndTracker, type ComboEndVariant } from './scoring/comboEnd';
 import {
-    DEFAULT_MECHANICS, MISS_WINDOW, TAIL_LENIENCY, BONUS_SPINS_GAP,
-    lazerSpinnerSpins, stableHalfSpinAward, stableSpinnerHalfSpins, type GameplayMechanics,
+    DEFAULT_MECHANICS, MISS_WINDOW, TAIL_LENIENCY, BONUS_SPINS_GAP, MAX_SPIN_RAD_PER_MS,
+    lazerSpinnerSpins, spinnerClearRpm, stableHalfSpinAward, stableSpinnerHalfSpins, type GameplayMechanics,
 } from './scoring/mechanics';
 import {
     resultForError, sliderResult, spinnerResult, type HitResult, type NestedKind, type ScoreProcessor,
 } from './scoring/ScoreProcessor';
 
-/** stable's spin speed cap (~477 RPM); lazer has none. */
-const MAX_SPIN_RAD_PER_MS = 0.05;
 /** Spun Out's fixed spin speed (stable: 287 RPM). */
 const SPUN_OUT_RAD_PER_MS = (287 / 60000) * Math.PI * 2;
 /** Follow area while tracking, in circle radii (lazer DrawableSliderBall.FOLLOW_AREA). */
@@ -31,6 +29,8 @@ export interface SliderState {
     kind: 'slider';
     /** Head judged? null = pending, true = hit, false = missed. */
     headHit: boolean | null;
+    /** The head's timing judgement (lazer: the slider's accuracy judgement); null while pending. */
+    headResult: HitResult | null;
     headAt: number;
     shakeAt: number;
     tracking: boolean;
@@ -41,6 +41,10 @@ export interface SliderState {
     /** Result per nested event (null until judged). */
     eventHit: (boolean | null)[];
     partsHit: number;
+    /**
+     * The slider's own judgement, set at its end: stable's result by the
+     * parts hit; lazer's unscored hit (any part hit) or miss.
+     */
     result: HitResult | null;
     judgedAt: number;
 }
@@ -115,8 +119,14 @@ type ClickAction = 'hit' | 'shake' | 'ignore';
  *    passed ticks on a late head hit, and hits the tail any time in its
  *    last 36 ms; stable judges every tick at its time and the legacy last
  *    tick once;
- *  - spinners: lazer's whole-spin requirement and net-rotation counting,
- *    or stable's half-spin counting with its 477 RPM cap.
+ *  - slider judgement: lazer judges the head like a hit circle (its timing
+ *    result is the slider's accuracy judgement, emitted as the slider's
+ *    `objectJudged` when the head is judged; the slider's end is unscored),
+ *    stable judges the head as a tick and the whole slider at its end by
+ *    the parts hit (OsuModClassic's "No slider head accuracy");
+ *  - spinners: lazer's whole spins of net rotation or stable's half spins
+ *    of absolute rotation, both at wosu!'s spinnerClearRpm and under the
+ *    477 RPM cap.
  * Early clicks inside the 400 ms miss window miss in both, as in the clients.
  */
 export class GameplayRules {
@@ -166,7 +176,9 @@ export class GameplayRules {
         this.perfect = mods.has('PF');
         this.relax = mods.has('RX');
         this.autoSpin = mods.has('SO') || mods.has('AT');
-        this.autoSpinRate = mods.has('AT') ? MAX_SPIN_RAD_PER_MS : SPUN_OUT_RAD_PER_MS;
+        // Spun Out must still clear past OD 10 (Difficulty Adjust's extended limits ask more than 287 RPM).
+        const clearRate = (spinnerClearRpm(d.od) / 60000) * TWO_PI * 1.01;
+        this.autoSpinRate = mods.has('AT') ? MAX_SPIN_RAD_PER_MS : Math.max(SPUN_OUT_RAD_PER_MS, clearRate);
         this.spinCounters = beatmap.hitObjects.map(h => (h.kind === 'spinner' ? this.spinCounter(h, d.od) : null));
         this.states = beatmap.hitObjects.map((h, i) => this.initialState(h, i));
         this.comboEnds = ComboEndTracker.forObjects(beatmap.hitObjects);
@@ -177,7 +189,8 @@ export class GameplayRules {
 
     private spinCounter(h: PlayableHitObject, od: number): SpinCounter {
         const duration = h.endTime - h.time;
-        const lazer = lazerSpinnerSpins(od, duration);
+        const rpm = spinnerClearRpm(od);
+        const lazer = lazerSpinnerSpins(od, duration, rpm);
         return {
             spinsRequired: lazer.spinsRequired,
             maxBonusSpins: lazer.maxBonusSpins,
@@ -185,7 +198,7 @@ export class GameplayRules {
             atLastCompletion: 0,
             currentSpinMax: 0,
             completed: 0,
-            halfSpinsRequired: stableSpinnerHalfSpins(od, duration),
+            halfSpinsRequired: stableSpinnerHalfSpins(od, duration, rpm),
             halfSpins: 0,
         };
     }
@@ -194,7 +207,7 @@ export class GameplayRules {
         if (h.kind === 'circle') return { kind: 'circle', result: null, judgedAt: 0, shakeAt: -Infinity };
         if (h.kind === 'slider') {
             return {
-                kind: 'slider', headHit: null, headAt: 0, shakeAt: -Infinity, tracking: false, trackingChangedAt: -Infinity,
+                kind: 'slider', headHit: null, headResult: null, headAt: 0, shakeAt: -Infinity, tracking: false, trackingChangedAt: -Infinity,
                 nextEvent: 1, eventHit: h.events.map(() => null), partsHit: 0, result: null, judgedAt: 0,
             };
         }
@@ -344,11 +357,15 @@ export class GameplayRules {
         } else if (s.kind === 'slider') {
             const slider = h as PlayableSlider;
             s.headHit = true;
+            s.headResult = result;
             s.headAt = time;
             s.eventHit[0] = true;
             s.partsHit++;
-            this.score.applyNested('head', true);
-            this.health.applyNested('head', true, result);
+            if (this.mechanics === 'lazer') this.applyLazerHead(i, result, time, error);
+            else {
+                this.score.applyNested('head', true);
+                this.health.applyNested('head', true, result);
+            }
             this.nestedJudged.emit(i, slider.events[0], true);
             if (this.mechanics === 'lazer') this.postProcessHead(i, slider, s, time, x, y);
         }
@@ -358,11 +375,30 @@ export class GameplayRules {
         const s = this.states[i];
         if (s.kind !== 'slider' || s.headHit !== null) return;
         s.headHit = false;
+        s.headResult = 'miss';
         s.headAt = time;
         s.eventHit[0] = false;
-        this.score.applyNested('head', false);
-        this.health.applyNested('head', false);
+        if (this.mechanics === 'lazer') this.applyLazerHead(i, 'miss', time, null);
+        else {
+            this.score.applyNested('head', false);
+            this.health.applyNested('head', false);
+        }
         this.nestedJudged.emit(i, (this.beatmap.hitObjects[i] as PlayableSlider).events[0], false);
+    }
+
+    /**
+     * lazer's non-classic slider head (SliderHeadCircle without
+     * ClassicSliderBehaviour): a hit circle judgement by timing, which is
+     * the slider's accuracy judgement (counts, combo, score value, Perfect)
+     * and is shown at the head. The slider itself is OsuIgnoreJudgement.
+     */
+    private applyLazerHead(i: number, result: HitResult, time: number, error: number | null): void {
+        const h = this.beatmap.hitObjects[i];
+        const variant = this.comboEnds.apply(i, result);
+        this.score.applyMain(result, true, variant);
+        this.health.applyNested('head', result !== 'miss', result);
+        if (this.perfect && result !== 'great') this.health.fail();
+        this.objectJudged.emit({ index: i, result, time, x: h.x, y: h.y, error, variant });
     }
 
     /**
@@ -469,10 +505,9 @@ export class GameplayRules {
                 delta = angle - s.lastAngle;
                 if (delta > Math.PI) delta -= TWO_PI;
                 if (delta < -Math.PI) delta += TWO_PI;
-                if (stable) {
-                    const cap = MAX_SPIN_RAD_PER_MS * Math.max(dt, 1);
-                    delta = Math.max(-cap, Math.min(cap, delta));
-                }
+                // stable's ~477 RPM cap, in both mechanics (see MAX_SPIN_RAD_PER_MS).
+                const cap = MAX_SPIN_RAD_PER_MS * Math.max(dt, 1);
+                delta = Math.max(-cap, Math.min(cap, delta));
             }
             s.lastAngle = angle;
         } else {
@@ -586,8 +621,22 @@ export class GameplayRules {
         const allJudged = s.nextEvent >= h.events.length && s.headHit !== null;
         if (time > h.endTime && allJudged) this.setTracking(s, false, h.endTime);
         if (time >= h.endTime && allJudged) {
-            this.applyMain(i, sliderResult(s.partsHit, h.events.length), h.endTime, h.endX, h.endY, null, false);
+            if (this.mechanics === 'lazer') this.endLazerSlider(i, s, h.endTime);
+            else this.applyMain(i, sliderResult(s.partsHit, h.events.length), h.endTime, h.endX, h.endY, null, false);
         }
+    }
+
+    /**
+     * lazer's non-classic DrawableSlider.CheckForResult: the slider's own
+     * judgement is IgnoreHit when any part was hit, else IgnoreMiss. It
+     * scores nothing and isn't shown (its accuracy judgement was the
+     * head's); health only takes the combo-end bonus from it.
+     */
+    private endLazerSlider(i: number, s: SliderState, time: number): void {
+        const result: HitResult = s.partsHit > 0 ? 'great' : 'miss';
+        s.result = result;
+        s.judgedAt = time;
+        this.health.applyMain(result, i);
     }
 
     private judgeNextEvent(i: number, h: PlayableSlider, s: SliderState, hit: boolean): void {
@@ -597,6 +646,9 @@ export class GameplayRules {
         const kind = ev.kind as NestedKind;
         this.score.applyNested(kind, hit);
         this.health.applyNested(kind, hit);
+        // lazer's Perfect fails on any accuracy-affecting miss (a missed tail
+        // doesn't break combo); stable's shows up as a non-300 slider.
+        if (this.perfect && !hit && this.mechanics === 'lazer') this.health.fail();
         this.nestedJudged.emit(i, ev, hit);
         s.nextEvent++;
     }

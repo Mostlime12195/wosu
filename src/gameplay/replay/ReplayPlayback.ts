@@ -1,5 +1,5 @@
 import type { GameplayButton } from '../input/GameplayInput';
-import { BUTTON_BITS, type ReplayEvent } from './Replay';
+import { BUTTON_BITS, SMOKE_BIT, type ReplayEvent } from './Replay';
 
 /**
  * lazer's FramedReplayInputHandler: hands the recorded events to gameplay
@@ -11,6 +11,8 @@ export class ReplayPlayback {
     readonly down: Record<GameplayButton, boolean> = { K1: false, K2: false, M1: false, M2: false };
     /** Presses per button (key overlay). */
     readonly counts: Record<GameplayButton, number> = { K1: 0, K2: 0, M1: 0, M2: 0 };
+    /** The recorded smoke key. */
+    smoke = false;
     private index = 0;
     /** Last applied event with a position. */
     private last: { time: number; x: number; y: number } = { time: -Infinity, x: 256, y: 192 };
@@ -29,6 +31,7 @@ export class ReplayPlayback {
             const e = ev[this.index++];
             if (e.kind === 'frame') {
                 for (const b of Object.keys(BUTTON_BITS) as GameplayButton[]) this.down[b] = (e.buttons & BUTTON_BITS[b]) !== 0;
+                this.smoke = (e.buttons & SMOKE_BIT) !== 0;
                 this.last = e;
             } else if (e.kind === 'press') {
                 this.down[e.button] = true;

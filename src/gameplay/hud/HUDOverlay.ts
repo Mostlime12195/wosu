@@ -65,8 +65,9 @@ const NEXT_MODE: Record<HudVisibility, HudVisibility> = { never: 'hideDuringGame
  * lazer's legacy one (see HUDOptions.legacyLayout).
  * Score, accuracy, combo and health are lazer's legacy-skin components,
  * drawn from the skin chain in lazer's 1024×768 HUD units (so they size
- * like lazer with any osu! skin); the key overlay is the skin's when it
- * has inputoverlay images. Visibility follows lazer's HUD visibility mode
+ * like lazer with any osu! skin); the key overlay is stable's in the
+ * legacy layout (wosu!-drawn keys when the skin has none) and otherwise
+ * the skin's when it has inputoverlay images. Visibility follows lazer's HUD visibility mode
  * (fading as a whole), each element has its own toggle, and every
  * setting applies live.
  */
@@ -106,7 +107,7 @@ export class HUDOverlay extends Container {
         const legacy = (this.legacy = !!opts.legacyLayout);
         if (legacy) this.pie = new LegacySongProgress(opts.introStart ?? beatmap.startTime - 1500, beatmap.startTime, beatmap.endTime);
         else this.progress = new SongProgress(beatmap);
-        this.keys = LegacyKeyCounter.create(chain, settings.keyOverlayStyle.value) ?? new KeyCounter(settings.keyOverlayStyle.value);
+        this.keys = LegacyKeyCounter.create(chain, settings.keyOverlayStyle.value, legacy) ?? new KeyCounter(settings.keyOverlayStyle.value);
         this.errorMeter = legacy
             ? new LegacyBarHitErrorMeter(d.window300, d.window100, d.window50)
             : new HitErrorMeter(d.window300, d.window100, d.window50);

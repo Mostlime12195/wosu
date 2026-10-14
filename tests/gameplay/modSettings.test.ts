@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { buildPlayableBeatmap } from '../../src/beatmap/processing';
 import {
+    adjustDifficulty,
     audioPitch,
+    difficultyOverrides,
     extendedModInfo,
     extraLives,
     flashlightSettings,
     formatSetting,
     hasSettings,
+    hiddenSettings,
+    modInfo,
     modSetting,
     modSettingDefs,
     modSettingsOf,
@@ -25,6 +30,8 @@ import {
     withSettings,
 } from '../../src/gameplay/mods';
 import { ratingMods } from '../../src/screens/select/modStars';
+import { makeMap } from '../beatmap/helpers';
+import { parseOsu } from '../../src/beatmap/parser';
 
 const dt = (speed?: number, adjustPitch?: boolean) => {
     let m = sanitizeMods(['DT']);
@@ -156,6 +163,79 @@ describe('score multipliers (lazer OsuScoreMultiplierCalculatorV1)', () => {
         expect(scoreMultiplier(withModSetting(sanitizeMods(['FL']), 'FL', 'sizeMultiplier', 1.5))).toBeCloseTo(1);
         expect(scoreMultiplier(withModSetting(sanitizeMods(['EZ']), 'EZ', 'retries', 5))).toBeCloseTo(0.5);
         expect(scoreMultiplier(withModSetting(sanitizeMods(['PF']), 'PF', 'restart', false))).toBe(1);
+    });
+});
+
+describe('Hidden: only fade approach circles', () => {
+    it('is a setting of HD that drops its score bonus when on', () => {
+        expect(modSettingDefs('HD').map(d => d.key)).toEqual(['onlyFadeApproachCircles']);
+        expect(hiddenSettings(sanitizeMods(['HD'])).onlyFadeApproachCircles).toBe(false);
+        const only = withModSetting(sanitizeMods(['HD']), 'HD', 'onlyFadeApproachCircles', true);
+        expect(hiddenSettings(only).onlyFadeApproachCircles).toBe(true);
+        expect(scoreMultiplier(sanitizeMods(['HD']))).toBeCloseTo(1.06);
+        expect(scoreMultiplier(only)).toBe(1);
+        // HD never changes the star rating, whatever its setting.
+        expect(ratingMods(only)).toBeNull();
+    });
+});
+
+describe('Difficulty Adjust', () => {
+    const da = (values: Record<string, number | boolean> = {}) => {
+        let m = sanitizeMods(['DA']);
+        // Extended limits first, so its range applies to the values.
+        if (values.extendedLimits !== undefined) m = withModSetting(m, 'DA', 'extendedLimits', values.extendedLimits);
+        for (const [k, v] of Object.entries(values)) if (k !== 'extendedLimits') m = withModSetting(m, 'DA', k, v);
+        return m;
+    };
+
+    it("is a 0.5x conversion mod, incompatible with EZ and HR, with lazer's settings", () => {
+        expect(modInfo('DA')).toMatchObject({ name: 'Difficulty Adjust', category: 'conversion', scoreMultiplier: 0.5, incompatible: ['EZ', 'HR'] });
+        expect(scoreMultiplier(da({ ar: 9 }))).toBe(0.5);
+        expect([...toggleMod(sanitizeMods(['HR', 'HD']), 'DA')]).toEqual(['HD', 'DA']);
+        expect([...toggleMod(da(), 'EZ')]).toEqual(['EZ']);
+        expect(modSettingDefs('DA').map(d => d.key)).toEqual(['cs', 'hp', 'od', 'ar', 'extendedLimits']);
+    });
+
+    it('uses the beatmap value until a setting is changed', () => {
+        expect(modSetting(da(), 'DA', 'ar')).toBeNull();
+        expect(usesDefaultConfiguration(da(), 'DA')).toBe(true);
+        const d = { cs: 4, ar: 9, od: 8, hp: 6 };
+        expect(adjustDifficulty(d, da())).toEqual(d);
+        expect(adjustDifficulty(d, da({ ar: 10, cs: 3.25 }))).toEqual({ cs: 3.3, ar: 10, od: 8, hp: 6 });
+        expect(difficultyOverrides(da({ od: 2 }))).toEqual({ od: 2 });
+        // Back to the beatmap's value.
+        expect(modSetting(withModSetting(da({ od: 2 }), 'DA', 'od', null), 'DA', 'od')).toBeNull();
+    });
+
+    it('extended limits allow CS/OD/HP up to 11 and AR from −10 to 11; turning them off clamps', () => {
+        expect(modSetting(da({ ar: 11, cs: 12 }), 'DA', 'ar')).toBe(10);
+        expect(modSetting(da({ ar: -3 }), 'DA', 'ar')).toBe(0);
+        const ext = da({ extendedLimits: true, ar: -12, cs: 12, od: 11, hp: 10.5 });
+        expect(difficultyOverrides(ext)).toEqual({ ar: -10, cs: 11, od: 11, hp: 10.5 });
+        const off = withModSetting(ext, 'DA', 'extendedLimits', false);
+        expect(difficultyOverrides(off)).toEqual({ ar: 0, cs: 10, od: 10, hp: 10 });
+        // Stored settings are sanitized the same way.
+        expect(sanitizeModSettings({ DA: { ar: 11, cs: 'x' } }, ['DA'])).toEqual({ DA: { ar: 10 } });
+        expect(sanitizeModSettings({ DA: { ar: 11, extendedLimits: true } }, ['DA'])).toEqual({ DA: { ar: 11, extendedLimits: true } });
+    });
+
+    it('shows its one changed value on the icon (lazer ExtendedIconInformation)', () => {
+        expect(extendedModInfo('DA', modSettingsOf(da({ ar: 9.5 })))).toBe('AR9.5');
+        expect(extendedModInfo('DA', modSettingsOf(da({ extendedLimits: true, cs: 11 })))).toBe('CS11');
+        expect(extendedModInfo('DA', modSettingsOf(da({ ar: 9, od: 9 })))).toBe('');
+        expect(extendedModInfo('DA', modSettingsOf(da()))).toBe('');
+    });
+
+    it('applies in beatmap processing and the star rating mods', () => {
+        const data = parseOsu(makeMap({ objects: ['100,100,1000,1,0'], difficulty: { CircleSize: 4, ApproachRate: 9, OverallDifficulty: 8, HPDrainRate: 6 } }));
+        const mods = da({ extendedLimits: true, ar: 11, od: 11, cs: 2 });
+        const d = buildPlayableBeatmap(data, mods).difficulty;
+        expect([d.cs, d.ar, d.od, d.hp]).toEqual([2, 11, 11, 6]);
+        expect(d.preempt).toBeCloseTo(300);
+        expect(d.window300).toBeCloseTo(14);
+        const rating = ratingMods(toggleMod(mods, 'HD'));
+        expect(rating && [...rating]).toEqual(['DA']);
+        expect(rating && difficultyOverrides(rating)).toEqual({ ar: 11, od: 11, cs: 2 });
     });
 });
 

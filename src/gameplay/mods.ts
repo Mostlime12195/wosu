@@ -12,9 +12,10 @@
 export type ModAcronym =
     | 'EZ' | 'NF' | 'HT' | 'DC'
     | 'HR' | 'SD' | 'PF' | 'DT' | 'NC' | 'HD' | 'FL'
+    | 'DA'
     | 'RX' | 'AP' | 'SO' | 'AT';
 
-export type ModCategory = 'reduction' | 'increase' | 'automation';
+export type ModCategory = 'reduction' | 'increase' | 'conversion' | 'automation';
 
 export interface ModInfo {
     acronym: ModAcronym;
@@ -28,6 +29,8 @@ export interface ModInfo {
     rate?: number;
     /** Excluded from score submission-ish features (history ranking). */
     unranked?: boolean;
+    /** lazer's RequiresConfiguration: selecting it opens its settings. */
+    requiresConfiguration?: boolean;
 }
 
 const RATE = ['HT', 'DC', 'DT', 'NC'] as const;
@@ -35,17 +38,18 @@ type RateMod = typeof RATE[number];
 const AUTO = ['RX', 'AP', 'AT'] as const;
 
 export const MODS: readonly ModInfo[] = [
-    { acronym: 'EZ', name: 'Easy', description: 'Larger circles, more forgiving HP drain, less accuracy required, and extra lives!', category: 'reduction', scoreMultiplier: 0.5, incompatible: ['HR'] },
+    { acronym: 'EZ', name: 'Easy', description: 'Larger circles, more forgiving HP drain, less accuracy required, and extra lives!', category: 'reduction', scoreMultiplier: 0.5, incompatible: ['HR', 'DA'] },
     { acronym: 'NF', name: 'No Fail', description: "You can't fail, no matter what.", category: 'reduction', scoreMultiplier: 0.5, incompatible: ['SD', 'PF', 'RX', 'AP', 'AT'] },
     { acronym: 'HT', name: 'Half Time', description: 'Less zoom...', category: 'reduction', scoreMultiplier: 0.3, incompatible: ['DC', 'DT', 'NC'], rate: 0.75 },
     { acronym: 'DC', name: 'Daycore', description: 'Whoaaaaa...', category: 'reduction', scoreMultiplier: 0.3, incompatible: ['HT', 'DT', 'NC'], rate: 0.75 },
-    { acronym: 'HR', name: 'Hard Rock', description: 'Everything just got a bit harder...', category: 'increase', scoreMultiplier: 1.06, incompatible: ['EZ'] },
+    { acronym: 'HR', name: 'Hard Rock', description: 'Everything just got a bit harder...', category: 'increase', scoreMultiplier: 1.06, incompatible: ['EZ', 'DA'] },
     { acronym: 'SD', name: 'Sudden Death', description: 'Miss and fail.', category: 'increase', scoreMultiplier: 1, incompatible: ['NF', 'PF', 'RX', 'AP', 'AT'] },
     { acronym: 'PF', name: 'Perfect', description: 'SS or quit.', category: 'increase', scoreMultiplier: 1, incompatible: ['NF', 'SD', 'RX', 'AP', 'AT'] },
     { acronym: 'DT', name: 'Double Time', description: 'Zoooooooooom...', category: 'increase', scoreMultiplier: 1.1, incompatible: ['HT', 'DC', 'NC'], rate: 1.5 },
     { acronym: 'NC', name: 'Nightcore', description: 'Uguuuuuuuu...', category: 'increase', scoreMultiplier: 1.1, incompatible: ['HT', 'DC', 'DT'], rate: 1.5 },
     { acronym: 'HD', name: 'Hidden', description: 'Play with no approach circles and fading circles/sliders.', category: 'increase', scoreMultiplier: 1.06, incompatible: [] },
     { acronym: 'FL', name: 'Flashlight', description: 'Restricted view area.', category: 'increase', scoreMultiplier: 1.12, incompatible: [] },
+    { acronym: 'DA', name: 'Difficulty Adjust', description: "Override a beatmap's difficulty settings.", category: 'conversion', scoreMultiplier: 0.5, incompatible: ['EZ', 'HR'], unranked: true, requiresConfiguration: true },
     { acronym: 'RX', name: 'Relax', description: "You don't need to click. Give your clicking/tapping fingers a break from the heat of things.", category: 'automation', scoreMultiplier: 0.1, incompatible: ['NF', 'SD', 'PF', 'AP', 'AT'], unranked: true },
     { acronym: 'AP', name: 'Autopilot', description: 'Automatic cursor movement - just follow the rhythm.', category: 'automation', scoreMultiplier: 0.1, incompatible: ['NF', 'SD', 'PF', 'RX', 'AT', 'SO'], unranked: true },
     { acronym: 'SO', name: 'Spun Out', description: 'Spinners will be automatically completed.', category: 'automation', scoreMultiplier: 0.9, incompatible: ['AP', 'AT'] },
@@ -70,6 +74,9 @@ export function isModAcronym(s: unknown): s is ModAcronym {
 
 export type ModSettingValue = number | boolean;
 
+/** A beatmap difficulty value a setting can override. */
+export type DifficultyStat = 'cs' | 'ar' | 'od' | 'hp';
+
 interface SettingBase {
     key: string;
     label: string;
@@ -91,7 +98,24 @@ export interface ToggleSettingDef extends SettingBase {
     default: boolean;
 }
 
-export type ModSettingDef = NumberSettingDef | ToggleSettingDef;
+/**
+ * lazer's DifficultyBindable: a number that is unset ("use the beatmap's
+ * value", null) until changed, with a wider range under the mod's
+ * "Extended limits".
+ */
+export interface DifficultySettingDef extends SettingBase {
+    kind: 'difficulty';
+    default: null;
+    /** The beatmap value it overrides. */
+    stat: DifficultyStat;
+    min: number;
+    max: number;
+    extendedMin: number;
+    extendedMax: number;
+    precision: number;
+}
+
+export type ModSettingDef = NumberSettingDef | ToggleSettingDef | DifficultySettingDef;
 
 /** Settings of one mod, keyed by setting key. */
 export type ModSettingValues = Readonly<Record<string, ModSettingValue>>;
@@ -112,12 +136,17 @@ const adjustPitch: ToggleSettingDef = {
 const restart = (def: boolean): ToggleSettingDef => ({
     kind: 'toggle', key: 'restart', label: 'Restart on fail', description: 'Automatically restarts when failed.', default: def,
 });
+const difficulty = (stat: DifficultyStat, label: string, description: string, extendedMin = 0): DifficultySettingDef => ({
+    kind: 'difficulty', key: stat, label, description, default: null, stat, min: 0, max: 10, extendedMin, extendedMax: 11, precision: 0.1,
+});
 
 /**
  * lazer's settings for the mods wosu! has: ModDoubleTime / ModHalfTime
  * (speed + adjust pitch), ModNightcore / ModDaycore (speed), ModFailCondition
  * (restart; ModPerfect defaults it on), OsuModFlashlight (size, combo-based
- * size, follow delay) and ModEasyWithExtraLives (extra lives).
+ * size, follow delay), ModEasyWithExtraLives (extra lives), OsuModHidden
+ * (only fade approach circles) and OsuModDifficultyAdjust (CS, HP, OD
+ * and AR overrides plus extended limits, in lazer's order).
  */
 const SETTINGS: Partial<Record<ModAcronym, readonly ModSettingDef[]>> = {
     EZ: [{ kind: 'number', key: 'retries', label: 'Extra Lives', description: 'Number of extra lives', default: 2, min: 0, max: 10, precision: 1, unit: 'none' }],
@@ -127,6 +156,14 @@ const SETTINGS: Partial<Record<ModAcronym, readonly ModSettingDef[]>> = {
     PF: [restart(true)],
     DT: [speedIncrease, adjustPitch],
     NC: [speedIncrease],
+    HD: [{ kind: 'toggle', key: 'onlyFadeApproachCircles', label: 'Only fade approach circles', description: 'The main object body will not fade when enabled.', default: false }],
+    DA: [
+        difficulty('cs', 'Circle Size', "Override a beatmap's set CS."),
+        difficulty('hp', 'HP Drain', "Override a beatmap's set HP."),
+        difficulty('od', 'Accuracy', "Override a beatmap's set OD."),
+        difficulty('ar', 'Approach Rate', "Override a beatmap's set AR.", -10),
+        { kind: 'toggle', key: 'extendedLimits', label: 'Extended Limits', description: 'Adjust difficulty beyond sane limits.', default: false },
+    ],
     FL: [
         { kind: 'number', key: 'sizeMultiplier', label: 'Flashlight size', description: 'Multiplier applied to the default flashlight size.', default: 1, min: 0.5, max: 2, precision: 0.1, unit: 'multiplier' },
         { kind: 'toggle', key: 'comboBasedSize', label: 'Change size based on combo', description: 'Decrease the flashlight size as combo increases.', default: true },
@@ -146,21 +183,32 @@ function settingDef(acronym: ModAcronym, key: string): ModSettingDef | undefined
     return modSettingDefs(acronym).find(d => d.key === key);
 }
 
+/**
+ * The range a number setting allows: a difficulty override's widens with
+ * the mod's "Extended limits" (`extended`).
+ */
+export function settingRange(def: NumberSettingDef | DifficultySettingDef, extended = false): { min: number; max: number } {
+    if (def.kind === 'difficulty' && extended) return { min: def.extendedMin, max: def.extendedMax };
+    return { min: def.min, max: def.max };
+}
+
 /** Clamp and snap a number to a setting's range and precision (null when unusable). */
-function coerceSetting(def: ModSettingDef, v: unknown): ModSettingValue | null {
+function coerceSetting(def: ModSettingDef, v: unknown, extended = false): ModSettingValue | null {
     if (def.kind === 'toggle') return typeof v === 'boolean' ? v : null;
     const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
     if (!Number.isFinite(n)) return null;
-    const clamped = Math.min(def.max, Math.max(def.min, n));
-    const snapped = Math.round((clamped - def.min) / def.precision) * def.precision + def.min;
+    const range = settingRange(def, extended);
+    const clamped = Math.min(range.max, Math.max(range.min, n));
+    const snapped = Math.round((clamped - range.min) / def.precision) * def.precision + range.min;
     // Keep canonical decimals (1.3, not 1.2999999999999998).
     const decimals = Math.max(0, -Math.floor(Math.log10(def.precision)) + 1);
-    return Math.min(def.max, Number(snapped.toFixed(decimals)));
+    return Math.min(range.max, Number(snapped.toFixed(decimals)));
 }
 
 export function formatSetting(def: ModSettingDef, v: ModSettingValue): string {
     if (def.kind === 'toggle') return v ? 'On' : 'Off';
     const n = Number(v);
+    if (def.kind === 'difficulty') return n.toFixed(1);
     switch (def.unit) {
         case 'multiplier': return `${n.toFixed(def.precision < 0.1 ? 2 : 1)}x`;
         case 'ms': return `${Math.round(n)} ms`;
@@ -178,7 +226,12 @@ export interface ModSet extends ReadonlySet<ModAcronym> {
 
 export const NO_MODS: ModSet = new Set();
 
-/** Valid, non-default settings of `mods` only (unknown keys and junk dropped). */
+/**
+ * Valid, non-default settings of `mods` only (unknown keys and junk
+ * dropped). Difficulty overrides are clamped to the range their mod's
+ * "Extended limits" allows (lazer's DifficultyBindable clamps them when
+ * the limits are turned off).
+ */
 export function sanitizeModSettings(raw: unknown, mods: Iterable<ModAcronym>): ModSettingsMap {
     const out: Partial<Record<ModAcronym, Record<string, ModSettingValue>>> = {};
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
@@ -186,10 +239,11 @@ export function sanitizeModSettings(raw: unknown, mods: Iterable<ModAcronym>): M
     for (const a of mods) {
         const values = src[a];
         if (!values || typeof values !== 'object' || Array.isArray(values)) continue;
+        const extended = (values as Record<string, unknown>).extendedLimits === true && !!settingDef(a, 'extendedLimits');
         for (const [key, v] of Object.entries(values as Record<string, unknown>)) {
             const def = settingDef(a, key);
             if (!def) continue;
-            const value = coerceSetting(def, v);
+            const value = coerceSetting(def, v, extended);
             if (value === null || value === def.default) continue;
             (out[a] ??= {})[key] = value;
         }
@@ -204,8 +258,16 @@ function makeSet(acronyms: Iterable<ModAcronym>, settings?: unknown): ModSet {
     return set;
 }
 
-/** The value of one setting (its default when not customised or the mod isn't selected). */
-export function modSetting(mods: ModSet, acronym: ModAcronym, key: string): ModSettingValue {
+/** Is `acronym`'s "Extended limits" on (lazer's ModDifficultyAdjust.ExtendedLimits)? */
+export function extendedLimitsOn(mods: ModSet, acronym: ModAcronym): boolean {
+    return !!settingDef(acronym, 'extendedLimits') && mods.settings?.[acronym]?.extendedLimits === true;
+}
+
+/**
+ * The value of one setting (its default when not customised or the mod
+ * isn't selected); null for a difficulty override left at the beatmap's value.
+ */
+export function modSetting(mods: ModSet, acronym: ModAcronym, key: string): ModSettingValue | null {
     const def = settingDef(acronym, key);
     if (!def) throw new Error(`unknown setting ${acronym}.${key}`);
     return mods.settings?.[acronym]?.[key] ?? def.default;
@@ -219,11 +281,21 @@ function toggleSetting(mods: ModSet, acronym: ModAcronym, key: string): boolean 
     return modSetting(mods, acronym, key) === true;
 }
 
-/** Change one setting of a selected mod (unselected mods can't be customised, like lazer). */
-export function withModSetting(mods: ModSet, acronym: ModAcronym, key: string, value: ModSettingValue): ModSet {
+/**
+ * Change one setting of a selected mod (unselected mods can't be
+ * customised, like lazer); null puts a difficulty override back to the
+ * beatmap's value.
+ */
+export function withModSetting(mods: ModSet, acronym: ModAcronym, key: string, value: ModSettingValue | null): ModSet {
     const def = settingDef(acronym, key);
     if (!def || !mods.has(acronym)) return mods;
-    const v = coerceSetting(def, value);
+    if (value === null) {
+        if (def.kind !== 'difficulty' || mods.settings?.[acronym]?.[key] === undefined) return mods;
+        const values: Record<string, ModSettingValue> = { ...mods.settings[acronym] };
+        delete values[key];
+        return makeSet(mods, { ...mods.settings, [acronym]: values });
+    }
+    const v = coerceSetting(def, value, extendedLimitsOn(mods, acronym));
     if (v === null || v === modSetting(mods, acronym, key)) return mods;
     const settings = { ...(mods.settings ?? {}), [acronym]: { ...(mods.settings?.[acronym] ?? {}), [key]: v } };
     return makeSet(mods, settings);
@@ -258,9 +330,17 @@ export function withSettings(mods: Iterable<ModAcronym>, settings: unknown): Mod
 
 /**
  * lazer's ExtendedIconInformation, shown beside the acronym on mod icons
- * and pills: the speed of a rate mod when it isn't the default ("1.30x").
+ * and pills: the speed of a rate mod when it isn't the default ("1.30x"),
+ * or Difficulty Adjust's one changed value ("AR11"; nothing when several
+ * are changed, as OsuModDifficultyAdjust).
  */
 export function extendedModInfo(acronym: ModAcronym, settings?: ModSettingsMap): string {
+    if (acronym === 'DA') {
+        const changed = (['cs', 'ar', 'od', 'hp'] as const).filter(k => typeof settings?.DA?.[k] === 'number');
+        if (changed.length !== 1) return '';
+        const v = Number(settings?.DA?.[changed[0]]);
+        return `${changed[0].toUpperCase()}${Number(v.toFixed(1))}`;
+    }
     if (!(RATE as readonly string[]).includes(acronym)) return '';
     const v = settings?.[acronym]?.speedChange;
     return typeof v === 'number' ? `${v.toFixed(2)}x` : '';
@@ -385,6 +465,29 @@ export function extraLives(mods: ModSet): number {
     return mods.has('EZ') ? numberSetting(mods, 'EZ', 'retries') : 0;
 }
 
+export interface HiddenSettings {
+    /** OsuModHidden.OnlyFadeApproachCircles: hide approach circles, but don't fade the objects. */
+    onlyFadeApproachCircles: boolean;
+}
+
+export function hiddenSettings(mods: ModSet): HiddenSettings {
+    return { onlyFadeApproachCircles: toggleSetting(mods, 'HD', 'onlyFadeApproachCircles') };
+}
+
+/**
+ * Difficulty Adjust's overrides (OsuModDifficultyAdjust.ApplySettings):
+ * the values set, each null while it uses the beatmap's. Empty without DA.
+ */
+export function difficultyOverrides(mods: ModSet): Partial<Record<DifficultyStat, number>> {
+    const out: Partial<Record<DifficultyStat, number>> = {};
+    if (!mods.has('DA')) return out;
+    for (const k of ['cs', 'ar', 'od', 'hp'] as const) {
+        const v = modSetting(mods, 'DA', k);
+        if (typeof v === 'number') out[k] = v;
+    }
+    return out;
+}
+
 export interface FlashlightSettings {
     sizeMultiplier: number;
     comboBasedSize: boolean;
@@ -412,13 +515,23 @@ export function isAutomated(mods: ModSet): boolean {
     return AUTO.some(a => mods.has(a));
 }
 
-/** Difficulty multipliers applied by EZ/HR (stable rules). */
+/**
+ * The beatmap difficulty the mods play: Difficulty Adjust's overrides
+ * (which may go past 10, or below 0 for AR, with extended limits) or the
+ * multipliers of EZ/HR (stable rules); DA is incompatible with both.
+ */
 export function adjustDifficulty(
     d: { cs: number; ar: number; od: number; hp: number },
     mods: ModSet,
 ): { cs: number; ar: number; od: number; hp: number } {
     let { cs, ar, od, hp } = d;
-    if (mods.has('HR')) {
+    if (mods.has('DA')) {
+        const o = difficultyOverrides(mods);
+        cs = o.cs ?? cs;
+        ar = o.ar ?? ar;
+        od = o.od ?? od;
+        hp = o.hp ?? hp;
+    } else if (mods.has('HR')) {
         cs = Math.min(cs * 1.3, 10);
         ar = Math.min(ar * 1.4, 10);
         od = Math.min(od * 1.4, 10);

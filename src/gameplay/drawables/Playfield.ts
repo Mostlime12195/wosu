@@ -16,7 +16,10 @@ export interface PlayfieldOptions {
     skin: SkinChain;
     beatmap: PlayableBeatmap;
     rules: GameplayRules;
+    /** Hidden's object fading (off with HD's "Only fade approach circles"). */
     hidden: boolean;
+    /** lazer's IHidesApproachCircles (Hidden); defaults to `hidden`. */
+    hideApproachCircles?: boolean;
     hideNumbers: boolean;
     hideFollowPoints: boolean;
     snakingIn: boolean;
@@ -64,6 +67,7 @@ export class Playfield extends Container {
             preempt: d.preempt,
             fadeIn: d.fadeIn,
             hidden: o.hidden,
+            hideApproachCircles: o.hideApproachCircles ?? o.hidden,
             hideNumbers: o.hideNumbers,
             snakingIn: o.snakingIn,
             snakingOut: o.snakingOut,
@@ -87,6 +91,8 @@ export class Playfield extends Container {
         // Slider heads, ticks and repeats show slider point judgements when the skin has them.
         this.offNested = o.rules.nestedJudged.add((index, ev, hit) => {
             if (ev.kind === 'tail') return;
+            // lazer judges the head like a hit circle (shown as the slider's judgement).
+            if (ev.kind === 'head' && o.rules.mechanics === 'lazer') return;
             const s = o.rules.states[index];
             const time = ev.kind !== 'head' ? ev.time
                 : hit && s.kind === 'slider' ? s.headAt : ev.time + o.rules.windows.w50;

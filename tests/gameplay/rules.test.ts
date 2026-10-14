@@ -9,7 +9,7 @@ import { GameplayRules, sliderBallPosition, type SpinnerState } from '../../src/
 import { AutoPlayer } from '../../src/gameplay/input/AutoPlayer';
 import { NO_MODS, sanitizeMods, scoreMultiplier, type ModSet } from '../../src/gameplay/mods';
 import { HealthProcessor } from '../../src/gameplay/scoring/HealthProcessor';
-import { GAMEPLAY_MECHANICS, type GameplayMechanics } from '../../src/gameplay/scoring/mechanics';
+import { GAMEPLAY_MECHANICS, MAX_SPIN_RPM, spinnerClearRpm, type GameplayMechanics } from '../../src/gameplay/scoring/mechanics';
 import { ScoreProcessor } from '../../src/gameplay/scoring/ScoreProcessor';
 import { makeMap } from '../beatmap/helpers';
 
@@ -19,7 +19,7 @@ const fixture = parseOsu(readFileSync(join(FIXDIR, osuFile), 'utf8'));
 
 function setup(mods: ModSet = NO_MODS, mechanics: GameplayMechanics = 'lazer', data: BeatmapData = fixture, noFail?: boolean) {
     const beatmap = buildPlayableBeatmap(data, mods, playableOptions(mechanics));
-    const score = new ScoreProcessor({ difficultyMultiplier: 4, modMultiplier: scoreMultiplier(mods) });
+    const score = new ScoreProcessor({ difficultyMultiplier: 4, modMultiplier: scoreMultiplier(mods), mechanics });
     const health = new HealthProcessor({
         hpDifficulty: beatmap.difficulty.hp, breaks: beatmap.breaks,
         drainStart: beatmap.startTime, drainEnd: beatmap.endTime,
@@ -154,26 +154,33 @@ function spinAt(mechanics: GameplayMechanics, rpm: number, od = 5, durationMs = 
 }
 
 describe('spinner requirements', () => {
-    it('lazer: whole spins at 150 RPM (OD 5); stable: half spins at 5 per second', () => {
-        // 2 s at OD 5: lazer needs (int)(2.5 × 2) = 5 spins, stable (int)(2 × 5) = 10 half spins.
-        expect(spinAt('lazer', 0).required).toBeCloseTo(5 * Math.PI * 2);
-        expect(spinAt('stable', 0).required).toBeCloseTo(10 * Math.PI);
-        // OD 10: 225 RPM in both (7.5 spins → lazer 7, stable 15 half spins).
-        expect(spinAt('lazer', 0, 10).required).toBeCloseTo(7 * Math.PI * 2);
-        expect(spinAt('stable', 0, 10).required).toBeCloseTo(15 * Math.PI);
+    it('both need 180 RPM at OD 5 (between lazer\'s 150 and wosu!\'s old 210), scaled 108/180/270 across OD', () => {
+        expect([0, 5, 10].map(spinnerClearRpm)).toEqual([108, 180, 270]);
+        // 2 s at OD 5: lazer counts (int)(3 × 2) = 6 whole spins, stable (int)(2 × 6) = 12 half spins.
+        expect(spinAt('lazer', 0).required).toBeCloseTo(6 * Math.PI * 2);
+        expect(spinAt('stable', 0).required).toBeCloseTo(12 * Math.PI);
+        // OD 10: 270 RPM (4.5 spins a second → 9 spins, 18 half spins).
+        expect(spinAt('lazer', 0, 10).required).toBeCloseTo(9 * Math.PI * 2);
+        expect(spinAt('stable', 0, 10).required).toBeCloseTo(18 * Math.PI);
+        // OD 0: 108 RPM (1.8 a second → 3 spins, 7 half spins in 2 s).
+        expect(spinAt('lazer', 0, 0).required).toBeCloseTo(3 * Math.PI * 2);
+        expect(spinAt('stable', 0, 0).required).toBeCloseTo(7 * Math.PI);
     });
 
-    it('a steady 170 RPM clears an OD 5 spinner in both (the old rules needed 210 RPM)', () => {
+    it('a steady 200 RPM clears an OD 5 spinner in both; 170 RPM no longer does', () => {
         for (const m of GAMEPLAY_MECHANICS) {
-            expect(spinAt(m, 170).result).toBe('great');
-            expect(spinAt(m, 100).result).not.toBe('great');
+            expect(spinAt(m, 200).result).toBe('great');
+            expect(spinAt(m, 170).result).not.toBe('great');
         }
     });
 
-    it('lazer has no speed cap; stable caps at ~477 RPM', () => {
-        const fast = (m: GameplayMechanics) => spinAt(m, 900, 5, 1000).progress / (Math.PI * 2);
-        expect(fast('lazer')).toBeGreaterThan(14);
-        expect(fast('stable')).toBeLessThan(8.5);
+    it('both cap the spin speed at ~477 RPM (a fast mouse can\'t finish a spinner at once)', () => {
+        expect(MAX_SPIN_RPM).toBeCloseTo(477.5, 0);
+        for (const m of GAMEPLAY_MECHANICS) {
+            const spins = spinAt(m, 900, 5, 1000).progress / (Math.PI * 2);
+            expect(spins).toBeGreaterThan(7);
+            expect(spins).toBeLessThan(8.5);
+        }
     });
 
     it('lazer counts net rotation: wiggling back and forth is not a spin', () => {
@@ -280,6 +287,73 @@ describe('slider tracking', () => {
         };
         expect(ticksHit('lazer')).toEqual([true, true]);
         expect(ticksHit('stable')).toEqual([false, false]);
+    });
+});
+
+describe('slider judgement', () => {
+    // 300 px at 0.2 px/ms: 1000–2500, ticks at 1500 and 2000; OD 5: 50 / 100 / 150 ms windows.
+    const slider = map(['100,100,1000,2,0,L|400:100,1,300'], { SliderMultiplier: 1 });
+
+    /** Follow the ball holding from `holdFrom` (clicking the head then, when `click`) until `release`. */
+    function play(mechanics: GameplayMechanics, holdFrom: number, click: boolean, release = Infinity, mods: ModSet = NO_MODS) {
+        const s = setup(mods, mechanics, slider);
+        const h = s.beatmap.hitObjects[0] as PlayableSlider;
+        const shown: string[] = [];
+        s.rules.objectJudged.add(e => shown.push(`${e.result}@${e.time}`));
+        let pressed = false;
+        for (let t = 900; t <= 2700; t += 4) {
+            if (click && !pressed && t >= holdFrom) {
+                pressed = true;
+                s.rules.press(holdFrom, h.x, h.y);
+            }
+            const p = sliderBallPosition(h, t);
+            s.rules.update(t, { x: p.x, y: p.y, held: t >= holdFrom && t < release });
+        }
+        const sc = s.score;
+        return { s, shown, counts: [sc.count300, sc.count100, sc.count50, sc.countMiss] };
+    }
+
+    it('lazer: the head is judged by timing like a circle, shown at the head; the end is not judged', () => {
+        const late = play('lazer', 1080, true);
+        expect(late.counts).toEqual([0, 1, 0, 0]);
+        expect(late.shown).toEqual(['ok@1080']);
+        expect(late.s.rules.states[0].result).toBe('great'); // the slider's own (unscored) judgement
+        expect(late.s.score.maxCombo).toBe(4);
+        // lazer's accuracy: the 100 head plus two ticks and the tail, all hit.
+        expect(late.s.score.accuracy).toBeCloseTo((100 + 30 + 30 + 150) / (300 + 30 + 30 + 150));
+        expect(play('lazer', 1120, true).counts).toEqual([0, 0, 1, 0]);
+        const perfect = play('lazer', 1000, true);
+        expect(perfect.counts).toEqual([1, 0, 0, 0]);
+        expect(perfect.s.score.accuracy).toBe(1);
+        expect(perfect.s.score.grade(false)).toBe('X');
+    });
+
+    it('lazer: a missed head is a miss even when the rest of the slider is followed', () => {
+        const r = play('lazer', 1000, false);
+        expect(r.counts).toEqual([0, 0, 0, 1]);
+        expect(r.shown).toEqual(['miss@1150']);
+        const st = r.s.rules.states[0];
+        expect(st.kind === 'slider' && st.eventHit.slice(1)).toEqual([true, true, true]);
+        expect(r.s.score.grade(false)).toBe('D');
+    });
+
+    it('lazer: dropping the tail costs accuracy (not the head\'s 300), and fails Perfect', () => {
+        const r = play('lazer', 1000, true, 2400);
+        expect(r.counts).toEqual([1, 0, 0, 0]);
+        expect(r.s.score.accuracy).toBeCloseTo(360 / 510);
+        expect([r.s.score.sliderEndsHit, r.s.score.sliderEndsTotal]).toEqual([0, 1]);
+        expect(play('lazer', 1000, true, 2400, sanitizeMods(['PF'])).s.health.failed).toBe(true);
+        expect(play('lazer', 1000, true, Infinity, sanitizeMods(['PF'])).s.health.failed).toBe(false);
+    });
+
+    it('stable is unchanged: the slider is judged at its end by the parts hit', () => {
+        const late = play('stable', 1080, true);
+        expect(late.counts).toEqual([1, 0, 0, 0]);
+        expect(late.shown).toEqual(['great@2500']);
+        // Head missed, ticks and tail followed: 3 of 4 parts is a 100.
+        const noHead = play('stable', 1000, false);
+        expect(noHead.counts).toEqual([0, 1, 0, 0]);
+        expect(noHead.s.score.accuracy).toBeCloseTo(1 / 3);
     });
 });
 

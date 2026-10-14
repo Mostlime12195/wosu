@@ -145,6 +145,7 @@ function parseGeneral(g: Record<string, string>): BeatmapGeneral {
         audioLeadIn: Math.max(0, num(g.AudioLeadIn, 0)),
         previewTime: num(g.PreviewTime, -1),
         countdown: num(g.Countdown, 1),
+        countdownOffset: Math.trunc(num(g.CountdownOffset, 0)),
         sampleSet,
         stackLeniency: clamp(leniency, 0, 1),
         mode: Math.trunc(num(g.Mode, 0)),

@@ -19,7 +19,8 @@ const FOOTER = Metrics.footerHeight;
 const COLUMN_GAP = 14;
 /** Space between the last mod row and the footer. */
 const COLUMN_FOOTER_GAP = 14;
-const CATEGORIES: ModCategory[] = ['reduction', 'increase', 'automation'];
+/** lazer's column order (Fun isn't in wosu!); Conversion has no hotkey row. */
+const CATEGORIES: ModCategory[] = ['reduction', 'increase', 'automation', 'conversion'];
 /** lazer's sequential hotkeys: one keyboard row per column. */
 const HOTKEY_ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
 
@@ -103,12 +104,16 @@ export class ModSelectOverlay extends Overlay {
 
         this.addChild(this.columnLayer, this.customisationBlocker, this.customisation, this.headerLayer, this.footerLayer);
         this.disposer.add(game.mods.bind(m => this.sync(m), true));
+        // Difficulty Adjust's sliders show the selected beatmap's values until changed.
+        this.disposer.add(game.selection.bind(sel => this.customisation.setBeatmapDifficulty(sel?.diff ?? null), true));
     }
 
     private togglePanel(p: ModPanel): void {
         const next = toggleMod(this.game.mods.value, p.mod.acronym);
         ModPanel.playToggleSound(next.has(p.mod.acronym));
         this.game.mods.value = next;
+        // lazer's Mod.RequiresConfiguration (Difficulty Adjust): open its settings right away.
+        if (next.has(p.mod.acronym) && p.mod.requiresConfiguration) this.customisation.expandByMod();
     }
 
     private sync(mods: ModSet): void {
@@ -233,8 +238,12 @@ export class ModSelectOverlay extends Overlay {
             if (action === 'back') this.customisation.state = 'collapsed';
             return true;
         }
-        if (action === 'back' || action === 'toggleMods' || action === 'select') {
+        if (action === 'back' || action === 'select' || this.game.input.matches(e, 'toggleMods')) {
             this.hide();
+            return true;
+        }
+        if (this.game.input.matches(e, 'deselectAllMods')) {
+            this.game.mods.value = NO_MODS;
             return true;
         }
         if (e.ctrlKey || e.metaKey || e.altKey) return false;

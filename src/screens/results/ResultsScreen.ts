@@ -5,6 +5,8 @@ import type { Selection } from '../../app/Game';
 import type { ReplayInfo } from '../../gameplay/replay/Replay';
 import type { ScoreResult } from '../../gameplay/ScoreResult';
 import type { Action } from '../../input/bindings';
+import type { LegacySkin } from '../../skin/LegacySkin';
+import type { Grade } from '../../storage/ScoreStore';
 import { BackButton, Button } from '../../ui/Button';
 import { Colors } from '../../ui/theme';
 import { ScorePanel, PANEL_H, PANEL_W, T_END, T_RANK } from './ScorePanel';
@@ -20,6 +22,37 @@ export interface ResultsOptions {
     replay?: ReplayInfo | null;
     /** The player's own play (lazer's allowRetry); off for watched replays. */
     allowRetry?: boolean;
+    /**
+     * Restart through the player loader beneath (lazer's Player.Restart):
+     * `quick` skips the loader's screen (the quick retry hotkey).
+     */
+    onRetry?: (quick: boolean) => void;
+    /**
+     * The skin's applause for this score (see skinApplause): played instead
+     * of lazer's; null = the skin silences it; undefined = lazer's own.
+     */
+    applause?: AudioBuffer | null;
+}
+
+/**
+ * The applause a skin brings for a passed score of `grade`: lazer's
+ * applause-{s,a,b,c,d} when the skin has one, else osu!stable's single
+ * applause (which stable plays after every cleared map, whatever the
+ * grade). The first skin (beatmap, then the selected one) with either
+ * decides; undefined when none has any.
+ */
+export function skinApplause(skins: readonly (LegacySkin | null | undefined)[], grade: Grade): AudioBuffer | null | undefined {
+    const letter = grade === 'X' || grade === 'XH' || grade === 'S' || grade === 'SH' ? 's'
+        : grade === 'A' ? 'a' : grade === 'B' ? 'b' : grade === 'C' ? 'c' : grade === 'D' ? 'd' : null;
+    if (!letter) return undefined;
+    for (const skin of skins) {
+        if (!skin) continue;
+        const graded = skin.sample(`applause-${letter}`);
+        if (graded !== undefined) return graded;
+        const any = skin.sample('applause');
+        if (any !== undefined) return any;
+    }
+    return undefined;
 }
 
 /**
@@ -131,7 +164,7 @@ export class ResultsScreen extends Screen {
         this.applyTime();
     }
 
-    /** lazer's AccuracyCircle: rank impact, then applause for the grade. */
+    /** lazer's AccuracyCircle: rank impact, then applause for the grade (the skin's, if it has one). */
     private playRankSounds(): void {
         const s = this.game.uiSounds;
         const grade = this.result.passed ? this.result.grade : 'F';
@@ -145,6 +178,11 @@ export class ResultsScreen extends Screen {
                 : grade === 'B' ? 'Results/applause-b'
                     : grade === 'C' ? 'Results/applause-c'
                         : grade === 'D' ? 'Results/applause-d' : null;
+        const own = this.options.applause;
+        if (own !== undefined) {
+            if (own && grade !== 'F') delay(200, () => { if (!this.destroyed) this.game.samples.playBuffer(own, 0.8); }, this);
+            return;
+        }
         if (applause) delay(200, () => { if (!this.destroyed) s.play(applause, { volume: 0.8 }); }, this);
     }
 
@@ -206,21 +244,27 @@ export class ResultsScreen extends Screen {
         this.game.watchReplay(this.selection, replay);
     }
 
-    private retry(): void {
+    /** lazer: the Retry button goes back through the loader (settings can be changed); the hotkey restarts at once. */
+    private retry(quick = false): void {
         if (this.leaving || this.options.allowRetry === false) return;
         this.leaving = true;
+        if (this.options.onRetry) {
+            this.options.onRetry(quick);
+            return;
+        }
         // Return to song select first so the stack stays select → loader → player.
         this.game.openSongSelect();
         this.game.play(this.selection);
     }
 
     override onKey(e: KeyboardEvent, action: Action | null): boolean {
-        if (action === 'back') {
+        const is = (a: Action) => this.game.input.matches(e, a);
+        if (is('back') || is('quickExit')) {
             this.goBack();
             return true;
         }
-        if (action === 'quickRetry') {
-            this.retry();
+        if (is('quickRetry')) {
+            this.retry(true);
             return true;
         }
         if ((action === 'select' || e.code === 'Space') && this.clock < T_END) {

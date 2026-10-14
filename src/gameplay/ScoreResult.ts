@@ -22,8 +22,14 @@ export interface ScoreResult {
     count100: number;
     count50: number;
     countMiss: number;
+    /** osu!stable's combo-end judgements (see scoring/comboEnd): gekis, and katus (hit300k + hit100k). */
+    countGeki: number;
+    countKatu: number;
     sliderTicksHit: number;
     sliderTicksTotal: number;
+    /** Slider tails hit / total: lazer's "slider end" statistic (lazer mechanics only). */
+    sliderEndsHit?: number;
+    sliderEndsTotal?: number;
     grade: Grade;
     passed: boolean;
     perfect: boolean; // full combo

@@ -50,6 +50,8 @@ export class GameSettings {
     readonly snakingIn = new Bindable(true);
     readonly snakingOut = new Bindable(true);
     readonly kiaiFlash = new Bindable(false);
+    /** osu!stable's combo bursts at combo milestones (skins with comboburst images / sounds). */
+    readonly comboBursts = new Bindable(true);
     /** Note lock, slider, spinner and health rules: osu!lazer's (default) or osu!stable's. */
     readonly gameplayMechanics = new Bindable<GameplayMechanics>(DEFAULT_MECHANICS);
 
@@ -93,6 +95,8 @@ export class GameSettings {
     // Input
     readonly keyLeft = new Bindable('KeyZ');
     readonly keyRight = new Bindable('KeyX');
+    /** lazer's OsuAction.Smoke: hold to draw cursor smoke. */
+    readonly keySmoke = new Bindable('KeyC');
     readonly mouseButtons = new Bindable(true);
     readonly wheelVolumeInGameplay = new Bindable(true);
     /** lazer's "High precision mouse": pointer lock with raw (unaccelerated) movement during gameplay. */
@@ -101,6 +105,8 @@ export class GameSettings {
     readonly cursorSensitivity = new BindableNumber(1, SENSITIVITY_MIN, SENSITIVITY_MAX, 0.01);
     /** lazer's "Confine mouse cursor to window" (pointer lock during gameplay). */
     readonly confineMouse = new Bindable<ConfineMouseMode>('never');
+    /** Changed global action bindings only (`{ action: ["Ctrl+KeyO", …] }`; see input/bindings resolveBindings). */
+    readonly keyBindings = new Bindable<Readonly<Record<string, readonly string[]>>>({});
 
     // Skin / cursor (defaults and ranges are lazer's)
     /** Selected imported skin's id ('' = wosu!'s default skin); lazer's OsuSetting.Skin. */
@@ -110,6 +116,8 @@ export class GameSettings {
     readonly cursorSize = new BindableNumber(1, 0.1, 2, 0.01);
     readonly autoCursorSize = new Bindable(false);
     readonly cursorTrail = new Bindable(true);
+    /** lazer's ShowCursorRipples: a ripple under the cursor on every gameplay press. */
+    readonly cursorRipples = new Bindable(false);
     readonly cursorExpand = new Bindable(true);
     readonly cursorRotation = new Bindable(true);
     readonly gameplayCursorDuringTouch = new Bindable(false);

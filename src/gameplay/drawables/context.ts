@@ -24,7 +24,10 @@ export interface DrawableContext {
     readonly radius: number;
     readonly preempt: number;
     readonly fadeIn: number;
+    /** Hidden fades objects out (lazer's OsuModHidden, unless "Only fade approach circles"). */
     readonly hidden: boolean;
+    /** Hidden hides approach circles (lazer's IHidesApproachCircles), also with "Only fade approach circles". */
+    readonly hideApproachCircles: boolean;
     readonly hideNumbers: boolean;
     readonly snakingIn: boolean;
     readonly snakingOut: boolean;

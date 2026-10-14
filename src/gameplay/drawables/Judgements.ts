@@ -2,6 +2,7 @@ import { BitmapText, Container, Texture, type Sprite } from 'pixi.js';
 import type { SkinTexture } from '../../skin/LegacySkin';
 import type { SkinChain } from '../../skin/SkinChain';
 import { Colors, Fonts } from '../../ui/theme';
+import { comboEndKind, type ComboEndKind, type ComboEndVariant } from '../scoring/comboEnd';
 import type { HitResult } from '../scoring/ScoreProcessor';
 import { SIXTY_FRAME_TIME, clamp01, ease, frameAt, fromDefaultSkin, layerVersion, legacyScale, legacyVersion, sprite } from './context';
 
@@ -27,10 +28,16 @@ const IMAGE: Record<HitResult, string> = { great: 'hit300', ok: 'hit100', meh: '
 const PARTICLE: Record<HitResult, string | null> = { great: 'particle300', ok: 'particle100', meh: 'particle50', miss: null };
 
 /**
- * What a judgement can show: the four results, plus the slider's nested
- * ones (lazer's LargeTickHit / LargeTickMiss: a slider head, tick or repeat).
+ * What a judgement can show: the four results, osu!stable's combo-end
+ * variants (hit300g, hit300k, hit100k: see scoring/comboEnd), plus the
+ * slider's nested ones (lazer's LargeTickHit / LargeTickMiss: a slider
+ * head, tick or repeat).
  */
-export type JudgementKind = HitResult | 'tickHit' | 'tickMiss';
+export type JudgementKind = HitResult | ComboEndKind | 'tickHit' | 'tickMiss';
+
+/** The combo-end images and the particles they share with their plain judgement (osu! wiki, Skinning/osu!). */
+const VARIANT_IMAGE: Record<ComboEndKind, string> = { geki: 'hit300g', katuGreat: 'hit300k', katuOk: 'hit100k' };
+const VARIANT_PARTICLE: Record<ComboEndKind, string> = { geki: 'particle300', katuGreat: 'particle300', katuOk: 'particle100' };
 
 /**
  * A skin's judgement for one kind (lazer's LegacySkin / OsuLegacySkinTransformer):
@@ -165,7 +172,7 @@ export class Judgements extends Container {
         this.lighting = chain.texture('lighting');
         this.legacyLighting = !fromDefaultSkin(chain, 'lighting');
         this.version = legacyVersion(chain);
-        for (const kind of ['great', 'ok', 'meh', 'miss', 'tickHit', 'tickMiss'] as const) {
+        for (const kind of ['great', 'ok', 'meh', 'miss', 'tickHit', 'tickMiss', 'geki', 'katuGreat', 'katuOk'] as const) {
             const p = this.resolve(kind);
             if (p) this.pieces[kind] = p;
         }
@@ -185,6 +192,9 @@ export class Judgements extends Container {
      * (with its own particle, for the new style). Slider point hits only
      * show for Version 1 skins with sliderpoint30; such a skin also stops a
      * missing slidertickmiss from falling through to the skins below.
+     * The combo-end variants only come from skins that have their images
+     * (stable's default skin draws them like the plain ones; wosu!'s
+     * default skin keeps its normal judgement).
      */
     private resolve(kind: JudgementKind): Piece | null {
         const layers = this.chain.layers;
@@ -206,18 +216,23 @@ export class Judgements extends Container {
                 if (oldPoints) return null;
                 continue;
             }
-            const frames = skin.frames(IMAGE[kind]);
+            const variant = kind === 'geki' || kind === 'katuGreat' || kind === 'katuOk';
+            if (variant && defaultLook) return null;
+            const frames = skin.frames(variant ? VARIANT_IMAGE[kind] : IMAGE[kind]);
             if (!frames.length) continue;
-            const name = PARTICLE[kind];
+            const name = variant ? VARIANT_PARTICLE[kind] : PARTICLE[kind];
             const particle = name ? skin.texture(name) : null;
             return { frames, particle, style: particle ? 'new' : 'old', defaultLook };
         }
         return null;
     }
 
-    add(result: HitResult, x: number, y: number, time: number, color: number): void {
+    /** A main judgement; `variant`: stable's geki / katu for a combo's last object (shown when the skin has the image). */
+    add(result: HitResult, x: number, y: number, time: number, color: number, variant: ComboEndVariant | null = null): void {
         if (result !== 'miss' && this.hitLighting && this.lighting) this.addLight(x, y, time, color);
         if (result === 'great' && this.hideGreat) return;
+        const end = comboEndKind(result, variant);
+        if (end && this.addPiece(end, x, y, time)) return;
         if (this.addPiece(result, x, y, time)) return;
         const text = this.free.pop() ?? this.makeText();
         text.visible = true;

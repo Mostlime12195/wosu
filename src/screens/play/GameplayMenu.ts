@@ -7,10 +7,14 @@ import { Triangles } from '../../ui/Triangles';
 import { UIComponent } from '../../ui/UIComponent';
 import { uiSounds } from '../../ui/UIContext';
 
+/** Which of stable's pause buttons an entry is (its skin image: pause-continue, -retry, -back). */
+export type MenuElement = 'continue' | 'retry' | 'back';
+
 export interface MenuEntry {
     caption: string;
     color: number;
     action: () => void;
+    element?: MenuElement;
 }
 
 export interface GameplayMenuContent {

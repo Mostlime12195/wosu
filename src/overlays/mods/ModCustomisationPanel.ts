@@ -3,10 +3,14 @@ import { Bindable, BindableNumber } from '../../core/Bindable';
 import { tween, tweener } from '../../core/Tweener';
 import {
     MODS,
+    extendedLimitsOn,
     formatSetting,
     modInfo,
     modSetting,
     modSettingDefs,
+    settingRange,
+    type DifficultySettingDef,
+    type DifficultyStat,
     type ModAcronym,
     type ModSet,
     type ModSettingDef,
@@ -41,6 +45,9 @@ export type CustomisationState = 'collapsed' | 'expanded' | 'expandedByMod';
 
 type SettingControl = { def: ModSettingDef; bindable: Bindable<boolean> | BindableNumber; row: Slider | Checkbox };
 
+/** The selected beatmap's own difficulty, shown by settings that override it while unset. */
+export type BeatmapDifficultyValues = Readonly<Record<DifficultyStat, number>>;
+
 /**
  * lazer's ModCustomisationPanel: a "Customise" header at the top right of
  * mod select that expands (on hover, or from a panel's gear) into a list
@@ -66,6 +73,10 @@ export class ModCustomisationPanel extends UIComponent {
     private collapseTimer = COLLAPSE_GRACE_TIME;
     private pointer: { x: number; y: number } | null = null;
     private customisable = false;
+    private mods: ModSet | null = null;
+    private beatmapDifficulty: BeatmapDifficultyValues | null = null;
+    /** Controls are being set from the selection (not user changes). */
+    private syncing = false;
     /** A setting was changed by the user. */
     onSettingChanged: ((acronym: ModAcronym, key: string, value: ModSettingValue) => void) | null = null;
     /** The panel expanded or collapsed (the overlay dims its columns). */
@@ -126,6 +137,7 @@ export class ModCustomisationPanel extends UIComponent {
      * updateMods) and otherwise just update the controls' values.
      */
     sync(mods: ModSet): void {
+        this.mods = mods;
         const list = MODS.map(m => m.acronym).filter(a => mods.has(a) && modSettingDefs(a).length > 0);
         const key = list.join(',');
         if (key !== this.sectionsKey) {
@@ -134,12 +146,51 @@ export class ModCustomisationPanel extends UIComponent {
             this.rebuild(list, mods);
             this.setCustomisable(list.length > 0);
         }
-        for (const [id, c] of this.controls) {
-            const [a, k] = id.split('.') as [ModAcronym, string];
-            const v = modSetting(mods, a, k);
-            if (c.def.kind === 'toggle') (c.bindable as Bindable<boolean>).value = v === true;
-            else (c.bindable as BindableNumber).value = Number(v);
+        this.syncing = true;
+        try {
+            for (const [id, control] of [...this.controls]) {
+                const [a, k] = id.split('.') as [ModAcronym, string];
+                let c = control;
+                if (c.def.kind === 'difficulty') {
+                    // "Extended limits" widens the slider (lazer's DifficultyBindable extents).
+                    const r = settingRange(c.def, extendedLimitsOn(mods, a));
+                    const b = c.bindable as BindableNumber;
+                    if (b.min !== r.min || b.max !== r.max) c = this.replaceControl(a, c, mods);
+                }
+                const v = modSetting(mods, a, k);
+                if (c.def.kind === 'toggle') (c.bindable as Bindable<boolean>).value = v === true;
+                else if (c.def.kind === 'difficulty') (c.bindable as BindableNumber).value = this.difficultyValue(c.def, v);
+                else (c.bindable as BindableNumber).value = Number(v);
+            }
+        } finally {
+            this.syncing = false;
         }
+    }
+
+    /**
+     * The selected beatmap's CS/AR/OD/HP: Difficulty Adjust's sliders show
+     * them until changed (lazer's DifficultyBindable.ReadCurrentFromDifficulty).
+     */
+    setBeatmapDifficulty(d: BeatmapDifficultyValues | null): void {
+        this.beatmapDifficulty = d ? { cs: d.cs, ar: d.ar, od: d.od, hp: d.hp } : null;
+        if (this.mods) this.sync(this.mods);
+    }
+
+    /** A difficulty override's slider value: the override, else the beatmap's own value. */
+    private difficultyValue(def: DifficultySettingDef, v: ModSettingValue | null): number {
+        if (typeof v === 'number') return v;
+        return this.beatmapDifficulty?.[def.stat] ?? 5;
+    }
+
+    /** Swap a control for a fresh one (a slider whose range changed), in place. */
+    private replaceControl(a: ModAcronym, old: SettingControl, mods: ModSet): SettingControl {
+        const parent = old.row.parent;
+        const next = this.createControl(a, old.def, mods);
+        next.row.resize(old.row.w, next.row.h);
+        next.row.position.copyFrom(old.row.position);
+        if (parent) parent.addChildAt(next.row, parent.getChildIndex(old.row));
+        old.row.destroy({ children: true });
+        return next;
     }
 
     /** Open from a mod panel's gear (lazer's ExpandedByMod: no auto-collapse). */
@@ -203,6 +254,17 @@ export class ModCustomisationPanel extends UIComponent {
             const row = new Checkbox(def.label, b, accent);
             row.tooltip = def.description;
             b.bind(v => this.onSettingChanged?.(a, def.key, v));
+            control = { def, bindable: b, row };
+        } else if (def.kind === 'difficulty') {
+            // Unset until moved: the slider sits at the beatmap's value meanwhile.
+            const r = settingRange(def, extendedLimitsOn(mods, a));
+            const b = new BindableNumber(r.min, r.min, r.max, def.precision);
+            b.value = this.difficultyValue(def, modSetting(mods, a, def.key));
+            const row = new Slider(def.label, b, { format: v => formatSetting(def, v), accent, keyStep: def.precision });
+            row.tooltip = def.description;
+            b.bind(v => {
+                if (!this.syncing) this.onSettingChanged?.(a, def.key, v);
+            });
             control = { def, bindable: b, row };
         } else {
             const b = new BindableNumber(def.default, def.min, def.max, def.precision);

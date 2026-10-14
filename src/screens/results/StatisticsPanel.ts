@@ -42,7 +42,7 @@ export class StatisticsPanel extends UIComponent {
     constructor(private readonly result: ScoreResult, selection: Selection) {
         super();
         const r = result;
-        this.windows = hitWindowsFor(selection.diff.od ?? 5, r.mods);
+        this.windows = hitWindowsFor(selection.diff.od ?? 5, r.mods, r.modSettings);
         const hist = timingHistogram(r.hitErrors, this.windows.w50);
         this.counts = hist.counts;
         this.binWidth = hist.binWidth;

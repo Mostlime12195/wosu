@@ -14,13 +14,17 @@ import type { GameplayMechanics } from '../scoring/mechanics';
 /** Bits of a frame's `buttons`. */
 export const BUTTON_BITS: Readonly<Record<GameplayButton, number>> = { K1: 1, K2: 2, M1: 4, M2: 8 };
 const BUTTON_ORDER: readonly GameplayButton[] = ['K1', 'K2', 'M1', 'M2'];
+/** A frame's `buttons` bit for the smoke key (lazer's ReplayButtonState.Smoke); never judged. */
+export const SMOKE_BIT = 16;
+/** The bits of a frame's `buttons` that judge (all but smoke). */
+export const PRESS_BITS = 15;
 
 export interface ReplayFrame {
     kind: 'frame';
     time: number;
     x: number;
     y: number;
-    /** Held buttons (BUTTON_BITS). */
+    /** Held buttons (BUTTON_BITS, plus SMOKE_BIT). */
     buttons: number;
 }
 
@@ -145,7 +149,7 @@ export function encodeReplay(events: readonly ReplayEvent[]): Uint8Array {
             t = et;
             continue;
         }
-        const extra = e.kind === 'frame' ? e.buttons & 15 : BUTTON_ORDER.indexOf(e.button);
+        const extra = e.kind === 'frame' ? e.buttons & (PRESS_BITS | SMOKE_BIT) : BUTTON_ORDER.indexOf(e.button);
         w.byte((e.kind === 'frame' ? KIND_FRAME : KIND_PRESS) | (extra << 2));
         const ex = Math.round(e.x * UNITS), ey = Math.round(e.y * UNITS);
         w.zigzag(et - t);
@@ -176,7 +180,7 @@ export function decodeReplay(data: Uint8Array): ReplayEvent[] {
         x += r.zigzag();
         y += r.zigzag();
         if (kind === KIND_FRAME) {
-            events.push({ kind: 'frame', time: t / UNITS, x: x / UNITS, y: y / UNITS, buttons: extra & 15 });
+            events.push({ kind: 'frame', time: t / UNITS, x: x / UNITS, y: y / UNITS, buttons: extra & (PRESS_BITS | SMOKE_BIT) });
         } else if (kind === KIND_PRESS && extra < BUTTON_ORDER.length) {
             events.push({ kind: 'press', time: t / UNITS, x: x / UNITS, y: y / UNITS, button: BUTTON_ORDER[extra] });
         } else {

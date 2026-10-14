@@ -9,7 +9,8 @@ import { UIComponent } from '../../../ui/UIComponent';
 import { gesture } from '../../../ui/UIContext';
 import type { FilterEntry } from '../filter';
 import { DIFF_HEIGHT, DiffPanel } from './DiffPanel';
-import { SET_HEIGHT, SetPanel } from './SetPanel';
+import { ModStarsQueue, StarPriority } from './ModStarsQueue';
+import { MAX_DOTS, SET_HEIGHT, SetPanel } from './SetPanel';
 
 const SPACING = 6;
 const SET_STRIDE = SET_HEIGHT + SPACING;
@@ -83,6 +84,8 @@ export class BeatmapCarousel extends UIComponent {
     /** Space covered by translucent chrome (filter control, footer). */
     private insetTop = 0;
     private insetBottom = 0;
+    /** Mod-adjusted star ratings for visible panels (lazer's BeatmapDifficultyCache). */
+    private readonly stars: ModStarsQueue;
 
     constructor(private readonly game: Game) {
         super();
@@ -93,6 +96,7 @@ export class BeatmapCarousel extends UIComponent {
         this.scroll.on('rightdown', this.onRightDown, this);
         this.scroll.on('pointerdown', this.onTouchDown, this);
         this.eventMode = 'passive';
+        this.stars = new ModStarsQueue(game);
         this.onFrame(dt => this.update(dt));
     }
 
@@ -453,6 +457,7 @@ export class BeatmapCarousel extends UIComponent {
             this.scroll.scrollTo(this.finalCenterTarget(), true);
             if (!animating && Math.abs(this.scroll.scrollY - this.finalCenterTarget()) < 1) this.follow = false;
         }
+        this.stars.update();
         this.layoutPanels(dt);
     }
 
@@ -478,6 +483,7 @@ export class BeatmapCarousel extends UIComponent {
             const panel = this.takeSet(key, entry, selected);
             nextSets.set(key, panel);
             panel.resize(setW, SET_HEIGHT);
+            this.syncDots(panel, entry);
             panel.selectProgress = damp(panel.selectProgress, selected ? 1 : 0, EXPAND_RATE, dt);
             panel.drawSelection();
             const contentY = this.padTop + y;
@@ -495,6 +501,8 @@ export class BeatmapCarousel extends UIComponent {
                     const dp = this.takeDiff(dkey, entry, diff, dSelected);
                     nextDiffs.set(dkey, dp);
                     dp.resize(diffW, DIFF_HEIGHT);
+                    const stars = this.stars.starsFor(entry.set, diff, StarPriority.Difficulty);
+                    dp.sync(stars, this.stars.pending, this.game.scores.topGrade(dp.scoreKey));
                     dp.selectProgress = damp(dp.selectProgress, dSelected ? 1 : 0, EXPAND_RATE, dt);
                     dp.drawSelection();
                     const dContentY = this.padTop + dy;
@@ -514,6 +522,15 @@ export class BeatmapCarousel extends UIComponent {
         this.nextDiffs = this.activeDiffs;
         this.activeSets = nextSets;
         this.activeDiffs = nextDiffs;
+    }
+
+    /** A set panel's difficulty dots follow the mod-adjusted ratings too. */
+    private syncDots(panel: SetPanel, entry: FilterEntry): void {
+        const out = panel.dotStars;
+        const n = Math.min(MAX_DOTS, entry.diffs.length);
+        out.length = n;
+        for (let i = 0; i < n; i++) out[i] = this.stars.starsFor(entry.set, entry.diffs[i], StarPriority.SetDot);
+        panel.commitDots();
     }
 
     /** Closure-free lookup (called per visible row per frame). */

@@ -15,6 +15,8 @@ export interface SkinConfig {
     /** Slider ball tint (only used when allowSliderBallTint is false). */
     sliderBall?: number;
     spinnerBackground?: number;
+    /** Key overlay counter text ([Colours] InputOverlayText; osu!'s default is black). */
+    inputOverlayText?: number;
     /** Combo number font prefix ("default" → default-0.png). */
     hitCirclePrefix?: string;
     hitCircleOverlap?: number;
@@ -50,6 +52,7 @@ export const SKIN_DEFAULTS: Required<Omit<SkinConfig, 'sliderTrackOverride' | 's
         version: 1,
         comboColours: [0xffc000, 0x00ca00, 0x127cff, 0xf21839],
         sliderBorder: 0xffffff,
+        inputOverlayText: 0x000000,
         hitCirclePrefix: 'default',
         hitCircleOverlap: -2,
         scorePrefix: 'score',
@@ -127,6 +130,7 @@ export function parseSkinIni(text: string): SkinConfig {
             else if (key === 'sliderborder') out.sliderBorder = c;
             else if (key === 'sliderball') out.sliderBall = c;
             else if (key === 'spinnerbackground') out.spinnerBackground = c;
+            else if (key === 'inputoverlaytext') out.inputOverlayText = c;
         } else if (section === 'fonts') {
             switch (key) {
                 case 'hitcircleprefix': out.hitCirclePrefix = path(value); break;

@@ -4,7 +4,7 @@ import type { Selection } from '../../app/Game';
 import { MusicTrack } from '../../audio/MusicTrack';
 import type { BeatmapData } from '../../beatmap/types';
 import { Bindable } from '../../core/Bindable';
-import { tween } from '../../core/Tweener';
+import { tween, tweener } from '../../core/Tweener';
 import { audioPitch, playbackRate, preservesPitch, sortedMods, withSettings, type ModSet } from '../../gameplay/mods';
 import type { ReplayInfo } from '../../gameplay/replay/Replay';
 import type { Action } from '../../input/bindings';
@@ -21,6 +21,9 @@ import { parseStoryboard, type Storyboard } from '../../beatmap/storyboard';
 import { LegacySkin } from '../../skin/LegacySkin';
 import type { OszArchive } from '../../beatmap/archive';
 import { PlayerScreen } from './PlayerScreen';
+import { BeatmapOffsetControl } from './BeatmapOffsetControl';
+import { trackOffset } from '../../gameplay/offsetCalibration';
+import { beatmapOffsets, offsetKeyFor } from '../../storage/BeatmapOffsets';
 
 /** The loader shows at least this long so the metadata can be read (lazer: PlayerPushDelay). */
 const MIN_DISPLAY = 1800;
@@ -72,12 +75,17 @@ export class PlayerLoaderScreen extends Screen {
     private beatmapSkin: LegacySkin | null = null;
     private cancelled = false;
     private retries = 0;
+    /** Replays: where the next Player starts (a backward seek rebuilds it). */
+    private startAt: number | undefined = undefined;
+    /** Per-beatmap offset / calibration key. */
+    readonly offsetKey: string;
     /** Built and warmed up behind the loader; pushed once ready. */
     private player: PlayerScreen | null = null;
 
     /** `replay`: watch it (with its score's mods) instead of playing. */
     constructor(readonly selection: Selection, readonly replay: ReplayInfo | null = null) {
         super();
+        this.offsetKey = offsetKeyFor(selection.set, selection.diff);
     }
 
     override load(): void {
@@ -102,6 +110,7 @@ export class PlayerLoaderScreen extends Screen {
         this.meta.addChild(this.title, this.artist, this.thumb, this.thumbShade, this.spinner, this.version, this.starPill, this.starText, this.lines, this.modRow);
         this.content.addChild(this.meta);
         this.panel = new SettingsPanel(this);
+        this.panel.onHeightChange = () => this.onResize(this._w, this._h);
         this.addChild(this.content, this.panel);
         this.eventMode = 'passive';
         this.layoutMeta();
@@ -184,9 +193,14 @@ export class PlayerLoaderScreen extends Screen {
             track.pause();
             await track.setRate(playbackRate(this.mods), preservesPitch(this.mods), audioPitch(this.mods));
             if (this.cancelled) return this.handBackTrack();
-            track.userOffsetMs = g.settings.audioOffset.value;
-            this.disposer.add(g.settings.audioOffset.bind(v => {
-                if (this.track) this.track.userOffsetMs = v;
+            // The global audio offset plus this difficulty's (lazer's user + beatmap offset clocks).
+            const applyOffset = () => {
+                if (this.track) this.track.userOffsetMs = trackOffset(g.settings.audioOffset.value, beatmapOffsets().get(this.offsetKey), playbackRate(this.mods));
+            };
+            applyOffset();
+            this.disposer.add(g.settings.audioOffset.bind(applyOffset));
+            this.disposer.add(beatmapOffsets().changed.add(k => {
+                if (k === this.offsetKey) applyOffset();
             }));
             this.storyboard = await this.readStoryboard(archive, diff.file);
             if (this.cancelled) return this.handBackTrack();
@@ -340,6 +354,7 @@ export class PlayerLoaderScreen extends Screen {
             storyboard: this.storyboard,
             beatmapSkin: this.beatmapSkin,
             replay: this.replay,
+            startAt: this.startAt,
         });
         try {
             player.prepare(this.game, this._w, this._h);
@@ -368,16 +383,31 @@ export class PlayerLoaderScreen extends Screen {
     override onResuming(previous: Screen): void {
         // instanceof, not constructor.name: production builds minify class names.
         const outcome = previous instanceof PlayerScreen ? previous.outcome : 'quit';
+        this.startAt = previous instanceof PlayerScreen ? previous.replayRestartAt ?? undefined : undefined;
         this.player = null;
-        if (outcome === 'retry' && !this.cancelled) {
+        if ((outcome === 'retry' || outcome === 'quickRetry') && !this.cancelled) {
             this.retries++;
             this.game.background.suppressParallax(this);
-            this.fadeIn(0);
-            this.content.alpha = 0;
-            this.panel.alpha = 0;
-            // lazer goes straight back into gameplay on retry (the new Player is still prepared first).
             this.pushed = false;
-            this.shownFor = MIN_DISPLAY;
+            if (outcome === 'quickRetry') {
+                // lazer's quick restart: straight back into gameplay (the new Player is still prepared first).
+                this.fadeIn(0);
+                this.content.alpha = 0;
+                this.panel.alpha = 0;
+                this.shownFor = MIN_DISPLAY;
+                return;
+            }
+            // lazer's Restart(): the loader shows again, so settings (offset!) can be changed first.
+            this.visible = true;
+            this.fadeIn(200);
+            const bg = this.game.background;
+            bg.setDim(Math.min(0.6, this.game.settings.backgroundDim.value), 600);
+            bg.setBlur(Math.max(0.25, this.game.settings.backgroundBlur.value), 600);
+            this.shownFor = 0;
+            tweener.kill(this.content);
+            tweener.kill(this.panel);
+            this.onResize(this._w, this._h);
+            this.contentIn();
             return;
         }
         this.exit();
@@ -480,6 +510,7 @@ class SettingsPanel extends UIComponent {
                 rows: [
                     new Checkbox('Beatmap hitsounds', s.beatmapHitsounds),
                     slider('Audio offset', s.audioOffset, v => `${v > 0 ? '+' : ''}${Math.round(v)} ms`),
+                    ...(loader.replay ? [] : [this.offsetControl(loader)]),
                 ],
             },
             {
@@ -497,6 +528,19 @@ class SettingsPanel extends UIComponent {
         this.hitArea = new Rectangle(0, 0, PANEL_W, 300);
     }
 
+    /** Re-laid out when the calibration block appears (lazer's autosizing groups). */
+    onHeightChange: (() => void) | null = null;
+
+    private offsetControl(loader: PlayerLoaderScreen): BeatmapOffsetControl {
+        const c = new BeatmapOffsetControl(loader.offsetKey);
+        c.resize(PANEL_W - 20, c.preferredHeight);
+        c.onHeightChange = () => this.onHeightChange?.();
+        this.offsetSliders.push(c);
+        return c;
+    }
+
+    private readonly offsetSliders: BeatmapOffsetControl[] = [];
+
     get preferredHeight(): number {
         let h = 0;
         for (const { def } of this.groups) {
@@ -506,7 +550,7 @@ class SettingsPanel extends UIComponent {
     }
 
     get dragging(): boolean {
-        return this.sliders.some(sl => sl.pressed);
+        return this.sliders.some(sl => sl.pressed) || this.offsetSliders.some(c => c.dragging);
     }
 
     isPointerOver(p: { x: number; y: number }): boolean {

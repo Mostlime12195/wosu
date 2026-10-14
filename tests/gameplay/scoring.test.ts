@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-    difficultyMultiplier, resultForError, ScoreProcessor, sliderResult, spinnerResult,
+    difficultyMultiplier, lazerGrade, resultForError, ScoreProcessor, sliderResult, spinnerResult,
 } from '../../src/gameplay/scoring/ScoreProcessor';
+import type { GameplayMechanics } from '../../src/gameplay/scoring/mechanics';
 import { HealthProcessor } from '../../src/gameplay/scoring/HealthProcessor';
 import { parseOsu } from '../../src/beatmap/parser';
 import { buildPlayableBeatmap } from '../../src/beatmap/processing';
@@ -9,7 +10,8 @@ import { difficultyRange } from '../../src/core/math';
 import { NO_MODS } from '../../src/gameplay/mods';
 import { makeMap } from '../beatmap/helpers';
 
-const make = (diff = 4, mods = 1) => new ScoreProcessor({ difficultyMultiplier: diff, modMultiplier: mods });
+const make = (diff = 4, mods = 1, mechanics: GameplayMechanics = 'stable') =>
+    new ScoreProcessor({ difficultyMultiplier: diff, modMultiplier: mods, mechanics });
 
 describe('ScoreProcessor (ScoreV1)', () => {
     it('uses the combo before the hit for the multiplier', () => {
@@ -57,12 +59,45 @@ describe('ScoreProcessor (ScoreV1)', () => {
         expect(s.combo).toBe(0);
     });
 
-    it('accuracy counts main judgements only', () => {
+    it('stable: accuracy counts main judgements only', () => {
         const s = make();
         s.applyMain('great', true);
         s.applyMain('ok', true);
         s.applyNested('tick', false);
+        s.applyNested('tail', false);
         expect(s.accuracy).toBeCloseTo(400 / 600);
+        expect([s.sliderEndsHit, s.sliderEndsTotal]).toEqual([0, 1]);
+    });
+
+    it("lazer: accuracy is lazer's base score ratio, ticks/repeats (30) and tails (150) included", () => {
+        const s = make(4, 1, 'lazer');
+        expect(s.accuracy).toBe(1);
+        // A slider: late head (100), a hit tick, a missed repeat, a dropped tail.
+        s.applyMain('ok', true);
+        s.applyNested('tick', true);
+        s.applyNested('repeat', false);
+        s.applyNested('tail', false);
+        expect(s.accuracy).toBeCloseTo((100 + 30) / (300 + 30 + 30 + 150));
+        expect([s.count300, s.count100, s.countMiss]).toEqual([0, 1, 0]);
+        // Heads are judged through applyMain, never as nested parts.
+        const t = make(4, 1, 'lazer');
+        t.applyMain('great', true);
+        t.applyNested('tail', true);
+        expect(t.accuracy).toBe(1);
+        expect(t.grade(false)).toBe('X');
+    });
+
+    it('lazer ranks: accuracy cutoffs, a miss caps S/SS at A, silver with HD/FL', () => {
+        expect(lazerGrade(1, 0, false)).toBe('X');
+        expect(lazerGrade(1, 0, true)).toBe('XH');
+        expect(lazerGrade(0.95, 0, false)).toBe('S');
+        expect(lazerGrade(0.97, 0, true)).toBe('SH');
+        expect(lazerGrade(0.97, 1, false)).toBe('A');
+        expect(lazerGrade(0.9, 0, false)).toBe('A');
+        expect(lazerGrade(0.85, 3, false)).toBe('B');
+        expect(lazerGrade(0.75, 0, false)).toBe('C');
+        expect(lazerGrade(0.5, 0, false)).toBe('D');
+        expect(make(4, 1, 'lazer').grade(false, true)).toBe('F');
     });
 
     it('stable grade thresholds', () => {

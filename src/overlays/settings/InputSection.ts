@@ -3,6 +3,7 @@ import type { ConfineMouseMode } from '../../settings/Settings';
 import type { Slider } from '../../ui/Slider';
 import { checkboxRow, dropdownRow, keyBindRow, sliderRow } from './rows';
 import type { SectionDef } from './types';
+import { actionBindingSubsections } from './ActionBindings';
 
 /** lazer's `{v:0.##}x`. */
 const sensitivity = (v: number): string => `${Number(v.toFixed(2))}x`;
@@ -24,6 +25,7 @@ export function inputSection(game: Game): SectionDef {
                 rows: [
                     keyBindRow('Left button', s.keyLeft, { keywords: 'k1 z' }),
                     keyBindRow('Right button', s.keyRight, { keywords: 'k2 x' }),
+                    keyBindRow('Smoke', s.keySmoke, { keywords: 'smoke c draw' }),
                 ],
             },
             {
@@ -45,6 +47,8 @@ export function inputSection(game: Game): SectionDef {
                     checkboxRow('Mouse wheel changes volume in gameplay', s.wheelVolumeInGameplay, { keywords: 'scroll' }),
                 ],
             },
+            // lazer's global action bindings (song select, in game, replay…), each rebindable.
+            ...actionBindingSubsections(game),
         ],
     };
 }

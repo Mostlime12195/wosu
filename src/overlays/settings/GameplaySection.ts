@@ -27,6 +27,10 @@ export function gameplaySection(game: Game): SectionDef {
                     checkboxRow('Hide combo numbers', s.hideNumbers),
                     checkboxRow('Hide "Great" judgements', s.hideGreat, { keywords: '300' }),
                     checkboxRow('Hide follow points', s.hideFollowPoints, { keywords: 'connecting lines' }),
+                    checkboxRow('Combo bursts', s.comboBursts, {
+                        description: "osu!stable's combo milestone art and sounds (30x, 60x, 100x, then every 50), when your skin or the beatmap has them.",
+                        keywords: 'comboburst milestone pippi',
+                    }),
                     checkboxRow('Kiai flashes on hit objects', s.kiaiFlash, {
                         description: "lazer's default skin flashes circles on every beat of a kiai section. osu!stable never does this.",
                         keywords: 'beat pulse flash kiai',

@@ -135,6 +135,7 @@ export function skinSection(game: Game): SectionDef {
                     sliderRow('Gameplay cursor size', s.cursorSize, mult, { keywords: 'cursor scale' }),
                     checkboxRow('Adjust gameplay cursor size based on current beatmap', s.autoCursorSize, { keywords: 'cursor circle size auto' }),
                     checkboxRow('Show cursor trail', s.cursorTrail, { keywords: 'cursor trail' }),
+                    checkboxRow('Show cursor ripples', s.cursorRipples, { keywords: 'cursor ripple click press' }),
                     checkboxRow('Expand cursor when pressed', s.cursorExpand, { keywords: 'cursor pulse click' }),
                     checkboxRow('Rotate cursor when dragging', s.cursorRotation, { keywords: 'cursor rotation drag' }),
                     checkboxRow('Show gameplay cursor during touch input', s.gameplayCursorDuringTouch, { keywords: 'cursor touchscreen mobile' }),

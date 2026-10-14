@@ -197,7 +197,7 @@ export class DrawableSlider extends Container implements Drawable {
         this.addChild(this.follow, this.ball, this.head);
 
         this.approach = new ApproachCircle(ctx, color);
-        if (!this.hiddenOn) ctx.approachLayer.addChild(this.approach);
+        if (!(ctx.hideApproachCircles && hiddenApplies)) ctx.approachLayer.addChild(this.approach);
         this.eventMode = 'none';
     }
 

@@ -49,7 +49,7 @@ export class DrawableSpinner extends Container implements Drawable {
         const chain = ctx.skin;
         this.body = spinnerStyle(chain) === 'old' ? new LegacyOldStyleSpinner(chain) : new LegacyNewStyleSpinner(chain);
         // HD hides the spinner's approach circle (lazer OsuModHidden.hideSpinner).
-        if (this.body.approachCircle && ctx.hidden) this.body.approachCircle.visible = false;
+        if (this.body.approachCircle && ctx.hideApproachCircles) this.body.approachCircle.visible = false;
 
         const skinSprite = (name: string, anchor = 0.5): Sprite => {
             const t = chain.texture(name);

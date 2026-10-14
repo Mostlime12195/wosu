@@ -19,7 +19,7 @@ import { decodeReplay, type ReplayInfo } from '../gameplay/replay/Replay';
 import { DEFAULT_MECHANICS } from '../gameplay/scoring/mechanics';
 import { textureFromBlob, TextureCache, textureFromUrl } from '../graphics/textures';
 import { InputManager, KeyPriority } from '../input/InputManager';
-import type { Action } from '../input/bindings';
+import { resolveBindings, type Action } from '../input/bindings';
 import { TextInputProxy } from '../input/TextInputProxy';
 import { BeatmapApi } from '../online/BeatmapApi';
 import { DownloadManager, type DownloadTask } from '../online/Downloader';
@@ -136,6 +136,7 @@ export class Game {
         cursorTextures: CursorTextures,
     ) {
         this.input = new InputManager(app, this.textInput);
+        settings.keyBindings.bind(v => (this.input.bindings = resolveBindings(v)), true);
         this.samples = new SampleBank(this.audio);
         this.uiSounds = new UISounds(this.audio);
         this.preview = new PreviewPlayer(this.audio);
@@ -322,6 +323,7 @@ export class Game {
         s.cursorSize.bind(v => (this.cursor.gameplay.userScale = v), true);
         s.autoCursorSize.bind(v => (this.cursor.gameplay.autoSize = v), true);
         s.cursorTrail.bind(v => this.cursor.gameplay.setTrailEnabled(v), true);
+        s.cursorRipples.bind(v => (this.cursor.gameplay.ripplesEnabled = v), true);
         s.cursorExpand.bind(v => (this.cursor.gameplay.expandEnabled = v), true);
         s.cursorRotation.bind(v => (this.cursor.menu.rotationEnabled = v), true);
         s.hardwareCursor.bind(() => this.updateCursorVisibility(), true);
@@ -401,52 +403,63 @@ export class Game {
         });
     }
 
-    private onGlobalKey(e: KeyboardEvent, action: Action | null): boolean {
+    private onGlobalKey(e: KeyboardEvent, _action: Action | null): boolean {
         const allowOverlays = this.screens.current?.allowOverlays ?? true;
-        switch (action) {
-            case 'toggleSettings':
-                if (allowOverlays) this.settingsOverlay.toggle();
-                return true;
-            case 'toggleNotifications':
-                if (allowOverlays) this.notificationOverlay.toggle();
-                return true;
-            case 'toggleBeatmapListing':
-                if (allowOverlays) this.listing.toggle();
-                return true;
-            case 'toggleNowPlaying':
-                if (allowOverlays) this.nowPlaying.toggle();
-                return true;
-            case 'volumeUp':
-                this.volume.adjust(0.05);
-                return true;
-            case 'volumeDown':
-                this.volume.adjust(-0.05);
-                return true;
-            case 'toggleMute':
-                this.volume.toggleMute();
-                return true;
-            case 'musicPlay':
-                if (allowOverlays) this.music.togglePause();
-                return allowOverlays;
-            case 'musicNext':
-                if (allowOverlays) void this.music.next();
-                return allowOverlays;
-            case 'musicPrev':
-                if (allowOverlays) void this.music.prev();
-                return allowOverlays;
-            case 'toggleFps':
-                this.settings.showFps.value = !this.settings.showFps.value;
-                return true;
-            case 'screenshot':
-                void this.takeScreenshot();
-                return true;
-            case 'fullscreen':
-                this.toggleFullscreen();
-                return true;
-            default:
-                void e;
-                return false;
+        // Every action checks its own bindings: a key may also be bound in another context (F3).
+        const is = (a: Action) => this.input.matches(e, a);
+        if (is('toggleSettings')) {
+            if (allowOverlays) this.settingsOverlay.toggle();
+            return true;
         }
+        if (is('toggleNotifications')) {
+            if (allowOverlays) this.notificationOverlay.toggle();
+            return true;
+        }
+        if (is('toggleBeatmapListing')) {
+            if (allowOverlays) this.listing.toggle();
+            return true;
+        }
+        if (is('toggleNowPlaying')) {
+            if (allowOverlays) this.nowPlaying.toggle();
+            return true;
+        }
+        if (is('volumeUp')) {
+            this.volume.adjust(0.05);
+            return true;
+        }
+        if (is('volumeDown')) {
+            this.volume.adjust(-0.05);
+            return true;
+        }
+        if (is('toggleMute')) {
+            this.volume.toggleMute();
+            return true;
+        }
+        if (is('musicPlay')) {
+            if (allowOverlays) this.music.togglePause();
+            return allowOverlays;
+        }
+        if (is('musicNext')) {
+            if (allowOverlays) void this.music.next();
+            return allowOverlays;
+        }
+        if (is('musicPrev')) {
+            if (allowOverlays) void this.music.prev();
+            return allowOverlays;
+        }
+        if (is('toggleFps')) {
+            this.settings.showFps.value = !this.settings.showFps.value;
+            return true;
+        }
+        if (is('screenshot')) {
+            void this.takeScreenshot();
+            return true;
+        }
+        if (is('fullscreen')) {
+            this.toggleFullscreen();
+            return true;
+        }
+        return false;
     }
 
     private openPopup(menu: UIComponent, close: () => void): void {
