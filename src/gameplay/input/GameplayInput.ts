@@ -88,6 +88,27 @@ export class GameplayInput {
         const p = this.position(e);
         this.x = p.x;
         this.y = p.y;
+        if (e.pointerType === 'mouse') this.chord(e);
+    }
+
+    /**
+     * Mouse buttons pressed or released while another is held fire no
+     * pointerdown / pointerup, only a pointermove with `button` set (Pointer
+     * Events "chorded buttons"). Follow those, and drop any button `buttons`
+     * says is up, so a missed release can never leave a button held.
+     */
+    private chord(e: PointerEvent): void {
+        if (this.touches.size > 0) return;
+        if (e.button === 0 || e.button === 2) {
+            const button: GameplayButton = e.button === 0 ? 'M1' : 'M2';
+            if (e.buttons & (e.button === 0 ? 1 : 2)) {
+                if (this.settings.mouseButtons.value && !this.down[button] && !this.ignorePointer?.(this.x, this.y)) this.press(button);
+                return;
+            }
+            this.release(button);
+        }
+        if (this.down.M1 && !(e.buttons & 1)) this.release('M1');
+        if (this.down.M2 && !(e.buttons & 2)) this.release('M2');
     }
 
     /** Logical position of a pointer event (the virtual cursor for a locked mouse). */

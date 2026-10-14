@@ -1160,7 +1160,8 @@ export class PlayerScreen extends Screen {
         else this.quickRetryHeld = Math.max(0, this.quickRetryHeld - dt * 2);
         const hold = this.game.settings.holdToConfirmMs.value;
         this.retryFade.alpha = hold > 0 ? clamp01(this.quickRetryHeld / hold) : 0;
-        if ((this.quickRetryHeld >= hold || (hold === 0 && this.quickRetryActive)) && this.outcome === 'none') {
+        // Only while ` is down: with a 0 ms hold time, "held ≥ 0" is always true.
+        if (this.quickRetryActive && this.quickRetryHeld >= hold && this.outcome === 'none') {
             this.quickRetryActive = false;
             this.retry();
         }

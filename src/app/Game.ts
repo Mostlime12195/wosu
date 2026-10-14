@@ -358,8 +358,9 @@ export class Game {
         const menuProvided = c.external ? !c.gameplayActive || c.replayLoaded : (screen?.showMenuCursor ?? true);
         const hardware = s.hardwareCursor.value;
         c.menuStateVisible = validInput && menuProvided && !hardware;
-        c.gameplayShown = c.replayLoaded ||
-            (c.gameplayActive && this.input.pointerSeen && (!touch || s.gameplayCursorDuringTouch.value));
+        // Autoplay / a replay drive the gameplay cursor, but never over the pause or fail menu.
+        c.gameplayShown = c.gameplayActive &&
+            (c.replayLoaded || (this.input.pointerSeen && (!touch || s.gameplayCursorDuringTouch.value)));
         c.hideMenuOnNonMouseInput = screen?.hideMenuCursorOnNonMouseInput ?? false;
         c.idleAllowed = !this.textInput.focused;
         // The OS cursor only ever stands in for the menu cursor.
