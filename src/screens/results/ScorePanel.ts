@@ -12,6 +12,7 @@ import { UIComponent } from '../../ui/UIComponent';
 import { uiSounds } from '../../ui/UIContext';
 import { AccuracyCircle } from './AccuracyCircle';
 import { ModPill } from './ModPill';
+import { Avatar } from '../../ui/Avatar';
 import { clamp01, easeOutPow, easeOutQuint, formatDate, gaugeTarget } from './resultsMath';
 
 export const PANEL_W = 360;
@@ -178,10 +179,13 @@ export class ScorePanel extends UIComponent {
         const date = label(formatDate(r.date), { size: 12, weight: '500', color: Colors.gray9 });
         date.anchor.set(1, 0);
         date.position.set(PANEL_W - PAD, 11);
+        // Every local score is this device's player: their picture beside the stored name.
+        const avatar = new Avatar(22, game.profile.avatar, { radius: 5 });
+        avatar.position.set(PAD, 7);
         const player = label('', { size: 12, weight: '600', color: Colors.grayB });
-        fitText(player, CONTENT_W - date.width - 16, `played by ${r.player || 'Guest'}`);
-        player.position.set(PAD, 11);
-        footer.addChild(new Graphics().rect(PAD, 0, CONTENT_W, 1).fill({ color: 0xffffff, alpha: 0.08 }), player, date);
+        fitText(player, CONTENT_W - date.width - 16 - 28, `played by ${r.player || 'Guest'}`);
+        player.position.set(PAD + 28, 11);
+        footer.addChild(new Graphics().rect(PAD, 0, CONTENT_W, 1).fill({ color: 0xffffff, alpha: 0.08 }), avatar, player, date);
         footer.position.set(0, FOOTER_Y);
         this.addChild(footer);
         this.rows.push(footer);

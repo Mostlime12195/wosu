@@ -61,6 +61,11 @@ export class SongProgress extends Container {
         return BAR_H + (this._showGraph ? GRAPH_H : 0) + LABEL_H;
     }
 
+    /** Its box (unscaled, origin bottom-left) at the current width. */
+    get box(): { x: number; y: number; w: number; h: number } {
+        return { x: 0, y: -this.blockHeight, w: this.w, h: this.blockHeight };
+    }
+
     /** Lay out across `width`; the component's origin is its bottom-left. */
     layout(width: number): void {
         this.w = width;

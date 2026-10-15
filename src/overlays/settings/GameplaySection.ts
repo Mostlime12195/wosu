@@ -1,7 +1,7 @@
 import type { Game } from '../../app/Game';
 import type { GameplayMechanics } from '../../gameplay/scoring/mechanics';
 import type { HudVisibility, KeyOverlayStyle } from '../../settings/Settings';
-import { checkboxRow, dropdownRow, mult, pct, sliderRow } from './rows';
+import { buttonRow, checkboxRow, dropdownRow, mult, pct, sliderRow } from './rows';
 import type { SectionDef } from './types';
 
 export function gameplaySection(game: Game): SectionDef {
@@ -49,6 +49,11 @@ export function gameplaySection(game: Game): SectionDef {
                         keywords: 'interface overlay show hide hud',
                     }),
                     sliderRow('HUD scale', s.hudScale, mult, { keywords: 'interface size' }),
+                    buttonRow('Open skin layout editor', () => game.openSkinEditor(), {
+                        icon: 'brush',
+                        description: 'Move, resize, hide and add HUD components (beatmap info, unstable rate, live pp…). Saved per skin. Ctrl+Shift+S from the menus.',
+                        keywords: 'hud layout skin editor position move drag pp unstable rate',
+                    }),
                     checkboxRow('Score', s.hudScore, { keywords: 'hud counter' }),
                     checkboxRow('Accuracy', s.hudAccuracy, { keywords: 'hud percent' }),
                     checkboxRow('Combo counter', s.hudCombo, { keywords: 'hud' }),

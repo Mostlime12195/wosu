@@ -21,6 +21,7 @@ import { RulesDriver } from '../../gameplay/RulesDriver';
 import { buttonMask, encodeReplay, SMOKE_BIT, type ReplayInfo } from '../../gameplay/replay/Replay';
 import { ReplayPlayback } from '../../gameplay/replay/ReplayPlayback';
 import { ReplayRecorder } from '../../gameplay/replay/ReplayRecorder';
+import { clampReplaySpeed, replayTrackRate } from '../../gameplay/replay/playbackSpeed';
 import { HitsoundPlayer } from '../../gameplay/HitsoundPlayer';
 import { HUDOverlay } from '../../gameplay/hud/HUDOverlay';
 import { StablePlayOverlay } from '../../gameplay/hud/StablePlayOverlay';
@@ -30,12 +31,12 @@ import { ComboBursts, comboBurstSounds } from '../../gameplay/hud/ComboBursts';
 import { NightcoreBeats, nightcorePlaysHats } from '../../gameplay/NightcoreBeats';
 import { AutoPlayer } from '../../gameplay/input/AutoPlayer';
 import { GameplayInput, type GameplayButton } from '../../gameplay/input/GameplayInput';
-import { NO_MODS, extraLives, flashlightSettings, hiddenSettings, inputMode, modSettingsOf, restartOnFail, scoreMultiplier, sortedMods, type InputMode, type ModSet } from '../../gameplay/mods';
+import { NO_MODS, audioPitch, extraLives, flashlightSettings, hiddenSettings, inputMode, modSettingsOf, playbackRate, preservesPitch, restartOnFail, scoreMultiplier, sortedMods, type InputMode, type ModSet } from '../../gameplay/mods';
 import { Flashlight } from '../../gameplay/Flashlight';
 import type { ScoreResult } from '../../gameplay/ScoreResult';
 import { HealthProcessor } from '../../gameplay/scoring/HealthProcessor';
 import { difficultyMultiplier, ScoreProcessor } from '../../gameplay/scoring/ScoreProcessor';
-import type { Action } from '../../input/bindings';
+import { actionLabel, type Action } from '../../input/bindings';
 import { formatBeatmapOffset, type PlayTiming } from '../../gameplay/offsetCalibration';
 import { beatmapOffsets, offsetKeyFor } from '../../storage/BeatmapOffsets';
 import { label } from '../../ui/text';
@@ -47,6 +48,7 @@ import { GameplayMenu } from './GameplayMenu';
 import { LegacyGameplayMenu } from './LegacyGameplayMenu';
 import { HoldForMenuButton } from './HoldForMenuButton';
 import { ReplayIndicator } from './ReplayIndicator';
+import { ReplaySettingsOverlay } from './ReplaySettingsOverlay';
 import { ResumeOverlay } from './ResumeOverlay';
 import { SkipButton } from './SkipButton';
 
@@ -67,6 +69,15 @@ export interface PlayerOptions {
     replay?: ReplayInfo | null;
     /** Replays: start watching from this song time (a backward seek). */
     startAt?: number;
+    /** Replays: the viewer's controls, carried across a backward seek's rebuild. */
+    replayView?: ReplayViewState | null;
+}
+
+/** The replay viewer's own state (lazer keeps it on the ReplayPlayer). */
+export interface ReplayViewState {
+    speed: number;
+    settingsPinned: boolean;
+    paused: boolean;
 }
 
 /** How a Player ended, read by the loader when it resumes. */
@@ -128,6 +139,13 @@ export class PlayerScreen extends Screen {
     /** The replay being watched. */
     private replay: ReplayPlayback | null = null;
     private replayIndicator: ReplayIndicator | null = null;
+    /** lazer's replay settings (playback speed, seek, visibility). */
+    private replaySettings: ReplaySettingsOverlay | null = null;
+    /** The playback speed the track runs at (see applyReplaySpeed). */
+    private speedApplied = 1;
+    private speedApplying = false;
+    /** Undoes the avatar binding (kept until destroy: the leaderboard draws the texture). */
+    private avatarOff: (() => void) | null = null;
     private readonly root = new Container();
     private readonly fieldWrap = new Container();
     /** Everything the fail animation shrinks, tilts and greys (lazer's FailAnimationContainer.Content). */
@@ -339,8 +357,16 @@ export class PlayerScreen extends Screen {
             // lazer's legacy HUD layout comes with an imported skin; wosu!'s default keeps its own.
             legacyLayout: g.skins.current.value !== null,
             // lazer names Autoplay's score "Autoplay"; a replay shows its player.
-            playerName: this.mode === 'autoplay' ? 'Autoplay' : o.replay ? o.replay.player || 'Guest' : g.settings.playerName.value || 'Guest',
+            playerName: this.mode === 'autoplay' ? 'Autoplay' : o.replay ? o.replay.player || 'Guest' : g.profile.name.value,
             introStart: start,
+            // The selected skin's saved layout (skin editor), and what its extra components show.
+            skinId: g.skins.currentInfo.value?.id ?? '',
+            mods,
+            mechanics,
+            beatmapInfo: () => ({
+                artist: o.selection.set.artist, title: o.selection.set.title, version: o.selection.diff.version,
+                creator: o.selection.set.creator, stars: this.playedStars(), mods: sortedMods(mods),
+            }),
         });
         this.stablePlay = new StablePlayOverlay(chain, countdown, beatmap.breaks);
         this.stablePlay.playSample = names => this.playSkinSample(names);
@@ -349,6 +375,8 @@ export class PlayerScreen extends Screen {
         void g.scores.forBeatmap(beatmapKeyOf({ beatmapId: lbDiff.beatmapId, title: lbSet.title, version: lbDiff.version, setId: lbSet.onlineSetId ?? 0 }))
             .then(list => { if (!this.destroyed) this.hud.setLeaderboardScores(list); })
             .catch(e => console.warn('[leaderboard] scores unavailable', e));
+        // Local scores are all this device's player: their picture in the avatar tiles (not on Autoplay's entry).
+        this.avatarOff = g.profile.avatar.bind(t => this.hud.leaderboard.setAvatar(t, this.mode !== 'autoplay'), true);
         this.menu = LegacyGameplayMenu.available(chain)
             ? new LegacyGameplayMenu(chain, names => this.playSkinSample(names))
             : new GameplayMenu(g.skin.tex('triangle'));
@@ -372,9 +400,20 @@ export class PlayerScreen extends Screen {
             const { set, diff } = o.selection;
             this.replayIndicator = new ReplayIndicator(`Watching ${o.replay.player || 'Guest'} play ${set.artist} - ${set.title} [${diff.version}]`);
             this.failContent.addChild(this.replayIndicator);
+            const rs = (this.replaySettings = new ReplaySettingsOverlay(g.settings, REPLAY_SEEK_MS, actionLabel(g.input.bindings, 'toggleReplaySettings')));
+            const view = o.replayView;
+            rs.speed.value = view?.speed ?? 1;
+            rs.pinned.value = view?.settingsPinned ?? false;
+            rs.onTogglePause = () => this.toggleReplayPause();
+            rs.onSeek = t => this.seekReplayTo(t);
+            rs.onSeekBy = d => this.seekReplay(d);
+            // A rebuild (backward seek) gets the track still running at the previous Player's speed.
+            this.speedApplied = o.track.playbackRate / playbackRate(mods);
+            this.offs.push(rs.speed.bind(() => void this.applyReplaySpeed(), true));
         }
         this.failFlash.blendMode = 'add';
         this.root.addChild(this.failContent, this.failFlash, this.skip, this.holdButton, this.resume, this.menu, this.retryFade);
+        if (this.replaySettings) this.root.addChildAt(this.replaySettings, this.root.getChildIndex(this.resume));
         this.addChild(this.root);
         this.eventMode = 'passive';
 
@@ -559,6 +598,7 @@ export class PlayerScreen extends Screen {
         this.retryFade.clear().rect(0, 0, w, h).fill(0x000000);
         this.flashlight?.resize(w, h);
         this.replayIndicator?.layout(w, h);
+        this.replaySettings?.resize(w, h);
     }
 
     private toPlayfield(x: number, y: number): { x: number; y: number } {
@@ -604,6 +644,7 @@ export class PlayerScreen extends Screen {
         this.clock.start();
         const at = this.options.startAt;
         if (this.replay && at !== undefined && at > this.clock.frameTime) this.clock.seek(at);
+        if (this.replay && this.options.replayView?.paused) this.toggleReplayPause();
     }
 
     override onSuspending(): void {
@@ -674,6 +715,7 @@ export class PlayerScreen extends Screen {
         this.holdButton.visible = this.phase === 'playing' || this.phase === 'resuming';
         if (this.holdButton.visible) this.holdButton.update(dt, this.input, this.game.input.lastPointerKind.value === 'touch');
         this.updateFlashlight(cursor, time);
+        this.updateReplaySettings(dt, time);
         this.resume.update(dt, this._w, this._h, this.input.x, this.input.y);
         if (this.restartPending) {
             // Outside the judgement loop that raised the fail.
@@ -694,7 +736,8 @@ export class PlayerScreen extends Screen {
         this.updateBreakDim(time);
         this.hud.update(dt, {
             time,
-            rate: this.clock.rate,
+            // The mods' rate: a replay's playback speed doesn't change the song's length.
+            rate: playbackRate(this.options.mods),
             score: this.score.score,
             accuracy: this.score.accuracy,
             combo: this.score.combo,
@@ -705,6 +748,13 @@ export class PlayerScreen extends Screen {
             counts: this.mode === 'autoplay' ? this.autoCounts : this.replay ? this.replay.counts : this.input.counts,
             // lazer's localUserPlaying (breaks and the intro count as "not playing").
             playing: this.phase === 'playing' && time >= this.playStart && !this.hud.isBreak(time) && !this.rules.finished,
+            stats: {
+                great: this.score.count300, ok: this.score.count100, meh: this.score.count50, miss: this.score.countMiss,
+                maxCombo: this.score.maxCombo, accuracy: this.score.accuracy,
+                sliderEndsJudged: this.score.sliderEndsTotal, sliderEndsHit: this.score.sliderEndsHit,
+                tickMisses: this.score.sliderTicksTotal - this.score.sliderTicksHit,
+            },
+            hitErrors: this.rules.hitErrors,
         });
         this.stablePlay.update(this.phase === 'failed' ? this.failedAtTime : time, this.health.hp);
     }
@@ -943,16 +993,71 @@ export class PlayerScreen extends Screen {
 
     private seekReplay(delta: number): void {
         if (this.phase !== 'playing' || !this.replay) return;
-        const time = this.clock.frameTime;
-        const target = Math.max(this.clock.startTime, Math.min(this.beatmap.endTime, time + delta));
-        if (delta > 0) {
+        this.seekReplayTo(this.clock.frameTime + delta);
+    }
+
+    /** Seek the replay to song time `time` (the keys and the replay settings' seek bar). */
+    private seekReplayTo(time: number): void {
+        if (this.phase !== 'playing' || !this.replay) return;
+        const now = this.clock.frameTime;
+        const target = Math.max(this.clock.startTime, Math.min(this.beatmap.endTime, time));
+        if (target >= now) {
             // Forward: the replay's events catch up (silently) on the next frame.
-            if (target > time) this.clock.seek(target);
+            if (target > now) this.clock.seek(target);
             return;
         }
-        if (time - target < 50) return;
+        if (now - target < 50) return;
         this.replayRestartAt = target;
         this.retry(true);
+    }
+
+    /** The viewer's controls for the loader to hand to the rebuilt Player (null: not a replay). */
+    get replayView(): ReplayViewState | null {
+        const rs = this.replaySettings;
+        return rs ? { speed: rs.speed.value, settingsPinned: rs.pinned.value, paused: this.replayPaused } : null;
+    }
+
+    /**
+     * Run the track at the replay settings' speed (lazer's UserPlaybackRate:
+     * tempo on top of the mods' rate, pitch kept). Only the clock's rate
+     * changes; the replay's events are still applied at their own times, so
+     * judgement doesn't depend on it. Slider drags coalesce into one change
+     * at a time, with the clock held while the track restarts.
+     */
+    private async applyReplaySpeed(): Promise<void> {
+        const rs = this.replaySettings;
+        if (!rs || this.speedApplying) return;
+        this.speedApplying = true;
+        try {
+            while (!this.released && Math.abs(clampReplaySpeed(rs.speed.value) - this.speedApplied) > 1e-6) {
+                const speed = clampReplaySpeed(rs.speed.value);
+                const mods = this.options.mods;
+                const hold = this.phase === 'playing' && !this.clock.paused;
+                if (hold) this.clock.pause();
+                await this.options.track.setRate(replayTrackRate(playbackRate(mods), speed), preservesPitch(mods), audioPitch(mods));
+                this.speedApplied = speed;
+                if (hold && !this.released && this.phase === 'playing' && !this.replayPaused) this.clock.resume();
+            }
+        } catch (e) {
+            console.warn('[replay] playback speed change failed', e);
+        } finally {
+            this.speedApplying = false;
+        }
+    }
+
+    private updateReplaySettings(dt: number, time: number): void {
+        const rs = this.replaySettings;
+        if (!rs) return;
+        // Not over the pause / fail menus or the end of the replay.
+        rs.visible = this.phase === 'playing' || this.phase === 'loading';
+        if (!rs.visible) return;
+        rs.update(dt, {
+            time,
+            start: this.clock.startTime,
+            end: this.beatmap.endTime,
+            paused: this.replayPaused,
+            pointer: this.game.input.pointer,
+        });
     }
 
     /**
@@ -1218,7 +1323,8 @@ export class PlayerScreen extends Screen {
         const o = this.options;
         const { set, diff } = o.selection;
         const s = this.score;
-        const rate = this.clock.rate;
+        // The mods' rate (a replay watched at another playback speed scores the same).
+        const rate = playbackRate(o.mods);
         const errors = this.rules.hitErrors.slice();
         const mean = errors.length ? errors.reduce((a, b) => a + b, 0) / errors.length : 0;
         const variance = errors.length ? errors.reduce((a, b) => a + (b - mean) ** 2, 0) / errors.length : 0;
@@ -1252,7 +1358,7 @@ export class PlayerScreen extends Screen {
             passed: true,
             perfect: s.countMiss === 0 && s.maxCombo >= mapMaxCombo,
             date: Date.now(),
-            player: this.game.settings.playerName.value || 'Guest',
+            player: this.game.profile.name.value,
             hitErrors: errors,
             healthGraph: this.healthGraph,
             unstableRate: (Math.sqrt(variance) * 10) / rate,
@@ -1269,7 +1375,7 @@ export class PlayerScreen extends Screen {
         try {
             // Built as song select's modAdjustedStars does (legacy tails), so the figures match.
             const nomod = calculateDifficulty(buildPlayableBeatmap(this.options.data, NO_MODS)).stars;
-            const played = calculateDifficulty(buildPlayableBeatmap(this.options.data, relevant), this.clock.rate).stars;
+            const played = calculateDifficulty(buildPlayableBeatmap(this.options.data, relevant), playbackRate(relevant)).stars;
             return nomod > 0 ? Math.round(base * (played / nomod) * 100) / 100 : base;
         } catch {
             return base;
@@ -1403,6 +1509,10 @@ export class PlayerScreen extends Screen {
 
     /** lazer's ReplayPlayer keys: pause the replay (Space doubles as skip while the intro can be skipped) and seek. */
     private onReplayKey(e: KeyboardEvent, is: (a: Action) => boolean): boolean {
+        if (is('toggleReplaySettings')) {
+            if (!e.repeat) this.replaySettings?.toggle();
+            return true;
+        }
         if (is('togglePauseReplay') && !(is('skip') && this.skip.available)) {
             if (!e.repeat) this.toggleReplayPause();
             return true;
@@ -1445,6 +1555,8 @@ export class PlayerScreen extends Screen {
 
     override destroy(): void {
         this.releaseGameplay();
+        this.avatarOff?.();
+        this.avatarOff = null;
         super.destroy({ children: true });
     }
 }

@@ -1,12 +1,14 @@
-import { Container, Graphics, type FederatedPointerEvent, type Text } from 'pixi.js';
+import { Container, Graphics, type FederatedPointerEvent, type Text, type Texture } from 'pixi.js';
 import type { Game } from '../../app/Game';
 import type { LibrarySet } from '../../beatmap/Library';
 import type { DifficultySummary } from '../../beatmap/types';
+import type { ReadonlyBindable } from '../../core/Bindable';
 import { tween } from '../../core/Tweener';
 import { formatNumber } from '../../core/math';
 import { sanitizeMods } from '../../gameplay/mods';
 import { ModIconRow } from '../../overlays/mods/ModIcon';
 import { beatmapKeyOf, type ScoreRecord } from '../../storage/ScoreStore';
+import { Avatar } from '../../ui/Avatar';
 import { ContextMenu, MENU_SPACER, type MenuEntry } from '../../ui/ContextMenu';
 import { icon } from '../../ui/icons';
 import { LoadingSpinner } from '../../ui/LoadingSpinner';
@@ -27,8 +29,9 @@ export function scoreKeyFor(set: LibrarySet, diff: DifficultySummary): string {
 }
 
 /**
- * lazer's LeaderboardScore, local flavour: position, grade badge, player
- * and stats on a dark rounded strip, total score and mods on the right.
+ * lazer's LeaderboardScore, local flavour: position, grade badge, the
+ * player's avatar, name and stats on a dark rounded strip, total score and
+ * mods on the right.
  */
 class ScoreRow extends UIComponent {
     private readonly bg = new Graphics();
@@ -41,12 +44,15 @@ class ScoreRow extends UIComponent {
     private readonly score: Text;
     private readonly mods = new ModIconRow(17, 2);
     private readonly replayGlyph: Text;
+    private readonly avatar: Avatar;
     private record: ScoreRecord | null = null;
     /** Right-click / long-press on the row: (record, global x, y). */
     onMenu: ((r: ScoreRecord, x: number, y: number) => void) | null = null;
 
-    constructor() {
+    constructor(avatar: ReadonlyBindable<Texture | null>) {
         super();
+        // Every local score is this device's player.
+        this.avatar = new Avatar(40, avatar, { radius: 6 });
         this.position_ = label('', { size: 17, weight: '700', color: 0xffffff });
         this.position_.anchor.set(0.5);
         this.grade = label('', { size: 15, weight: '800', italic: true, color: 0xffffff });
@@ -59,7 +65,7 @@ class ScoreRow extends UIComponent {
         this.score.anchor.set(1, 0);
         this.replayGlyph = icon('circlePlay', 12, Colors.grayC);
         this.replayGlyph.anchor.set(0, 0.5);
-        this.addChild(this.bg, this.position_, this.badge, this.grade, this.player, this.replayGlyph, this.stats, this.date, this.score, this.mods);
+        this.addChild(this.bg, this.position_, this.badge, this.grade, this.avatar, this.player, this.replayGlyph, this.stats, this.date, this.score, this.mods);
         // lazer's LeaderboardScore: click to view the score (here: watch its replay), right-click for its menu.
         this.makeInteractive();
         this.on('rightclick', (e: FederatedPointerEvent) => {
@@ -99,7 +105,8 @@ class ScoreRow extends UIComponent {
         this.badge.clear().roundRect(boxX + 10, h / 2 - 12, 46, 24, 12).fill(gc);
         this.grade.tint = r.grade.endsWith('H') || r.grade === 'F' ? 0x222222 : 0x2a1a00;
         this.grade.position.set(boxX + 33, h / 2);
-        const textX = boxX + 68;
+        this.avatar.position.set(boxX + 66, (h - this.avatar.h) / 2);
+        const textX = boxX + 66 + this.avatar.w + 10;
         this.score.position.set(w - 12, 6);
         this.mods.position.set(w - 12 - this.mods.rowWidth, h - 24);
         const rightW = Math.max(this.score.width, this.mods.rowWidth) + 24;
@@ -198,7 +205,7 @@ export class LocalLeaderboard extends UIComponent {
         this.records = list;
         const shown = list.slice(0, MAX_ROWS);
         while (this.rows.length < shown.length) {
-            const row = new ScoreRow();
+            const row = new ScoreRow(this.game.profile.avatar);
             row.onActivate = () => {
                 const r = row.scoreRecord;
                 if (r?.hasReplay) this.onWatchReplay?.(r);

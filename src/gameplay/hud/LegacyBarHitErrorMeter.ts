@@ -69,6 +69,11 @@ export class LegacyBarHitErrorMeter extends Container {
         this.addChild(this.arrow);
     }
 
+    /** Its box in lazer units (origin bottom centre). */
+    get box(): { x: number; y: number; w: number; h: number } {
+        return { x: -this.halfWidth, y: -HEIGHT, w: this.halfWidth * 2, h: HEIGHT };
+    }
+
     /** -0.5..0.5 across the meter (lazer's getRelativeJudgementPosition). */
     private relative(error: number): number {
         return Math.max(-0.5, Math.min(0.5, error / Math.max(1, this.w300, this.w100, this.w50) / 2));

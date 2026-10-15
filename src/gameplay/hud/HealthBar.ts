@@ -132,6 +132,13 @@ export class HealthBar extends Container {
         this.addChild(this.bg, this.fill, this.marker);
     }
 
+    /** Its box in lazer units: scorebar-bg (or the fill without one); origin top-left. */
+    get box(): { x: number; y: number; w: number; h: number } {
+        const t = this.bg.texture;
+        if (t && t !== Texture.EMPTY && t.width > 1) return { x: 0, y: 0, w: t.width * this.bg.scale.x, h: t.height * this.bg.scale.y };
+        return { x: 0, y: 0, w: Math.max(1, this.fillPos.x + this.maxFillWidth), h: Math.max(1, this.fillPos.y + this.fillHeight) };
+    }
+
     private setMarker(t: SkinTexture | null): void {
         this.main.visible = !!t;
         if (!t) return;

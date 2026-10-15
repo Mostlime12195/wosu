@@ -63,6 +63,11 @@ export class LegacySongProgress extends Container {
         this.addChild(this.pie, ring);
     }
 
+    /** Its box in lazer units (origin centre right). */
+    get box(): { x: number; y: number; w: number; h: number } {
+        return { x: -PIE_SIZE, y: -PIE_SIZE / 2, w: PIE_SIZE, h: PIE_SIZE };
+    }
+
     update(time: number): void {
         const { progress, intro } = songProgressAt(time, this.introStart, this.firstHit, this.lastHit);
         // The intro pie is mirrored and shows what is left of the intro.

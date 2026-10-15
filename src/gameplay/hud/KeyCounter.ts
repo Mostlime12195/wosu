@@ -80,6 +80,8 @@ export interface KeyOverlay extends Container {
     update(dt: number, down: Record<GameplayButton, boolean>, counts: Record<GameplayButton, number>): void;
     /** Place the overlay for a w×h screen; `unit` is the HUD's own scale, `legacyUnit` lazer's 1024×768 one. */
     place(w: number, h: number, unit: number, legacyUnit: number): void;
+    /** Its box in its own units (for the layout editor). */
+    box(): { x: number; y: number; w: number; h: number };
 }
 
 interface Key {
@@ -128,6 +130,10 @@ export class KeyCounter extends Container implements KeyOverlay {
 
     get stackHeight(): number {
         return this.keys.length * SIZE + (this.keys.length - 1) * GAP;
+    }
+
+    box(): { x: number; y: number; w: number; h: number } {
+        return { x: 0, y: 0, w: SIZE, h: this.stackHeight };
     }
 
     place(w: number, h: number, unit: number): void {
@@ -203,6 +209,7 @@ export class LegacyKeyCounter extends Container implements KeyOverlay {
     private tracker!: KeyTracker;
     private style: KeyOverlayStyle | null = null;
     private clock = 0;
+    private measured: { x: number; y: number; w: number; h: number } | null = null;
 
     /**
      * The skin's key overlay. Outside the legacy layout, null when no skin
@@ -235,6 +242,7 @@ export class LegacyKeyCounter extends Container implements KeyOverlay {
         if (style === this.style) return;
         this.style = style;
         for (const c of this.flow.removeChildren()) c.destroy({ children: true });
+        this.measured = null;
         const defs = LAYOUTS[style];
         this.tracker = new KeyTracker(defs);
         this.keys = defs.map((def, i) => {
@@ -254,6 +262,14 @@ export class LegacyKeyCounter extends Container implements KeyOverlay {
                 ? LEGACY_ACTIVE_BOTTOM : LEGACY_ACTIVE_TOP;
             return { holder, sprite, name, count, down: false, activatedOnce: false, from: 1, to: 1, at: -1e9, textAt: -1e9, active };
         });
+    }
+
+    box(): { x: number; y: number; w: number; h: number } {
+        if (!this.measured) {
+            const b = this.getLocalBounds();
+            this.measured = { x: b.x, y: b.y, w: Math.max(1, b.width), h: Math.max(1, b.height) };
+        }
+        return this.measured;
     }
 
     place(w: number, h: number, _unit: number, lu: number): void {

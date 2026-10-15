@@ -9,6 +9,7 @@ import type { GameplayButton } from '../../src/gameplay/input/GameplayInput';
 import { inputMode, NO_MODS, sanitizeMods, scoreMultiplier, type ModSet } from '../../src/gameplay/mods';
 import { BUTTON_BITS, decodeReplay, encodeReplay, quantize, type ReplayEvent } from '../../src/gameplay/replay/Replay';
 import { ReplayPlayback } from '../../src/gameplay/replay/ReplayPlayback';
+import { clampReplaySpeed, formatReplaySpeed, REPLAY_SPEED_MAX, REPLAY_SPEED_MIN, replayTrackRate, seekFraction, seekTimeAt } from '../../src/gameplay/replay/playbackSpeed';
 import { ReplayRecorder } from '../../src/gameplay/replay/ReplayRecorder';
 import { RulesDriver } from '../../src/gameplay/RulesDriver';
 import { HealthProcessor } from '../../src/gameplay/scoring/HealthProcessor';
@@ -183,5 +184,62 @@ describe('replay encoding', () => {
         expect(p.cursorAt(7.5)).toEqual({ x: 50, y: 25 });
         p.advance(10, () => {});
         expect(p.done).toBe(true);
+    });
+});
+
+describe('replay playback speed', () => {
+    /**
+     * Watch at a changing playback speed, pausing now and then: each
+     * rendered frame (~16.7 ms of wall time, uneven) advances the clock by
+     * that much times the speed, as the track's rate does.
+     */
+    function watchAtSpeeds(events: readonly ReplayEvent[], mods: ModSet, mechanics: GameplayMechanics, speeds: number[], seed: number) {
+        const s = setup(mods, mechanics);
+        const playback = new ReplayPlayback(events);
+        const rand = rng(seed);
+        let t = s.beatmap.startTime - 2500;
+        let frame = 0;
+        while (!playback.done) {
+            const speed = speeds[Math.floor(frame / 200) % speeds.length];
+            const paused = frame % 500 > 480;
+            if (!paused) t += (10 + rand() * 15) * replayTrackRate(1, speed);
+            playback.advance(t, e => s.driver.apply(e));
+            frame++;
+        }
+        return s;
+    }
+
+    it.each(GAMEPLAY_MECHANICS)('judges the same at any speed, paused or not (%s)', mechanics => {
+        for (const mods of [NO_MODS, sanitizeMods(['DT']), sanitizeMods(['HT', 'HR'])]) {
+            const live = livePlay(mods, mechanics, 11);
+            const events = decodeReplay(encodeReplay(live.events));
+            for (const speeds of [[0.25], [2], [0.5, 1.75, 1, 0.25, 2]]) {
+                const watched = watchAtSpeeds(events, mods, mechanics, speeds, 5);
+                expect(summary(watched)).toEqual(summary(live));
+                expect(watched.log).toEqual(live.log);
+            }
+        }
+    });
+
+    it('maps the slider to the track rate', () => {
+        expect(clampReplaySpeed(0.1)).toBe(REPLAY_SPEED_MIN);
+        expect(clampReplaySpeed(3)).toBe(REPLAY_SPEED_MAX);
+        expect(clampReplaySpeed(1.234)).toBe(1.25);
+        expect(clampReplaySpeed(Number.NaN)).toBe(1);
+        expect(replayTrackRate(1.5, 0.5)).toBeCloseTo(0.75);
+        expect(replayTrackRate(0.75, 2)).toBeCloseTo(1.5);
+        expect(replayTrackRate(0, 1)).toBe(1);
+        expect(formatReplaySpeed(0.25)).toBe('0.25x');
+        expect(formatReplaySpeed(1)).toBe('1.00x');
+    });
+
+    it('maps the seek bar to song time and back', () => {
+        expect(seekFraction(500, 0, 1000)).toBe(0.5);
+        expect(seekFraction(-100, 0, 1000)).toBe(0);
+        expect(seekFraction(2000, 0, 1000)).toBe(1);
+        expect(seekFraction(5, 10, 10)).toBe(0);
+        expect(seekTimeAt(0.25, -2000, 2000)).toBe(-1000);
+        expect(seekTimeAt(2, 0, 100)).toBe(100);
+        expect(seekTimeAt(seekFraction(1234, -500, 90000), -500, 90000)).toBeCloseTo(1234);
     });
 });

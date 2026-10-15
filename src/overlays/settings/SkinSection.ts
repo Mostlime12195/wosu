@@ -59,6 +59,10 @@ export function skinSection(game: Game): SectionDef {
         about.row.onLayoutChange?.();
     };
 
+    // lazer's "Skin layout editor" button.
+    const layoutEditor = buttonRow('Skin layout editor', () => game.openSkinEditor(), {
+        icon: 'brush', color: Colors.pinkDark, keywords: 'hud layout editor position move drag components',
+    });
     const importSkin = buttonRow('Import skin', () => game.pickFiles('.osk,.zip'), {
         icon: 'fileImport', color: Colors.purple, keywords: 'skin osk add file drop',
     });
@@ -113,7 +117,7 @@ export function skinSection(game: Game): SectionDef {
         subsections: [
             {
                 title: 'Current skin',
-                rows: [current, about.row, importSkin, exportSkin, deleteSkin],
+                rows: [current, about.row, layoutEditor, importSkin, exportSkin, deleteSkin],
             },
             {
                 title: 'Beatmap',

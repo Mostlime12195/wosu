@@ -39,6 +39,11 @@ export class HitErrorMeter extends Container {
         this.addChild(this.arrow);
     }
 
+    /** Its box at `layout(220, 1)` (origin centre). */
+    get box(): { x: number; y: number; w: number; h: number } {
+        return { x: -110, y: -17, w: 220, h: 26 };
+    }
+
     /** `width` spans the 50 window; origin is the meter's centre. */
     layout(width: number, unit: number): void {
         this.pxPerMs = width / 2 / this.w50;

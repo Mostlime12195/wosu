@@ -4,6 +4,7 @@ import { formatTime } from '../core/math';
 import { tween } from '../core/Tweener';
 import type { Game } from '../app/Game';
 import { icon, type IconName } from '../ui/icons';
+import { Avatar } from '../ui/Avatar';
 import { drawRulesetIcon } from '../ui/RulesetIcon';
 import { counterText, label, fitText } from '../ui/text';
 import { Colors, Metrics } from '../ui/theme';
@@ -148,28 +149,26 @@ class ToolbarClock extends UIComponent {
     }
 }
 
-/** Guest user chip. */
+/** The player's chip: avatar and name; opens the profile (lazer's ToolbarUserButton). */
 class UserButton extends ToolbarButton {
-    private readonly avatar = new Container();
+    private readonly avatar: Avatar;
 
     constructor(game: Game) {
-        super('user', 'your profile', game.settings.playerName.value);
+        super('user', 'your profile', game.profile.name.value, game.profileOverlay.state);
         this.glyph.visible = false;
-        const disc = new Graphics().circle(0, 0, 13).fill(Colors.gray4);
-        const head = icon('user', 13, Colors.grayC);
-        this.avatar.addChild(disc, head);
+        this.avatar = new Avatar(26, game.profile.avatar, { radius: 6 });
         this.addChildAt(this.avatar, 2);
-        this.disposer.add(game.settings.playerName.bind(name => {
-            if (this.caption) fitText(this.caption, 140, name || 'Guest');
+        this.disposer.add(game.profile.name.bind(name => {
+            if (this.caption) fitText(this.caption, 140, name);
             this.resize(48 + (this.caption?.width ?? 0) + 8, this._h);
         }));
-        this.onActivate = () => game.settingsOverlay.show();
+        this.onActivate = () => game.profileOverlay.toggle();
         this.relayout();
     }
 
     protected override onResize(w: number, h: number): void {
         super.onResize(w, h);
-        this.avatar?.position.set(22, h / 2);
+        this.avatar?.position.set(22 - 13, h / 2 - 13);
     }
 }
 

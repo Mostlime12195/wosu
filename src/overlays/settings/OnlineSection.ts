@@ -1,7 +1,7 @@
 import type { Game } from '../../app/Game';
 import { browseProviders, downloadProviders, type ProviderId } from '../../online/providers';
 import { Colors } from '../../ui/theme';
-import { dropdownRow, textBoxRow, textRow } from './rows';
+import { buttonRow, dropdownRow, textRow } from './rows';
 import type { SectionDef } from './types';
 
 export function onlineSection(game: Game): SectionDef {
@@ -22,7 +22,7 @@ export function onlineSection(game: Game): SectionDef {
             },
             {
                 title: 'Profile',
-                rows: [textBoxRow('Player name', s.playerName, { placeholder: 'Guest', maxLength: 24, keywords: 'username nickname' })],
+                rows: [buttonRow('Edit profile', () => game.profileOverlay.show(), { icon: 'user', color: Colors.purple, keywords: 'player name username nickname avatar picture banner cover' })],
             },
         ],
     };

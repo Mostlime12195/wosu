@@ -85,6 +85,8 @@ export const Icons = {
     plus: '+',
     minus: '',
     rotate: '',
+    undo: '',
+    redo: '',
     tachometer: '',
     microchip: '',
     cubes: '',

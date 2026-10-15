@@ -27,6 +27,7 @@ export type Action =
     | 'toggleBeatmapOptions'
     | 'deselectAllMods'
     | 'toggleNowPlaying'
+    | 'toggleSkinEditor'
     | 'random'
     | 'randomRewind'
     | 'volumeUp'
@@ -49,6 +50,7 @@ export type Action =
     | 'togglePauseReplay'
     | 'seekReplayBackward'
     | 'seekReplayForward'
+    | 'toggleReplaySettings'
     | 'deleteItem';
 
 export type Bindings = Record<Action, string[]>;
@@ -72,6 +74,7 @@ export const DEFAULT_BINDINGS: Bindings = {
     toggleBeatmapOptions: ['F3'],
     deselectAllMods: ['Backspace'],
     toggleNowPlaying: ['F6'],
+    toggleSkinEditor: ['Ctrl+Shift+KeyS'],
     random: ['F2'],
     randomRewind: ['Shift+F2'],
     volumeUp: ['Alt+ArrowUp'],
@@ -94,6 +97,7 @@ export const DEFAULT_BINDINGS: Bindings = {
     togglePauseReplay: ['Space', 'MouseMiddle'],
     seekReplayBackward: ['ArrowLeft'],
     seekReplayForward: ['ArrowRight'],
+    toggleReplaySettings: ['Ctrl+KeyH'],
     deleteItem: ['Shift+Delete'],
 };
 
@@ -128,6 +132,7 @@ export const BINDING_SECTIONS: readonly BindingSection[] = [
             { action: 'toggleNotifications', caption: 'Toggle notifications' },
             { action: 'toggleBeatmapListing', caption: 'Toggle beatmap listing', keywords: 'osu!direct download' },
             { action: 'toggleNowPlaying', caption: 'Toggle now playing overlay', keywords: 'music' },
+            { action: 'toggleSkinEditor', caption: 'Toggle skin editor', keywords: 'hud layout' },
             { action: 'toggleFps', caption: 'Toggle FPS counter' },
             { action: 'screenshot', caption: 'Take screenshot' },
             { action: 'fullscreen', caption: 'Toggle fullscreen' },
@@ -178,6 +183,7 @@ export const BINDING_SECTIONS: readonly BindingSection[] = [
             { action: 'togglePauseReplay', caption: 'Pause / resume replay' },
             { action: 'seekReplayBackward', caption: 'Seek replay backward' },
             { action: 'seekReplayForward', caption: 'Seek replay forward' },
+            { action: 'toggleReplaySettings', caption: 'Toggle replay settings', keywords: 'playback speed controls' },
         ],
     },
 ];

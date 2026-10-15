@@ -1,6 +1,7 @@
 import { BitmapText, Container, FillGradient, Graphics, Matrix, Sprite, Texture, type Text } from 'pixi.js';
 import { Easing, type EasingFn } from '../../core/easing';
 import { damp, formatNumber } from '../../core/math';
+import { fillCover } from '../../ui/coverFill';
 import { counterText, fitText, label } from '../../ui/text';
 import { GameplayLeaderboardModel, type LeaderboardEntry, type LeaderboardSource } from './leaderboard';
 import { formatAccuracy } from './ScoreDisplay';
@@ -166,6 +167,7 @@ class LeaderboardPanel extends Container {
     private shownCombo = NaN;
     private shownPosition: number | null | undefined = undefined;
     private nameFitted = false;
+    private _avatar: Texture | null = null;
 
     constructor(readonly entry: LeaderboardEntry) {
         super();
@@ -189,6 +191,13 @@ class LeaderboardPanel extends Container {
 
     get texts(): Text[] {
         return [this.positionText, this.initial, this.nameText];
+    }
+
+    /** The player's picture in the avatar tile (null: the name's initial). */
+    set avatar(tex: Texture | null) {
+        this._avatar = tex && !tex.destroyed ? tex : null;
+        this.initial.visible = !this._avatar;
+        this.dirty = true;
     }
 
     setExpanded(expanded: boolean): void {
@@ -272,9 +281,11 @@ class LeaderboardPanel extends Container {
         halfRoundRect(g, 0, left, PANEL_HEIGHT, CORNER_RADIUS, 'left').fill(verticalGradient(c, 0.2, 0.5));
         halfRoundRect(g, left, right, PANEL_HEIGHT, CORNER_RADIUS, 'right').fill(verticalGradient(c, 0.1, 0.3));
         g.roundRect(0, 0, w, PANEL_HEIGHT, CORNER_RADIUS).stroke({ width: BORDER, fill: verticalGradient(c, 0.2, 1), alignment: 1 });
-        // Avatar tile (lazer draws it in front of both layers): wosu! has no avatars, so the initial.
+        // Avatar tile (lazer draws it in front of both layers): the profile picture, else the initial.
         const pad = 1.3;
-        g.roundRect(left - AVATAR_SIZE / 2 + pad, pad, AVATAR_SIZE - pad * 2, AVATAR_SIZE - pad * 2, CORNER_RADIUS).fill(0x1a1a1a);
+        const tile = AVATAR_SIZE - pad * 2;
+        if (this._avatar) fillCover(g, this._avatar, left - AVATAR_SIZE / 2 + pad, pad, tile, tile, CORNER_RADIUS);
+        else g.roundRect(left - AVATAR_SIZE / 2 + pad, pad, tile, tile, CORNER_RADIUS).fill(0x1a1a1a);
         // Text is counter-sheared: placed at its sheared position, drawn upright.
         const unshear = (sx: number, sy: number) => x + sx - SHEAR * sy;
         const mid = PANEL_HEIGHT / 2;
@@ -322,6 +333,8 @@ export class GameplayLeaderboard extends Container {
     private scroll = 0;
     private textResolution = 0;
     private sortedVersion = -1;
+    private avatar: Texture | null = null;
+    private avatarOnTracked = true;
 
     constructor(private readonly playerName: string) {
         super();
@@ -346,6 +359,13 @@ export class GameplayLeaderboard extends Container {
 
     get entries(): readonly LeaderboardEntry[] {
         return this.model.entries;
+    }
+
+    /** The local player's picture on their scores (`onTracked`: also on the live entry; not for Autoplay). */
+    setAvatar(tex: Texture | null, onTracked = true): void {
+        this.avatar = tex;
+        this.avatarOnTracked = onTracked;
+        for (const p of this.panels) p.avatar = p.entry.tracked && !onTracked ? null : tex;
     }
 
     /** lazer's OsuSetting.GameplayLeaderboard (Tab in game): fades the panels in or out. */
@@ -382,6 +402,7 @@ export class GameplayLeaderboard extends Container {
         for (const p of this.panels) p.destroy({ children: true });
         this.panels = this.model.entries.map(e => {
             const p = new LeaderboardPanel(e);
+            p.avatar = e.tracked && !this.avatarOnTracked ? null : this.avatar;
             if (this.textResolution) for (const t of p.texts) t.resolution = this.textResolution;
             p.setExpanded(this._expanded);
             p.layoutY.set(this.slotY(e.displayOrder), 0, Easing.None);

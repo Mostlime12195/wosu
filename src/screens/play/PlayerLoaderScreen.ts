@@ -20,7 +20,7 @@ import { coverFill, formatStars, setBackground } from '../select/visuals';
 import { parseStoryboard, type Storyboard } from '../../beatmap/storyboard';
 import { LegacySkin } from '../../skin/LegacySkin';
 import type { OszArchive } from '../../beatmap/archive';
-import { PlayerScreen } from './PlayerScreen';
+import { PlayerScreen, type ReplayViewState } from './PlayerScreen';
 import { BeatmapOffsetControl } from './BeatmapOffsetControl';
 import { trackOffset } from '../../gameplay/offsetCalibration';
 import { beatmapOffsets, offsetKeyFor } from '../../storage/BeatmapOffsets';
@@ -77,6 +77,8 @@ export class PlayerLoaderScreen extends Screen {
     private retries = 0;
     /** Replays: where the next Player starts (a backward seek rebuilds it). */
     private startAt: number | undefined = undefined;
+    /** Replays: the viewer's speed / settings / pause, kept across that rebuild. */
+    private replayView: ReplayViewState | null = null;
     /** Per-beatmap offset / calibration key. */
     readonly offsetKey: string;
     /** Built and warmed up behind the loader; pushed once ready. */
@@ -355,6 +357,7 @@ export class PlayerLoaderScreen extends Screen {
             beatmapSkin: this.beatmapSkin,
             replay: this.replay,
             startAt: this.startAt,
+            replayView: this.replayView,
         });
         try {
             player.prepare(this.game, this._w, this._h);
@@ -384,6 +387,7 @@ export class PlayerLoaderScreen extends Screen {
         // instanceof, not constructor.name: production builds minify class names.
         const outcome = previous instanceof PlayerScreen ? previous.outcome : 'quit';
         this.startAt = previous instanceof PlayerScreen ? previous.replayRestartAt ?? undefined : undefined;
+        this.replayView = previous instanceof PlayerScreen ? previous.replayView : null;
         this.player = null;
         if ((outcome === 'retry' || outcome === 'quickRetry') && !this.cancelled) {
             this.retries++;

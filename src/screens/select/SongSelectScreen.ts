@@ -125,6 +125,7 @@ export class SongSelectScreen extends Screen {
             { icon: 'eraser', first: 'Clear', second: 'local scores', color: Colors.purpleDark, action: () => void this.confirmClearScores(this.current?.set, this.current?.diff), enabled: () => this.leaderboard.scores.length > 0 },
             { icon: 'fileImport', first: 'Import', second: '.osz files', color: 0xd98a00, action: () => g.pickFiles() },
             { icon: 'download', first: 'Browse', second: 'beatmap listing', color: Colors.greenDark, action: () => g.listing.show() },
+            { icon: 'brush', first: 'Skin layout', second: 'edit the HUD', color: Colors.pinkDark, action: () => g.openSkinEditor() },
         ]);
 
         this.manageCollections = new ManageCollectionsDialog(g);

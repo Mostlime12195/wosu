@@ -38,66 +38,78 @@ export function formatAccuracy(acc: number): string {
 }
 
 /**
- * lazer's LegacyScoreCounter + LegacyAccuracyCounter, in the skin's score
- * font: the score (8 digits, rolling over 1 s with Easing.Out) at scale
- * 0.96, 10 units from the right edge; accuracy (rolling over 375 ms) at
- * 0.6 × 0.96, 17 units in and 9 below the score. Positions are in lazer's
- * 1024×768 HUD units; the owner scales this container to the screen.
- * The origin is the screen's top-right corner.
+ * lazer's LegacyScoreCounter, in the skin's score font: 8 digits, rolling
+ * over 1 s (Easing.Out), at lazer's 0.96 scale. Units are lazer's 1024×768
+ * HUD units (the owner scales this container); the origin is the text's
+ * top-right corner (the legacy layout puts it 10 units from the right edge).
  */
 export class ScoreCounter extends Container {
-    private readonly score: LegacySpriteText;
-    private readonly accuracy: LegacySpriteText;
-    private readonly rollScore = new Rolling(0, 1000, Easing.Out);
-    private readonly rollAcc = new Rolling(1, 375, Easing.OutQuad);
+    private readonly text: LegacySpriteText;
+    private readonly roll = new Rolling(0, 1000, Easing.Out);
 
     constructor(chain: SkinChain) {
         super();
-        const font = new LegacyFont(chain, 'score');
-        this.score = new LegacySpriteText(font, { fixedWidth: true, alignRight: true });
-        this.accuracy = new LegacySpriteText(font, { fixedWidth: true, alignRight: true });
-        this.score.scale.set(0.96);
-        this.accuracy.scale.set(0.6 * 0.96);
-        this.score.x = -10;
-        this.accuracy.x = -17;
-        this.addChild(this.score, this.accuracy);
-        this.score.text = '00000000';
-        this.accuracy.text = formatAccuracy(1);
-        this.place();
+        this.eventMode = 'none';
+        this.text = new LegacySpriteText(new LegacyFont(chain, 'score'), { fixedWidth: true, alignRight: true });
+        this.text.scale.set(0.96);
+        this.addChild(this.text);
+        this.text.text = '00000000';
     }
 
-    /** Element toggles; accuracy moves up into the score's place when that is hidden. */
-    setShown(score: boolean, accuracy: boolean): void {
-        this.score.visible = score;
-        this.accuracy.visible = accuracy;
-        this.place();
+    /** Height in lazer units (the accuracy goes 9 units below it). */
+    get textHeight(): number {
+        return this.text.textHeight * this.text.scale.y;
     }
 
-    set(score: number, accuracy: number): void {
-        this.rollScore.set(score);
-        this.rollAcc.set(accuracy);
+    /** Its box in lazer units (origin top-right). */
+    get box(): { x: number; y: number; w: number; h: number } {
+        const s = this.text.scale.x;
+        const m = this.text.measure('00000000');
+        return { x: -m.width * s, y: 0, w: m.width * s, h: m.height * s };
+    }
+
+    set(score: number): void {
+        this.roll.set(score);
     }
 
     update(dt: number): void {
-        this.score.text = String(Math.round(this.rollScore.step(dt))).padStart(8, '0');
-        this.accuracy.text = formatAccuracy(this.rollAcc.step(dt));
+        this.text.text = String(Math.round(this.roll.step(dt))).padStart(8, '0');
+    }
+}
+
+/**
+ * lazer's LegacyAccuracyCounter: the score font at 0.6 × 0.96, rolling
+ * over 375 ms (Easing.OutQuad). Origin: the text's top-right corner.
+ */
+export class AccuracyCounter extends Container {
+    private readonly text: LegacySpriteText;
+    private readonly roll = new Rolling(1, 375, Easing.OutQuad);
+
+    constructor(chain: SkinChain) {
+        super();
+        this.eventMode = 'none';
+        this.text = new LegacySpriteText(new LegacyFont(chain, 'score'), { fixedWidth: true, alignRight: true });
+        this.text.scale.set(0.6 * 0.96);
+        this.addChild(this.text);
+        this.text.text = formatAccuracy(1);
     }
 
     /**
-     * The accuracy counter's box as lazer's legacy layout measures it (at
-     * load, showing 100.00%), in this container's units: where the
-     * progress pie goes.
+     * Its box as lazer's legacy layout measures it (at load, showing
+     * 100.00%), in lazer units: where the progress pie goes.
      */
-    get accuracyBox(): { width: number; top: number; height: number } {
-        const s = this.accuracy.scale.x;
-        const m = this.accuracy.measure(formatAccuracy(1));
-        return { width: m.width * s, top: this.accuracy.y, height: m.height * s };
+    get box(): { x: number; y: number; w: number; h: number } {
+        const s = this.text.scale.x;
+        const m = this.text.measure(formatAccuracy(1));
+        return { x: -m.width * s, y: 0, w: m.width * s, h: m.height * s };
     }
 
-    /** lazer's default legacy layout: accuracy.Y = the score's bottom edge (plus its 9-unit margin). */
-    private place(): void {
-        const below = this.score.visible ? this.score.textHeight * this.score.scale.y : 0;
-        this.accuracy.y = below + 9;
+    set(accuracy: number): void {
+        this.roll.set(accuracy);
+    }
+
+    update(dt: number): void {
+        this.text.text = formatAccuracy(this.roll.step(dt));
     }
 }
 
@@ -157,6 +169,12 @@ export class ComboCounter extends Container {
     /** Height of the counter in lazer units (before the 1.28 scale). */
     get textHeight(): number {
         return this.main.textHeight;
+    }
+
+    /** Its box in lazer units, sized for a 3-digit combo (origin bottom-left). */
+    get box(): { x: number; y: number; w: number; h: number } {
+        const h = this.main.textHeight;
+        return { x: 0, y: -h, w: this.main.measure('000x').width, h };
     }
 
     set(combo: number): void {

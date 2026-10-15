@@ -36,6 +36,8 @@ import { NowPlayingOverlay } from '../overlays/NowPlayingOverlay';
 import { SettingsOverlay } from '../overlays/settings/SettingsOverlay';
 import { Toolbar } from '../overlays/Toolbar';
 import { VolumeOverlay } from '../overlays/VolumeOverlay';
+import { ProfileOverlay } from '../overlays/profile/ProfileOverlay';
+import { LocalProfile } from './Profile';
 import { GameSettings } from '../settings/Settings';
 import { Skin } from '../skin/Skin';
 import { DEFAULT_SKIN_URL, SkinManager } from '../skin/SkinManager';
@@ -53,6 +55,7 @@ import { IntroScreen } from '../screens/IntroScreen';
 import { MainMenuScreen } from '../screens/MainMenuScreen';
 import { SongSelectScreen } from '../screens/select/SongSelectScreen';
 import { PlayerLoaderScreen } from '../screens/play/PlayerLoaderScreen';
+import { SkinEditorScreen } from '../screens/edit/SkinEditorScreen';
 
 export interface Selection {
     set: LibrarySet;
@@ -101,6 +104,9 @@ export class Game {
     readonly nowPlaying: NowPlayingOverlay;
     readonly volume: VolumeOverlay;
     readonly dialog: DialogOverlay;
+    /** The local player's name, picture and banner. */
+    readonly profile: LocalProfile;
+    readonly profileOverlay: ProfileOverlay;
 
     private readonly popupBlockers = new Map<object, { blocker: Graphics; keyOff: () => void }>();
     readonly startedAt = Date.now();
@@ -181,8 +187,10 @@ export class Game {
         this.listing = this.overlays.register(new BeatmapListingOverlay(this));
         this.notificationOverlay = this.overlays.register(new NotificationOverlay(this));
         this.nowPlaying = this.overlays.register(new NowPlayingOverlay(this));
+        this.profile = new LocalProfile(settings);
+        this.profileOverlay = this.overlays.register(new ProfileOverlay(this));
         this.dialog = this.overlays.register(new DialogOverlay(this));
-        app.overlayLayer.addChild(this.listing, this.settingsOverlay, this.notificationOverlay, this.nowPlaying, this.dialog);
+        app.overlayLayer.addChild(this.listing, this.settingsOverlay, this.notificationOverlay, this.nowPlaying, this.profileOverlay, this.dialog);
         this.volume = new VolumeOverlay(this);
 
         // The toolbar mirrors overlay state, so it is built after them.
@@ -217,6 +225,7 @@ export class Game {
             this.scores.init().catch(e => console.error('score store init failed', e)),
             this.favourites.init().catch(e => console.error('favourites init failed', e)),
             this.knownVideos.init().catch(e => console.error('video registry init failed', e)),
+            this.profile.init().catch(e => console.error('profile init failed', e)),
         ]);
         // Imported skins and the selected one load in the background (applies from the next play).
         void this.skins.attach(this).catch(e => console.error('skin store init failed', e));
@@ -422,6 +431,11 @@ export class Game {
             if (allowOverlays) this.listing.toggle();
             return true;
         }
+        if (is('toggleSkinEditor')) {
+            // The editor closes itself (it has the key first); gameplay doesn't open it.
+            if (allowOverlays) this.openSkinEditor();
+            return true;
+        }
         if (is('toggleNowPlaying')) {
             if (allowOverlays) this.nowPlaying.toggle();
             return true;
@@ -617,6 +631,22 @@ export class Game {
         this.overlays.hideAll();
         const menu = this.screens.screens.find(s => s instanceof MainMenuScreen);
         if (menu) this.screens.makeCurrent(menu);
+    }
+
+    /**
+     * lazer's skin editor for the HUD layout (Ctrl+Shift+S), over the
+     * menus. Not from gameplay or while a play loads.
+     */
+    openSkinEditor(): boolean {
+        const cur = this.screens.current;
+        if (cur instanceof SkinEditorScreen) return true;
+        if (!cur || cur instanceof IntroScreen || cur instanceof PlayerLoaderScreen || !cur.showMenuCursor) {
+            this.notifications.info('The skin editor opens from the menus and song select, not during gameplay.');
+            return false;
+        }
+        this.overlays.hideAll();
+        this.screens.push(new SkinEditorScreen());
+        return true;
     }
 
     openSongSelect(): void {
