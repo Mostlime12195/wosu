@@ -1,6 +1,7 @@
 import { resolveAssetUrl } from '../audio/base';
 import { OszArchive } from '../beatmap/archive';
 import { Bindable } from '../core/Bindable';
+import { loadPack } from '../core/assetPacks';
 import type { NotificationManager } from '../overlays/notifications/Notifications';
 import { SkinStore, type StoredSkin } from '../storage/SkinStore';
 import { LegacySkin, type SkinFiles } from './LegacySkin';
@@ -86,11 +87,22 @@ export class SkinManager {
     }
 
     /**
-     * Load the default skin. Its hitsounds stay with the SampleBank (same
-     * files), so only images and skin.ini are read here.
+     * Load the default skin (one pack download; file by file if that
+     * fails). Its hitsounds stay with the SampleBank (same files), so
+     * only images and skin.ini are read here.
      */
     async loadDefault(): Promise<void> {
-        const files = await fetchedSkinFiles(resolveAssetUrl(DEFAULT_SKIN_URL));
+        const pack = await loadPack('default-skin');
+        const files: SkinFiles = pack
+            ? {
+                files: pack.files,
+                async readBytes(path: string) {
+                    const bytes = pack.get(path);
+                    if (!bytes) throw new Error(`skin file ${path} is not in the pack`);
+                    return bytes;
+                },
+            }
+            : await fetchedSkinFiles(resolveAssetUrl(DEFAULT_SKIN_URL));
         this.defaultSkin = await LegacySkin.load(files, null, { samples: false });
     }
 

@@ -2,6 +2,7 @@
 import { execSync } from 'node:child_process';
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
+import { assetPacks } from './tools/assetPacks';
 
 function buildInfo(): string {
     const sha = (process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.GITHUB_SHA)?.slice(0, 7);
@@ -13,13 +14,17 @@ function buildInfo(): string {
     }
 }
 
+const packs = assetPacks(fileURLToPath(new URL('.', import.meta.url)));
+
 export default defineConfig({
     // Relative base: the build works from the site root and from any
     // sub-path preview without rebuilding.
     base: './',
     define: {
         __BUILD_INFO__: JSON.stringify(buildInfo()),
+        ...packs.define,
     },
+    plugins: [packs.plugin],
     resolve: {
         alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
     },

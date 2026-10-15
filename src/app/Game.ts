@@ -1,4 +1,5 @@
 import { Container, Graphics } from 'pixi.js';
+import { packFetch } from '../core/assetPacks';
 import { Bindable } from '../core/Bindable';
 import { App } from './App';
 import { BackgroundManager } from './BackgroundManager';
@@ -8,6 +9,7 @@ import { MusicController } from './MusicController';
 import { OverlayManager } from './Overlay';
 import { ScreenStack, type Screen } from './Screen';
 import { AudioEngine } from '../audio/AudioEngine';
+import { resolveAssetUrl } from '../audio/base';
 import { MusicTrack } from '../audio/MusicTrack';
 import { PreviewPlayer } from '../audio/PreviewPlayer';
 import { SampleBank } from '../audio/SampleBank';
@@ -36,7 +38,7 @@ import { Toolbar } from '../overlays/Toolbar';
 import { VolumeOverlay } from '../overlays/VolumeOverlay';
 import { GameSettings } from '../settings/Settings';
 import { Skin } from '../skin/Skin';
-import { SkinManager } from '../skin/SkinManager';
+import { DEFAULT_SKIN_URL, SkinManager } from '../skin/SkinManager';
 import { Favourites } from '../storage/Favourites';
 import { KnownVideos } from '../storage/KnownVideos';
 import { ScoreStore, type ScoreRecord } from '../storage/ScoreStore';
@@ -137,8 +139,9 @@ export class Game {
     ) {
         this.input = new InputManager(app, this.textInput);
         settings.keyBindings.bind(v => (this.input.bindings = resolveBindings(v)), true);
-        this.samples = new SampleBank(this.audio);
-        this.uiSounds = new UISounds(this.audio);
+        // One pack download each instead of a request per sound (see tools/assetPacks.ts).
+        this.samples = new SampleBank(this.audio, { fetcher: packFetch('default-hitsounds', resolveAssetUrl(DEFAULT_SKIN_URL)) });
+        this.uiSounds = new UISounds(this.audio, packFetch('ui-samples', resolveAssetUrl('assets/samples/')));
         this.preview = new PreviewPlayer(this.audio);
         const providers = () => resolveProviders(settings.browseProvider.value, settings.downloadProvider.value);
         this.api = new BeatmapApi(providers);
