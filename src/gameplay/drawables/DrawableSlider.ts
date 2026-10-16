@@ -320,12 +320,12 @@ export class DrawableSlider extends Container implements Drawable {
             if (p) {
                 p.position.set(at.x, at.y);
                 if (hit) {
-                    p.showHit(dt);
+                    p.showHit(dt, time);
                     p.alpha = whole * hiddenFade;
                 } else {
                     const fadeIn = e.repeatIndex === 0 ? ctx.fadeIn : 0;
                     const a = !shown ? 0 : fadeIn > 0 ? clamp01((time - start) / fadeIn) : time >= start ? 1 : 0;
-                    p.showIdle(a * hiddenFade);
+                    p.showIdle(a * hiddenFade, time);
                     p.alpha *= whole;
                 }
                 p.visible = p.visible && p.alpha > 0.001;
@@ -400,14 +400,14 @@ export class DrawableSlider extends Container implements Drawable {
             this.head.position.set(x, p.y);
             const a = approachAlpha(ctx, time, h.time, this.hiddenOn);
             this.headAlpha = a;
-            this.head.showIdle(a, ctx.kiaiFlash(time));
+            this.head.showIdle(a, time);
             this.approach.showAt(ctx, time, h.time, x, p.y);
             return;
         }
         this.approach.visible = false;
         if (s.headHit) {
-            if (time < s.headAt) this.head.showIdle(this.headAlpha);
-            else this.head.showHit(time - s.headAt);
+            if (time < s.headAt) this.head.showIdle(this.headAlpha, time);
+            else this.head.showHit(time - s.headAt, time);
         } else {
             this.head.showMiss(time - (h.time + w50), this.headAlpha);
         }

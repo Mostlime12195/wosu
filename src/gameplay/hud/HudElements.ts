@@ -1,5 +1,6 @@
 import { Container } from 'pixi.js';
 import type { PlayableBeatmap } from '../../beatmap/types';
+import { NO_MODS } from '../mods';
 import type { GameSettings } from '../../settings/Settings';
 import type { SkinChain } from '../../skin/SkinChain';
 import { GameplayLeaderboard, LEADERBOARD_HEIGHT, LEADERBOARD_WIDTH } from './GameplayLeaderboard';
@@ -12,6 +13,7 @@ import type { Area, HudComponentType, Rect } from './layout/HudLayout';
 import type { LeaderboardSource } from './leaderboard';
 import { LegacyBarHitErrorMeter } from './LegacyBarHitErrorMeter';
 import { LegacySongProgress } from './LegacySongProgress';
+import { ModDisplay } from './ModDisplay';
 import type { LivePerformance } from './livePerformance';
 import { AccuracyCounter, ComboCounter, ScoreCounter } from './ScoreDisplay';
 import { SongProgress } from './SongProgress';
@@ -202,6 +204,10 @@ class JudgementElement extends HudElement<JudgementCounter> {
     }
 }
 
+class ModDisplayElement extends HudElement<ModDisplay> {
+    override box(): Rect { return this.view.box; }
+}
+
 /** Build a component of `type` for a HUD. */
 export function createHudElement(id: string, type: HudComponentType, env: HudEnv): HudElement {
     const { chain, beatmap, settings, opts } = env;
@@ -238,5 +244,6 @@ export function createHudElement(id: string, type: HudComponentType, env: HudEnv
             return new PerformanceElement(id, type, new PerformancePointsCounter(), env);
         }
         case 'judgementCounter': return new JudgementElement(id, type, new JudgementCounter(), env);
+        case 'modDisplay': return new ModDisplayElement(id, type, new ModDisplay(chain, opts.mods ?? NO_MODS, !!opts.editor), env);
     }
 }

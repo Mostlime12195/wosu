@@ -76,6 +76,7 @@ export class SliderResources {
 export class SliderBody extends Container {
     private readonly prepassGeom: Geometry;
     private readonly prepassMesh: Mesh<Geometry, Shader>;
+    private readonly prepassShader: Shader;
     private readonly prepassRoot = new Container();
     private readonly quadCap: number;
     readonly bounds: Bounds;
@@ -118,6 +119,7 @@ export class SliderBody extends Container {
                 prepassUniforms: new UniformGroup({ uRadius: { value: radius, type: 'f32' } }),
             },
         });
+        this.prepassShader = shader;
         this.prepassMesh = new Mesh({ geometry: g, shader });
         // MAX blending merges overlapping capsules into one coverage field.
         this.prepassMesh.blendMode = 'max';
@@ -231,7 +233,9 @@ export class SliderBody extends Container {
             this.composite.destroy();
         }
         this.compositeShader?.destroy();
-        this.compositeGeom?.destroy();
+        // With their buffers: otherwise each stays registered with the renderer
+        // (and its GPU buffer alive) until Pixi's idle GC, a minute later.
+        this.compositeGeom?.destroy(true);
         this.composite = null;
         this.compositeShader = null;
         this.compositeGeom = null;
@@ -240,8 +244,9 @@ export class SliderBody extends Container {
     override destroy(): void {
         this.dropComposite();
         this.prepassMesh.destroy();
+        this.prepassShader.destroy();
         this.prepassRoot.destroy();
-        this.prepassGeom.destroy();
+        this.prepassGeom.destroy(true);
         this.rt?.destroy(true);
         this.rt = null;
         super.destroy({ children: true });

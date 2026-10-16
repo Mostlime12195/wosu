@@ -2,6 +2,7 @@ import { Container, Sprite, type Text } from 'pixi.js';
 import type { BreakPeriod } from '../../beatmap/types';
 import type { SkinChain } from '../../skin/SkinChain';
 import type { SkinTexture } from '../../skin/LegacySkin';
+import { legacyVersion } from '../drawables/context';
 import { label } from '../../ui/text';
 import { Colors } from '../../ui/theme';
 import {
@@ -66,7 +67,8 @@ export class StablePlayOverlay extends Container {
         this.eventMode = 'none';
         this.arrowLayer.eventMode = 'none';
         this.arrowLayer.visible = false;
-        const v1 = chain.config('version') < 2;
+        // A skin.ini without a Version line is 1.0 (not the default skin's 2.7 below it).
+        const v1 = legacyVersion(chain) < 2;
         this.stacked = v1;
         if (schedule) {
             for (const e of ELEMENTS) {

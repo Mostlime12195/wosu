@@ -6,6 +6,7 @@ import { label, fitText } from '../../../ui/text';
 import { Colors, starColor, starTextColor } from '../../../ui/theme';
 import { Triangles } from '../../../ui/Triangles';
 import { UIComponent } from '../../../ui/UIComponent';
+import type { LegacySkin } from '../../../skin/LegacySkin';
 import type { Grade } from '../../../storage/ScoreStore';
 import type { FilterEntry } from '../filter';
 import { scoreKeyFor } from '../Leaderboard';
@@ -59,6 +60,8 @@ export class DiffPanel extends UIComponent {
     private stars: number | null = null;
     private starsPending = false;
     private grade: Grade | null = null;
+    /** The skin whose small grade images the badge uses (null = wosu!'s badge). */
+    private gradeSkin: LegacySkin | null = null;
     selectProgress = 0;
     private drawnSelect = -1;
     onClickPanel: ((entry: FilterEntry, diff: DifficultySummary) => void) | null = null;
@@ -72,7 +75,8 @@ export class DiffPanel extends UIComponent {
         this.starText.anchor.set(0.5);
         this.hoverWash.alpha = 0;
         this.addChild(this.bg, this.wash, this.hoverWash, this.decor, this.border, this.version, this.mapper, this.starText, this.rank);
-        this.makeInteractive();
+        // osu!stable skins: menuclick when hovering beatmaps (instead of click-short).
+        this.makeInteractive({ skinSounds: { hover: ['menuclick'] } });
         this.resize(460, DIFF_HEIGHT);
     }
 
@@ -92,7 +96,10 @@ export class DiffPanel extends UIComponent {
      * local grade. Redraws only when either changed.
      */
     sync(stars: number | null, pending: boolean, grade: Grade | null): void {
-        if (stars === this.stars && pending === this.starsPending && grade === this.grade) return;
+        const g = this.game;
+        const skin = g.settings.skinInMenus.value ? g.skins.current.value : null;
+        if (stars === this.stars && pending === this.starsPending && grade === this.grade && skin === this.gradeSkin) return;
+        this.gradeSkin = skin;
         const recolour = starColor(stars) !== starColor(this.stars);
         this.stars = stars;
         this.starsPending = pending;
@@ -134,7 +141,7 @@ export class DiffPanel extends UIComponent {
         fitText(this.mapper, Math.max(20, this._w - 120 - this.version.width - 54), `mapped by ${this.entry?.set.creator ?? ''}`);
         this.mapper.position.set(54 + this.version.width + 8, 11);
         // Best local grade, then the star pill + ten-star row on the second line.
-        this.rank.setGrade(this.grade);
+        this.rank.setGrade(this.grade, this.gradeSkin);
         this.rank.position.set(54, 31);
         const pillX = this.grade ? 54 + RANK_BADGE_W + 8 : 54;
         this.starText.text = `★ ${formatStars(stars)}`;

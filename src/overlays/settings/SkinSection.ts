@@ -3,6 +3,7 @@ import { Bindable } from '../../core/Bindable';
 import { Dropdown, type DropdownItem } from '../../ui/Dropdown';
 import { Colors } from '../../ui/theme';
 import { buttonRow, checkboxRow, dropdownRow, mult, sliderRow, textRow, type SettingsRow } from './rows';
+import type { MenuBackgroundSource } from '../../settings/Settings';
 import type { SectionDef } from './types';
 
 /** Dropdown entry that picks a random skin (lazer's "<Random skin>"). */
@@ -118,6 +119,28 @@ export function skinSection(game: Game): SectionDef {
             {
                 title: 'Current skin',
                 rows: [current, about.row, layoutEditor, importSkin, exportSkin, deleteSkin],
+            },
+            {
+                title: 'Results',
+                rows: [
+                    checkboxRow("Use the skin's results screen", s.skinResultsScreen, {
+                        description: "Show osu!stable's ranking screen with the skin's panel, numbers and grades when the skin has one (ranking-panel). Otherwise the results look like osu!lazer's.",
+                        keywords: 'skin ranking results score screen panel stable grade',
+                    }),
+                ],
+            },
+            {
+                title: 'Menus',
+                rows: [
+                    checkboxRow('Use skin in menus', s.skinInMenus, {
+                        description: "Like osu!stable: the skin's cursor, interface sounds, menu background, menu glow colour and mod icons also apply outside gameplay.",
+                        keywords: 'skin menu cursor sounds background mod icons stable glow',
+                    }),
+                    dropdownRow<MenuBackgroundSource>('Main menu background source', [
+                        { value: 'beatmap', label: 'Beatmap' },
+                        { value: 'skin', label: 'Skin' },
+                    ], s.menuBackgroundSource, { keywords: 'background menu wallpaper skin beatmap seasonal' }),
+                ],
             },
             {
                 title: 'Beatmap',

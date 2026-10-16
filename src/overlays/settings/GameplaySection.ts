@@ -32,7 +32,7 @@ export function gameplaySection(game: Game): SectionDef {
                         keywords: 'comboburst milestone pippi',
                     }),
                     checkboxRow('Kiai flashes on hit objects', s.kiaiFlash, {
-                        description: "lazer's default skin flashes circles on every beat of a kiai section. osu!stable never does this.",
+                        description: "wosu!'s default skin: lazer's default-skin flash on circles every beat of a kiai section. Imported osu! skins always flash like osu!stable.",
                         keywords: 'beat pulse flash kiai',
                     }),
                 ],

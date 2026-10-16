@@ -6,6 +6,7 @@
  */
 import type { AudioEngine } from './AudioEngine';
 import { resolveAssetUrl } from './base';
+import { resolveSkinSound, STABLE_UI_SOUNDS } from './stableUISounds';
 
 /** Every sample, by its lazer path (folder/name, no extension). */
 export const UI_SAMPLES = [
@@ -45,6 +46,11 @@ export interface UIPlayOptions {
     rate?: number;
     /** Per-sample minimum gap in ms, so rapid repeats don't pile up. */
     throttle?: number;
+    /**
+     * osu!stable sounds to prefer from the menu skin, replacing the slot's
+     * own mapping (STABLE_UI_SOUNDS); [] plays lazer's sample only.
+     */
+    skin?: readonly string[];
 }
 
 /** lazer's HoverSampleSet: which hover/select pair an element uses. */
@@ -69,6 +75,12 @@ export class UISounds {
     /** Extra scale on top of the effects bus. */
     volume = 1;
 
+    /**
+     * The menu skin's sounds by osu!stable name (undefined: the skin has
+     * none; null: it silences it). Null while skins don't apply to menus.
+     */
+    skinSamples: ((name: string) => AudioBuffer | null | undefined) | null = null;
+
     private readonly buffers = new Map<UISampleName, AudioBuffer>();
     private readonly lastPlayed = new Map<string, number>();
     private loading: Promise<void> | null = null;
@@ -90,16 +102,42 @@ export class UISounds {
         return this.loading;
     }
 
-    /** Play one sample. Returns false when it couldn't (muted, not loaded, throttled). */
+    /**
+     * Play one sample: the menu skin's version of its slot when the skin
+     * has one, else lazer's. Returns false when it couldn't (muted, not
+     * loaded, throttled) or the skin silences it.
+     */
     play(name: UISampleName, opts: UIPlayOptions = {}): boolean {
-        if (!this.enabled || !(this.volume > 0) || this.engine.context.state !== 'running') return false;
-        const buffer = this.buffers.get(name);
+        if (!this.canPlay) return false;
+        const skinned = this.skinSamples ? resolveSkinSound(opts.skin ?? STABLE_UI_SOUNDS[name] ?? [], this.skinSamples) : undefined;
+        const buffer = skinned ? skinned.buffer : this.buffers.get(name);
         if (!buffer) return false;
-        if (opts.throttle) {
-            const now = performance.now();
-            if (now - (this.lastPlayed.get(name) ?? -Infinity) < opts.throttle) return false;
-            this.lastPlayed.set(name, now);
-        }
+        if (opts.throttle && !this.throttled(name, opts.throttle)) return false;
+        return this.playBuffer(buffer, opts);
+    }
+
+    /** A sound only a skin provides (stable's heartbeat, shutter…): silent without one. */
+    playSkin(names: readonly string[], opts: Omit<UIPlayOptions, 'skin'> = {}): boolean {
+        if (!this.canPlay || !this.skinSamples) return false;
+        const buffer = resolveSkinSound(names, this.skinSamples)?.buffer;
+        if (!buffer) return false;
+        if (opts.throttle && !this.throttled(`skin:${names[0]}`, opts.throttle)) return false;
+        return this.playBuffer(buffer, opts);
+    }
+
+    private get canPlay(): boolean {
+        return this.enabled && this.volume > 0 && this.engine.context.state === 'running';
+    }
+
+    /** Record a play of `key`; false while it is still within `ms` of the last one. */
+    private throttled(key: string, ms: number): boolean {
+        const now = performance.now();
+        if (now - (this.lastPlayed.get(key) ?? -Infinity) < ms) return false;
+        this.lastPlayed.set(key, now);
+        return true;
+    }
+
+    private playBuffer(buffer: AudioBuffer, opts: UIPlayOptions): boolean {
         const ctx = this.engine.context;
         try {
             const src = ctx.createBufferSource();
@@ -121,15 +159,16 @@ export class UISounds {
 
     // Generic interactions (lazer's HoverSampleSet.Default and friends).
 
-    hover(set: SampleSet = 'default'): void {
+    /** `skin`: stable sounds that replace the set's own mapping (a main menu button's menu-*-hover). */
+    hover(set: SampleSet = 'default', skin?: readonly string[]): void {
         // One shared debounce across sets, like lazer's.
         const now = performance.now();
         if (now - (this.lastPlayed.get('hover') ?? -Infinity) < HOVER_DEBOUNCE_MS) return;
-        if (this.play(SETS[set][0], { rate: 0.98 + Math.random() * 0.04 })) this.lastPlayed.set('hover', now);
+        if (this.play(SETS[set][0], { rate: 0.98 + Math.random() * 0.04, skin })) this.lastPlayed.set('hover', now);
     }
 
-    click(set: SampleSet = 'default'): void {
-        this.play(SETS[set][1]);
+    click(set: SampleSet = 'default', skin?: readonly string[]): void {
+        this.play(SETS[set][1], { skin });
     }
 
     /** A click on something disabled. */

@@ -2,6 +2,7 @@ import { Graphics, Sprite, type Text, type Texture } from 'pixi.js';
 import { tween } from '../../core/Tweener';
 import { scoreMultiplier, sortedMods, type ModSet } from '../../gameplay/mods';
 import { ModIconRow, modCategoryColor } from '../../overlays/mods/ModIcon';
+import { menuSkin } from '../../skin/MenuSkin';
 import { BackButton } from '../../ui/Button';
 import { label } from '../../ui/text';
 import { Colors, Metrics } from '../../ui/theme';
@@ -75,8 +76,9 @@ export class FooterButton extends UIComponent {
 
 /** "mods" plus the active mod icons and the score multiplier. */
 export class FooterModsButton extends FooterButton {
-    private readonly icons = new ModIconRow(18, 2);
+    private readonly icons = new ModIconRow(18, 2, true);
     private readonly multiplier: Text;
+    private mods: ModSet | null = null;
     /** Width changes when mods change; the footer re-flows. */
     onWidthChange: (() => void) | null = null;
 
@@ -85,9 +87,14 @@ export class FooterModsButton extends FooterButton {
         this.multiplier = label('', { size: 14, weight: '700', color: 0xffffff });
         this.multiplier.anchor.set(0, 0.5);
         this.addChild(this.icons, this.multiplier);
+        // The menu skin's mod icons (selection-mod-*) follow skin changes.
+        this.disposer.add(menuSkin.bind(() => {
+            if (this.mods) this.setMods(this.mods);
+        }));
     }
 
     setMods(mods: ModSet): void {
+        this.mods = mods;
         const list = sortedMods(mods);
         this.icons.setMods(list, mods.settings);
         const m = scoreMultiplier(mods);

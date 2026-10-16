@@ -1,6 +1,8 @@
-import { Container, Graphics, type Text } from 'pixi.js';
+import { Container, Graphics, Sprite, type Text } from 'pixi.js';
 import { lerpColor, scaleColor } from '../../../core/math';
+import type { LegacySkin, SkinTexture } from '../../../skin/LegacySkin';
 import type { Grade } from '../../../storage/ScoreStore';
+import { rankingGradeElements } from '../../results/rankingLayout';
 import { SHEAR } from '../../../ui/ShearedButton';
 import { label } from '../../../ui/text';
 import { gradeColor, gradeLabel } from '../../../ui/theme';
@@ -8,31 +10,60 @@ import { gradeColor, gradeLabel } from '../../../ui/theme';
 export const RANK_BADGE_W = 38;
 export const RANK_BADGE_H = 17;
 
+/** An imported skin's small grade image (ranking-A-small…), or null. */
+export function smallGradeTexture(skin: LegacySkin | null | undefined, grade: Grade): SkinTexture | null {
+    if (!skin) return null;
+    for (const name of rankingGradeElements(grade, true)) {
+        const t = skin.frames(name)[0];
+        if (t) return t;
+    }
+    return null;
+}
+
 /**
  * wosu!'s take on lazer's TopLocalRank: the best local grade as a small
  * sheared tag in the grade's colour (wosu!'s footer/wedge shear), with a
  * glossy top edge and a soft glow. Silver grades (Hidden / Flashlight)
- * get a brushed-metal sheen; SS ranks a little sparkle.
+ * get a brushed-metal sheen; SS ranks a little sparkle. An imported skin's
+ * ranking-*-small image replaces it (osu!stable's song select).
  */
 export class RankBadge extends Container {
     private readonly g = new Graphics();
     private readonly text: Text;
+    private readonly image = new Sprite();
     private grade: Grade | null = null;
+    private skin: LegacySkin | null = null;
 
     constructor() {
         super();
         this.text = label('', { size: 12, weight: '800', italic: true, color: 0xffffff });
         this.text.anchor.set(0.5);
-        this.addChild(this.g, this.text);
+        this.image.anchor.set(0.5);
+        this.image.visible = false;
+        this.addChild(this.g, this.text, this.image);
         this.eventMode = 'none';
         this.visible = false;
     }
 
-    setGrade(grade: Grade | null): void {
-        if (grade === this.grade) return;
+    /** `skin`: the selected imported skin, whose small grade image is used when it has one. */
+    setGrade(grade: Grade | null, skin: LegacySkin | null = null): void {
+        if (grade === this.grade && skin === this.skin) return;
         this.grade = grade;
+        this.skin = skin;
         this.visible = !!grade;
-        if (grade) this.draw(grade);
+        if (!grade) return;
+        const tex = smallGradeTexture(skin, grade);
+        this.image.visible = !!tex;
+        this.g.visible = this.text.visible = !tex;
+        if (tex) {
+            // Fitted to the badge's slot, a little taller (the images are 34×40).
+            const k = Math.min((RANK_BADGE_H + 6) / tex.texture.height, RANK_BADGE_W / tex.texture.width);
+            this.image.texture = tex.texture;
+            this.image.scale.set(k);
+            this.image.position.set(RANK_BADGE_W / 2, RANK_BADGE_H / 2);
+        } else {
+            this.draw(grade);
+        }
     }
 
     private draw(grade: Grade): void {

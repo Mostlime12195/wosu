@@ -17,6 +17,10 @@ export interface SkinConfig {
     spinnerBackground?: number;
     /** Key overlay counter text ([Colours] InputOverlayText; osu!'s default is black). */
     inputOverlayText?: number;
+    /** Tint of the star2 cursor particles during breaks ([Colours] StarBreakAdditive). */
+    starBreakAdditive?: number;
+    /** Main menu glow ([Colours] MenuGlow): lazer's logo visualiser and menu side flashes. */
+    menuGlow?: number;
     /** Combo number font prefix ("default" → default-0.png). */
     hitCirclePrefix?: string;
     hitCircleOverlap?: number;
@@ -45,14 +49,15 @@ export interface SkinConfig {
 }
 
 /** What a skin chain falls back to when no layer sets a value (osu!'s defaults). */
-export const SKIN_DEFAULTS: Required<Omit<SkinConfig, 'sliderTrackOverride' | 'sliderBorder' | 'sliderBall' | 'spinnerBackground'>>
-    & Pick<SkinConfig, 'sliderTrackOverride' | 'sliderBorder' | 'sliderBall' | 'spinnerBackground'> = {
+type OptionalKeys = 'sliderTrackOverride' | 'sliderBorder' | 'sliderBall' | 'spinnerBackground' | 'menuGlow';
+export const SKIN_DEFAULTS: Required<Omit<SkinConfig, OptionalKeys>> & Pick<SkinConfig, OptionalKeys> = {
         name: 'Unnamed',
         author: '',
         version: 1,
         comboColours: [0xffc000, 0x00ca00, 0x127cff, 0xf21839],
         sliderBorder: 0xffffff,
         inputOverlayText: 0x000000,
+        starBreakAdditive: 0xffb6c1,
         hitCirclePrefix: 'default',
         hitCircleOverlap: -2,
         scorePrefix: 'score',
@@ -131,6 +136,8 @@ export function parseSkinIni(text: string): SkinConfig {
             else if (key === 'sliderball') out.sliderBall = c;
             else if (key === 'spinnerbackground') out.spinnerBackground = c;
             else if (key === 'inputoverlaytext') out.inputOverlayText = c;
+            else if (key === 'starbreakadditive') out.starBreakAdditive = c;
+            else if (key === 'menuglow') out.menuGlow = c;
         } else if (section === 'fonts') {
             switch (key) {
                 case 'hitcircleprefix': out.hitCirclePrefix = path(value); break;

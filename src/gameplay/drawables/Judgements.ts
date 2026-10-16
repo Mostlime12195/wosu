@@ -31,9 +31,10 @@ const PARTICLE: Record<HitResult, string | null> = { great: 'particle300', ok: '
  * What a judgement can show: the four results, osu!stable's combo-end
  * variants (hit300g, hit300k, hit100k: see scoring/comboEnd), plus the
  * slider's nested ones (lazer's LargeTickHit / LargeTickMiss: a slider
- * head, tick or repeat).
+ * head, tick or repeat; `smallTickHit` is a hit tick, which osu!stable
+ * shows apart from heads and repeats).
  */
-export type JudgementKind = HitResult | ComboEndKind | 'tickHit' | 'tickMiss';
+export type JudgementKind = HitResult | ComboEndKind | 'tickHit' | 'smallTickHit' | 'tickMiss';
 
 /** The combo-end images and the particles they share with their plain judgement (osu! wiki, Skinning/osu!). */
 const VARIANT_IMAGE: Record<ComboEndKind, string> = { geki: 'hit300g', katuGreat: 'hit300k', katuOk: 'hit100k' };
@@ -137,7 +138,7 @@ const legacyAlpha = (dt: number): number => Math.min(clamp01(dt / FADE_IN), 1 - 
  * or LegacyJudgementPieceNew when the skin that has the hitNNN image also
  * has particleNNN (an explosion of particles and the image under the hit
  * objects, with a brief additive old-style flash above them), and slider
- * point judgements (slidertickmiss; sliderpoint30 for Version 1 skins).
+ * point judgements (slidertickmiss; sliderpoint30 / sliderpoint10 for Version 1 skins).
  * wosu!'s default skin keeps its own animations; our text is the last
  * fallback.
  */
@@ -172,7 +173,7 @@ export class Judgements extends Container {
         this.lighting = chain.texture('lighting');
         this.legacyLighting = !fromDefaultSkin(chain, 'lighting');
         this.version = legacyVersion(chain);
-        for (const kind of ['great', 'ok', 'meh', 'miss', 'tickHit', 'tickMiss', 'geki', 'katuGreat', 'katuOk'] as const) {
+        for (const kind of ['great', 'ok', 'meh', 'miss', 'tickHit', 'smallTickHit', 'tickMiss', 'geki', 'katuGreat', 'katuOk'] as const) {
             const p = this.resolve(kind);
             if (p) this.pieces[kind] = p;
         }
@@ -190,8 +191,10 @@ export class Judgements extends Container {
     /**
      * The first skin in the chain with an image for `kind` provides it
      * (with its own particle, for the new style). Slider point hits only
-     * show for Version 1 skins with sliderpoint30; such a skin also stops a
-     * missing slidertickmiss from falling through to the skins below.
+     * show for Version 1 skins with sliderpoint images, as in osu!stable:
+     * sliderpoint30 for heads and repeats, sliderpoint10 for ticks (lazer
+     * remaps these by result instead). Such a skin also stops a missing
+     * slidertickmiss from falling through to the skins below.
      * The combo-end variants only come from skins that have their images
      * (stable's default skin draws them like the plain ones; wosu!'s
      * default skin keeps its normal judgement).
@@ -204,9 +207,10 @@ export class Judgements extends Container {
             const skin = l.skin;
             const defaultLook = i === layers.length - 1;
             // Beatmap skins have no version of their own.
-            const oldPoints = l.config === undefined && layerVersion(skin.config) < 2 && !!skin.texture('sliderpoint30');
-            if (kind === 'tickHit') {
-                const t = oldPoints ? skin.texture('sliderpoint30') : null;
+            const oldPoints = l.config === undefined && layerVersion(skin.config) < 2 &&
+                !!(skin.texture('sliderpoint30') || skin.texture('sliderpoint10'));
+            if (kind === 'tickHit' || kind === 'smallTickHit') {
+                const t = oldPoints ? skin.texture(kind === 'tickHit' ? 'sliderpoint30' : 'sliderpoint10') : null;
                 if (t) return { frames: [t], particle: null, style: 'tickHit', defaultLook };
                 continue;
             }
@@ -241,9 +245,9 @@ export class Judgements extends Container {
         this.active.push({ text, result, x, y, time, spin: Math.random() < 0.5 ? -1 : 1 });
     }
 
-    /** A slider head, tick or repeat was hit or missed (shown only if the skin has art for it). */
-    addNested(hit: boolean, x: number, y: number, time: number): void {
-        this.addPiece(hit ? 'tickHit' : 'tickMiss', x, y, time);
+    /** A slider head, tick (`tick`) or repeat was hit or missed (shown only if the skin has art for it). */
+    addNested(hit: boolean, x: number, y: number, time: number, tick = false): void {
+        this.addPiece(!hit ? 'tickMiss' : tick ? 'smallTickHit' : 'tickHit', x, y, time);
     }
 
     private addPiece(kind: JudgementKind, x: number, y: number, time: number): boolean {

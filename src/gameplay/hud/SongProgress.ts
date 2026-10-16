@@ -23,6 +23,8 @@ export class SongProgress extends Container {
     private readonly end: number;
     private w = 800;
     private drawnColumn = -2;
+    private drawnFill = NaN;
+    private drawnWidth = NaN;
     private lastSecond = NaN;
     private _showGraph = true;
 
@@ -89,8 +91,14 @@ export class SongProgress extends Container {
                 g.rect(i * cw + 0.5, -BAR_H - hgt, Math.max(1, cw - 1), hgt).fill({ color: i < col ? 0x99eeff : 0xffffff, alpha: i < col ? 0.5 : 0.15 });
             }
         }
-        this.bar.clear().rect(0, -BAR_H, this.w, BAR_H).fill({ color: 0xffffff, alpha: 0.12 });
-        this.bar.rect(0, -BAR_H, this.w * p, BAR_H).fill({ color: 0xbbf4ff });
+        // Redraw the bar only when its fill moves by half a unit (each rebuild allocates geometry).
+        const fill = Math.round(this.w * p * 2) / 2;
+        if (fill !== this.drawnFill || this.w !== this.drawnWidth) {
+            this.drawnFill = fill;
+            this.drawnWidth = this.w;
+            this.bar.clear().rect(0, -BAR_H, this.w, BAR_H).fill({ color: 0xffffff, alpha: 0.12 });
+            this.bar.rect(0, -BAR_H, fill, BAR_H).fill({ color: 0xbbf4ff });
+        }
         const second = Math.floor(time / 1000);
         if (second !== this.lastSecond) {
             this.lastSecond = second;

@@ -1,5 +1,6 @@
 import type { LegacySkin, SkinTexture } from '../../skin/LegacySkin';
 import type { SkinChain, SkinLayer } from '../../skin/SkinChain';
+import type { ParticleSkin } from './CursorParticles';
 
 /**
  * LegacySkin.STABLE_MAGIC_SCALE_FACTOR: legacy cursor images are sized in
@@ -38,6 +39,8 @@ export interface CursorSkin {
     trail: TrailSkin | null;
     /** cursor-ripple from the first skin that has it (lazer's LegacyCursorRipple); null for the default ring. */
     ripple: SkinTexture | null;
+    /** star2 cursor particles (lazer's LegacyCursorParticles): only from an osu! skin that has star2. */
+    particles: ParticleSkin | null;
 }
 
 /** The first layer that may provide images and has `name` (lazer's per-component skin lookup). */
@@ -83,5 +86,20 @@ export function resolveCursorSkin(chain: SkinChain, builtin: LegacySkin | null):
         expand: chain.config('cursorExpand'),
         trail,
         ripple: chain.frames('cursor-ripple', false)[0] ?? null,
+        particles: resolveParticles(chain, builtin),
     };
+}
+
+/**
+ * lazer's OsuLegacySkinTransformer gives the cursor particles only to
+ * legacy skins with star2; the stars' break tint (StarBreakAdditive) is
+ * read through the whole chain. wosu!'s own skin has none.
+ */
+function resolveParticles(chain: SkinChain, builtin: LegacySkin | null): ParticleSkin | null {
+    for (const l of chain.layers) {
+        if (!l.skin || l.textures === false || l.skin === builtin) continue;
+        const texture = l.skin.texture('star2');
+        if (texture) return { texture, breakTint: chain.config('starBreakAdditive') };
+    }
+    return null;
 }

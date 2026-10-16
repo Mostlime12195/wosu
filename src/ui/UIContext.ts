@@ -8,12 +8,15 @@ import type { Container } from 'pixi.js';
 export type UISampleSet = 'default' | 'button' | 'toolbar' | 'tab' | 'submit' | 'sidebar' | 'menu';
 
 export interface UISoundsLike {
-    hover(set?: UISampleSet): void;
-    click(set?: UISampleSet): void;
+    /** `skin`: osu!stable sounds the menu skin may replace the set's sample with. */
+    hover(set?: UISampleSet, skin?: readonly string[]): void;
+    click(set?: UISampleSet, skin?: readonly string[]): void;
     denied(): void;
     typed(): void;
     tick(normalized: number): void;
-    play(name: string, opts?: { volume?: number; rate?: number; throttle?: number }): boolean;
+    play(name: string, opts?: { volume?: number; rate?: number; throttle?: number; skin?: readonly string[] }): boolean;
+    /** A sound only the menu skin provides (silent without one). */
+    playSkin(names: readonly string[], opts?: { volume?: number; rate?: number; throttle?: number }): boolean;
     select(): void;
     back(): void;
     toggleOn(): void;

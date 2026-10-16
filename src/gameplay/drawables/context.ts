@@ -37,40 +37,87 @@ export interface DrawableContext {
     kiaiFlashes: boolean;
     /** Opacity (0..KIAI_FLASH_OPACITY) of lazer's kiai flash at `time`; 0 outside kiai or when disabled. */
     kiaiFlash(time: number): number;
+    /** Opacity (0..LEGACY_KIAI_FLASH_OPACITY) of osu!stable's kiai flash on skinned circles at `time` (see makeLegacyKiaiFlash). */
+    legacyKiaiFlash(time: number): number;
 }
 
 /** lazer's KiaiFlash: flash_opacity, fade_length (and EarlyActivationMilliseconds). */
 export const KIAI_FLASH_OPACITY = 0.25;
 const KIAI_FADE = 80;
+/** lazer's LegacyKiaiFlashingDrawable.flash_opacity. */
+export const LEGACY_KIAI_FLASH_OPACITY = 0.3;
+/** BeatSyncedContainer.MinimumBeatLength: shorter beats are doubled until they reach it. */
+const MIN_BEAT_LENGTH = 50;
+
+/**
+ * The beat a BeatSyncedContainer last fired for at `time` (its start and
+ * length), from the governing uninherited timing point; inherited points
+ * can sit off-beat, so they're skipped. Null before any timing point.
+ */
+export function makeBeatLookup(beatmap: PlayableBeatmap): (time: number) => { beat: number; beatLength: number } | null {
+    const reds = beatmap.data.timingPoints.filter(p => p.uninherited && p.beatLength > 0).sort((a, b) => a.time - b.time);
+    return (time: number) => {
+        if (!reds.length) return null;
+        let lo = 0, hi = reds.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (reds[mid].time <= time) lo = mid; else hi = mid - 1;
+        }
+        const red = reds[lo];
+        let beatLength = red.beatLength;
+        while (beatLength < MIN_BEAT_LENGTH) beatLength *= 2;
+        return { beat: red.time + Math.floor((time - red.time) / beatLength) * beatLength, beatLength };
+    };
+}
 
 /**
  * lazer's default-skin KiaiFlash (osu.Game.Rulesets.Osu/Skinning/Default/
  * KiaiFlash.cs) as a pure function of song time: a white additive layer
  * over the circle body that, on every beat of a kiai section, rises to
  * 25% over the 80 ms before the beat (OutQuint), then fades out over the
- * rest of the beat (max(80, beatLength − 80) ms, OutSine). Beats come
- * from the governing uninherited timing point; inherited points can sit
- * off-beat, so they're skipped.
+ * rest of the beat (max(80, beatLength − 80) ms, OutSine).
  */
 export function makeKiaiFlash(beatmap: PlayableBeatmap, enabled: () => boolean): (time: number) => number {
-    const reds = beatmap.data.timingPoints.filter(p => p.uninherited && p.beatLength > 0).sort((a, b) => a.time - b.time);
+    const beatAt = makeBeatLookup(beatmap);
     return (time: number) => {
-        if (!reds.length || !enabled()) return 0;
+        if (!enabled()) return 0;
         // The beat whose flash is running: the latest one at or before time + 80 ms (early activation).
-        const probe = time + KIAI_FADE;
-        let lo = 0, hi = reds.length - 1;
-        while (lo < hi) {
-            const mid = (lo + hi + 1) >> 1;
-            if (reds[mid].time <= probe) lo = mid; else hi = mid - 1;
-        }
-        const red = reds[lo];
-        const beat = red.time + Math.floor((probe - red.time) / red.beatLength) * red.beatLength;
+        const b = beatAt(time + KIAI_FADE);
+        if (!b) return 0;
         // BeatSyncedContainer reads the effect point at the beat itself.
-        if (!beatmap.controlPoints.at(beat).kiai) return 0;
-        if (time < beat) return KIAI_FLASH_OPACITY * Easing.OutQuint(clamp01((time - (beat - KIAI_FADE)) / KIAI_FADE));
-        const fade = Math.max(KIAI_FADE, red.beatLength - KIAI_FADE);
-        return KIAI_FLASH_OPACITY * (1 - Easing.OutSine(clamp01((time - beat) / fade)));
+        if (!beatmap.controlPoints.at(b.beat).kiai) return 0;
+        if (time < b.beat) return KIAI_FLASH_OPACITY * Easing.OutQuint(clamp01((time - (b.beat - KIAI_FADE)) / KIAI_FADE));
+        const fade = Math.max(KIAI_FADE, b.beatLength - KIAI_FADE);
+        return KIAI_FLASH_OPACITY * (1 - Easing.OutSine(clamp01((time - b.beat) / fade)));
     };
+}
+
+/**
+ * osu!stable's kiai flash on skinned hit circles, as lazer reproduces it
+ * (osu.Game/Skinning/LegacyKiaiFlashingDrawable.cs, used by
+ * LegacyMainCirclePiece): on every beat of a kiai section an additive
+ * copy of the circle body jumps to 30% opacity and fades out over
+ * max(80, beatLength − 80) ms (OutSine). No early activation. Always on
+ * for osu! skins (stable has no option for it).
+ */
+export function makeLegacyKiaiFlash(beatmap: PlayableBeatmap): (time: number) => number {
+    const beatAt = makeBeatLookup(beatmap);
+    return (time: number) => {
+        const b = beatAt(time);
+        if (!b || !beatmap.controlPoints.at(b.beat).kiai) return 0;
+        const fade = Math.max(KIAI_FADE, b.beatLength - KIAI_FADE);
+        return LEGACY_KIAI_FLASH_OPACITY * (1 - Easing.OutSine(clamp01((time - b.beat) / fade)));
+    };
+}
+
+/**
+ * LegacyMainCirclePiece's kiai glow colour: the combo colour with
+ * max(25, 300 − r − g − b) added to each channel (dark colours brighten more).
+ */
+export function legacyKiaiTint(color: number): number {
+    const r = (color >> 16) & 0xff, g = (color >> 8) & 0xff, b = color & 0xff;
+    const add = Math.max(25, 300 - r - g - b);
+    return (Math.min(255, r + add) << 16) | (Math.min(255, g + add) << 8) | Math.min(255, b + add);
 }
 
 /** osu! skin scale: at 1x a 128px hit circle spans one diameter (@2x textures carry 0.5). */
@@ -253,7 +300,12 @@ export function resolveCircle(chain: SkinChain, prefix: string | null): {
 export class CirclePiece extends Container {
     readonly base: Sprite;
     readonly overlay: Sprite | null;
-    /** lazer's KiaiFlash (an opt-in extra): additive white over the body. */
+    /**
+     * The kiai flash: an additive copy of the body. wosu!'s default skin
+     * uses lazer's KiaiFlash (an opt-in extra: white, under the overlay);
+     * osu! skins get osu!stable's (lazer's LegacyKiaiFlashingDrawable: in
+     * the brightened combo colour, above the overlay and number).
+     */
     readonly kiai: Sprite;
     readonly number: Container | null;
     /** The body image is a placeholder (a blank sliderendcircle): nothing would be drawn. */
@@ -267,6 +319,9 @@ export class CirclePiece extends Container {
      * fade it with the circle.
      */
     private readonly numberHit: 'hide' | 'short' | 'full';
+    /** The kiai flash's opacity at a song time (none for wosu!'s default slider ends, as in lazer's default skin). */
+    private readonly flash: ((time: number) => number) | null;
+    private readonly legacyFlash: boolean;
 
     constructor(ctx: DrawableContext, h: PlayableHitObject, withNumber: boolean, prefix: string | null = null) {
         super();
@@ -280,33 +335,40 @@ export class CirclePiece extends Container {
         this.kiai = sprite(body?.texture ?? Texture.EMPTY, this.baseScale);
         this.kiai.blendMode = 'add';
         this.kiai.visible = false;
+        const defaultLook = providerIndex === chain.layers.length - 1;
+        this.legacyFlash = !defaultLook && !blank;
+        this.flash = this.legacyFlash ? ctx.legacyKiaiFlash : prefix === 'sliderendcircle' ? null : ctx.kiaiFlash;
+        if (this.legacyFlash) this.kiai.tint = legacyKiaiTint(color);
         this.overlay = ring ? sprite(ring.texture, this.overlayScale) : null;
         this.number = withNumber && !ctx.hideNumbers ? comboNumber(chain, h.comboNumber, ctx.radius) : null;
         this.numberScale = this.number?.scale.x ?? 1;
         this.blank = blank;
-        this.numberHit = providerIndex === chain.layers.length - 1 ? 'hide' : legacyVersion(chain) > 1 ? 'short' : 'full';
-        this.addChild(this.base, this.kiai);
+        this.numberHit = defaultLook ? 'hide' : legacyVersion(chain) > 1 ? 'short' : 'full';
+        this.addChild(this.base);
+        if (!this.legacyFlash) this.addChild(this.kiai);
         const parts = [this.overlay, this.number].filter((p): p is Container => !!p);
         if (!chain.config('hitCircleOverlayAboveNumber')) parts.reverse();
         if (parts.length) this.addChild(...parts);
+        // LegacyMainCirclePiece proxies the flash above the overlay and number.
+        if (this.legacyFlash) this.addChild(this.kiai);
         this.eventMode = 'none';
     }
 
-    /** Idle (approaching) look at opacity `a`; `kiai` is the kiai flash opacity (see makeKiaiFlash). */
-    showIdle(a: number, kiai = 0): void {
+    /** Idle (approaching) look at opacity `a`, with the kiai flash for song time `time` (if given). */
+    showIdle(a: number, time?: number): void {
         this.visible = a > 0.001;
         this.alpha = a;
         this.setParts(1, 1, 1, 1);
-        this.kiai.visible = kiai > 0.001;
-        this.kiai.alpha = kiai;
+        this.setFlash(time, 1, 1);
     }
 
     /**
      * lazer's LegacyMainCirclePiece hit animation, `dt` ms after the hit:
      * the body and overlay swell to 1.4× (ease out) and fade out over
-     * 240ms; the number goes as `numberHit` says.
+     * 240ms; the number goes as `numberHit` says. An osu! skin's kiai
+     * flash (at song time `time`) fades and swells with the body.
      */
-    showHit(dt: number): boolean {
+    showHit(dt: number, time?: number): boolean {
         if (dt >= CIRCLE_HIT_FADE) {
             this.visible = false;
             return false;
@@ -317,7 +379,8 @@ export class CirclePiece extends Container {
         const a = 1 - k, s = 1 + 0.4 * Easing.OutQuad(k);
         const numberAlpha = this.numberHit === 'hide' ? 0 : this.numberHit === 'short' ? 1 - clamp01(dt / (CIRCLE_HIT_FADE / 4)) : a;
         this.setParts(a, s, numberAlpha, this.numberHit === 'full' ? s : 1);
-        this.kiai.visible = false;
+        if (this.legacyFlash) this.setFlash(time, a, s);
+        else this.kiai.visible = false;
         return true;
     }
 
@@ -329,6 +392,14 @@ export class CirclePiece extends Container {
         this.setParts(1, 1, 1, 1);
         this.kiai.visible = false;
         return this.visible;
+    }
+
+    private setFlash(time: number | undefined, alpha: number, scale: number): void {
+        const k = time === undefined || !this.flash ? 0 : this.flash(time) * alpha;
+        this.kiai.visible = k > 0.001;
+        if (!this.kiai.visible) return;
+        this.kiai.alpha = k;
+        this.kiai.scale.set(this.baseScale * scale);
     }
 
     private setParts(alpha: number, scale: number, numberAlpha: number, numberScale: number): void {

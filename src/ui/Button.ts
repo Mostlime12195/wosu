@@ -202,7 +202,8 @@ export class BackButton extends UIComponent {
         this.caption.anchor.set(0, 0.5);
         this.content.addChild(this.arrow, this.caption);
         this.addChild(this.content);
-        this.makeInteractive();
+        // osu!stable skins have the back button's own sounds.
+        this.makeInteractive({ skinSounds: { hover: ['back-button-hover'], select: ['back-button-click'] } });
         this.resize(140, 50);
     }
 

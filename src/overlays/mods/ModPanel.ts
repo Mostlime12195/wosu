@@ -1,7 +1,8 @@
-import { Container, Graphics, type FederatedPointerEvent, type Text } from 'pixi.js';
+import { Container, Graphics, Sprite, Texture, type FederatedPointerEvent, type Text } from 'pixi.js';
 import { tween } from '../../core/Tweener';
 import { lerpColor, scaleColor } from '../../core/math';
 import { hasSettings, type ModInfo } from '../../gameplay/mods';
+import { menuModIcon, menuSkin } from '../../skin/MenuSkin';
 import { icon } from '../../ui/icons';
 import { drawSheared, SHEAR, shearedHitArea } from '../../ui/ShearedButton';
 import { label, fitText } from '../../ui/text';
@@ -14,6 +15,9 @@ export const MOD_PANEL_HEIGHT = 44;
 const RADIUS = 7;
 const SWITCH_IDLE = 54;
 const SWITCH_EXPANDED = 66;
+/** Box a skin's selection-mod-* image is fitted into, on the switch strip. */
+const SKIN_ICON_W = 46;
+const SKIN_ICON_H = 36;
 
 /** lazer's mod select uses the green overlay palette. */
 export const modColors = new ColorProvider('green');
@@ -31,6 +35,8 @@ export class ModPanel extends UIComponent {
     private readonly mainBg = new Graphics();
     private readonly pill = new Graphics();
     private readonly acronym: Text;
+    /** The menu skin's selection-mod-* image, replacing the acronym pill (osu!stable skins). */
+    private readonly skinIcon = new Sprite(Texture.EMPTY);
     private readonly title: Text;
     private readonly desc: Text;
     /** Customised value beside the title (a custom rate's "1.30x"). */
@@ -54,7 +60,8 @@ export class ModPanel extends UIComponent {
         this.title = label(mod.name, { size: 16, weight: '700', color: 0xffffff });
         this.desc = label('', { size: 12, weight: '500', color: 0xffffff });
         this.extended = label('', { size: 13, weight: '700', color: 0xffffff });
-        this.body.addChild(this.switchBg, this.mainBg, this.pill, this.acronym, this.title, this.extended, this.desc);
+        this.skinIcon.anchor.set(0.5);
+        this.body.addChild(this.switchBg, this.mainBg, this.pill, this.acronym, this.skinIcon, this.title, this.extended, this.desc);
         if (hasSettings(mod.acronym)) {
             const gear = (this.gear = icon('gear', 14, 0xffffff));
             gear.anchor.set(0.5);
@@ -77,6 +84,15 @@ export class ModPanel extends UIComponent {
         this.makeInteractive({ sounds: false });
         this.applyColors(0);
         this.resize(300, MOD_PANEL_HEIGHT);
+        this.disposer.add(menuSkin.bind(() => this.applySkinIcon(), true));
+    }
+
+    private applySkinIcon(): void {
+        const t = menuModIcon(this.mod.acronym);
+        this.skinIcon.visible = !!t;
+        this.pill.visible = this.acronym.visible = !t;
+        this.skinIcon.texture = t?.texture ?? Texture.EMPTY;
+        if (t) this.skinIcon.scale.set(Math.min(SKIN_ICON_W / t.texture.width, SKIN_ICON_H / t.texture.height));
     }
 
     /** lazer's ExtendedIconInformation beside the title ("" at the default configuration). */
@@ -132,6 +148,7 @@ export class ModPanel extends UIComponent {
         const pw = 34, ph = 18;
         drawSheared(this.pill.clear(), cx - pw / 2, h / 2 - ph / 2, pw, ph, 5, ph * SHEAR).fill(0xffffff);
         this.acronym.position.set(cx, h / 2);
+        this.skinIcon.position.set(cx, h / 2);
         // Text lines step left with the lean.
         const x = this.textX(this.switchW);
         this.title.position.set(x + 2, 5);
@@ -170,6 +187,9 @@ export class ModPanel extends UIComponent {
         set(this.mainBg, lerpColor(main, 0xffffff, hover));
         set(this.pill, this.active ? scaleColor(this.accent, 0.3) : c.background6);
         set(this.acronym, this.active ? lerpColor(this.accent, 0xffffff, 0.3) : scaleColor(this.accent, 0.8));
+        const iconTint = this.active ? 0xffffff : 0x9a9a9a;
+        if (duration > 0) tweenTint(this.skinIcon, iconTint, duration);
+        else this.skinIcon.tint = iconTint;
         set(this.title, text);
         set(this.extended, text);
         if (this.gear) set(this.gear, text);

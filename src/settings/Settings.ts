@@ -15,6 +15,8 @@ export type KeyOverlayStyle = 'lazer' | 'stable';
  * lock, which needs gameplay to own the cursor, so there is no "Always".
  */
 export type ConfineMouseMode = 'never' | 'duringGameplay';
+/** lazer's BackgroundSource for the main menu (no storyboards in wosu!'s menus). */
+export type MenuBackgroundSource = 'skin' | 'beatmap';
 
 /** String settings restricted to a fixed set of values. */
 const ENUM_VALUES: Record<string, readonly string[]> = {
@@ -22,6 +24,7 @@ const ENUM_VALUES: Record<string, readonly string[]> = {
     keyOverlayStyle: ['lazer', 'stable'],
     gameplayMechanics: ['lazer', 'stable'],
     confineMouse: ['never', 'duringGameplay'],
+    menuBackgroundSource: ['skin', 'beatmap'],
 };
 
 const STORAGE_KEY = 'webosu.settings.v2';
@@ -81,6 +84,8 @@ export class GameSettings {
     readonly beatmapSkin = new Bindable(true);
     /** Use a beatmap's own combo and slider colours (lazer's "Beatmap colours"). */
     readonly beatmapColours = new Bindable(true);
+    /** osu!stable's ranking screen when the skin has a ranking-panel (else wosu!'s lazer-style results). */
+    readonly skinResultsScreen = new Bindable(true);
     readonly fullscreenOnPlay = new Bindable(false);
 
     // Audio
@@ -122,6 +127,10 @@ export class GameSettings {
     readonly cursorRotation = new Bindable(true);
     readonly gameplayCursorDuringTouch = new Bindable(false);
     readonly hardwareCursor = new Bindable(false);
+    /** osu!stable-style: the selected skin's cursor, sounds, menu background, glow and mod icons in menus too. */
+    readonly skinInMenus = new Bindable(true);
+    /** lazer's MenuBackgroundSource (wosu! defaults to the playing beatmap's background). */
+    readonly menuBackgroundSource = new Bindable<MenuBackgroundSource>('beatmap');
 
     // Online
     readonly browseProvider = new Bindable<ProviderId>('sayobot');

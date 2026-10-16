@@ -39,6 +39,9 @@ export class SkipButton extends UIComponent {
     private shownAlpha = 0;
     private hoverGlow = 0;
     private clock = 0;
+    /** Countdown bar size last drawn (NaN: never). */
+    private drawnBarW = NaN;
+    private drawnBarH = NaN;
     available = false;
     /** 0..1 of the skippable stretch remaining. */
     remaining = 1;
@@ -119,8 +122,14 @@ export class SkipButton extends UIComponent {
             const phase = (this.clock / 600 - i * 0.2) % 1;
             c.alpha = (this.hovered ? 0.6 : 0.35) + 0.4 * Math.max(0, Math.sin(phase * Math.PI));
         });
+        if (!this.visible) return;
         const w = this._w, h = this._h;
-        this.bar.clear().roundRect(10, h - 7, (w - 20) * Math.max(0, Math.min(1, this.remaining)), 3, 1.5).fill({ color: 0xffffff, alpha: 0.7 });
+        // Redraw the countdown bar only when its width moves by a visible amount (each rebuild allocates geometry).
+        const barW = Math.round((w - 20) * Math.max(0, Math.min(1, this.remaining)) * 4) / 4;
+        if (barW === this.drawnBarW && h === this.drawnBarH) return;
+        this.drawnBarW = barW;
+        this.drawnBarH = h;
+        this.bar.clear().roundRect(10, h - 7, barW, 3, 1.5).fill({ color: 0xffffff, alpha: 0.7 });
     }
 
     protected override onHoverChange(hovered: boolean): void {

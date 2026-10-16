@@ -1,6 +1,10 @@
-import { Container, Graphics, type Text } from 'pixi.js';
+import { Container, Graphics, Sprite, type Text } from 'pixi.js';
 import { extendedModInfo, modInfo, type ModAcronym, type ModCategory, type ModSettingsMap } from '../../gameplay/mods';
+import { menuModIcon } from '../../skin/MenuSkin';
 import { label } from '../../ui/text';
+
+/** A skin's selection-mod-* image is drawn this much taller than the row's badges (they are mostly glyph). */
+const SKIN_ICON_SCALE = 1.5;
 
 /** lazer's OsuColour.ForModType. */
 export function modCategoryColor(category: ModCategory): number {
@@ -63,10 +67,15 @@ export class ModIcon extends Container {
 
 /** Horizontal row of mod icons (leaderboards, loader, results). */
 export class ModIconRow extends Container {
-    private icons: ModIcon[] = [];
+    private icons: Container[] = [];
     rowWidth = 0;
 
-    constructor(private readonly iconHeight = 20, private readonly gap = 3) {
+    constructor(
+        private readonly iconHeight = 20,
+        private readonly gap = 3,
+        /** Use the menu skin's selection-mod-* images where it has them (osu!stable skins). */
+        private readonly skinned = false,
+    ) {
         super();
         this.eventMode = 'none';
     }
@@ -77,7 +86,27 @@ export class ModIconRow extends Container {
         this.icons = [];
         let x = 0;
         for (const m of mods) {
-            const icon = new ModIcon(m, this.iconHeight, extendedModInfo(m, settings));
+            const extended = extendedModInfo(m, settings);
+            const skin = this.skinned ? menuModIcon(m) : null;
+            if (skin) {
+                const h = this.iconHeight * SKIN_ICON_SCALE;
+                const sprite = new Sprite(skin.texture);
+                sprite.scale.set(h / skin.texture.height);
+                sprite.position.set(x, (this.iconHeight - h) / 2);
+                x += sprite.width + this.gap;
+                this.icons.push(sprite);
+                this.addChild(sprite);
+                if (extended) {
+                    const ext = label(extended, { size: Math.round(this.iconHeight * 0.6), weight: '700', color: modColor(m) });
+                    ext.anchor.set(0, 0.5);
+                    ext.position.set(x, this.iconHeight / 2);
+                    x += ext.width + this.gap;
+                    this.icons.push(ext);
+                    this.addChild(ext);
+                }
+                continue;
+            }
+            const icon = new ModIcon(m, this.iconHeight, extended);
             icon.x = x;
             x += icon.iconWidth + this.gap;
             this.icons.push(icon);

@@ -148,6 +148,8 @@ export class OsuLogo extends UIComponent {
 
     protected override onHoverChange(hovered: boolean): void {
         if (hovered && !this.onClickLogo) return;
+        // osu!stable skins: a heartbeat when hovering the cookie.
+        if (hovered) uiSounds()?.playSkin(['heartbeat'], { throttle: 300 });
         tween(this.hoverContainer, { scale: hovered ? 1.1 : 1 }, { duration: 500, ease: 'OutElastic' });
     }
 

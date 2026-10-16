@@ -9,6 +9,27 @@ import { resolveAssetUrl } from '../audio/base';
  */
 export type PackName = keyof typeof __ASSET_PACKS__;
 
+/** Duplicate files are stored once; this entry maps each duplicate to its original (tools/assetPacks.ts). */
+export const PACK_ALIASES = '.aliases.json';
+
+/** A pack's unzipped files with its duplicates restored under their own names. */
+export function packEntries(files: Readonly<Record<string, Uint8Array>>): Map<string, Uint8Array> {
+    const out = new Map(Object.entries(files));
+    const list = out.get(PACK_ALIASES);
+    if (!list) return out;
+    out.delete(PACK_ALIASES);
+    try {
+        const aliases = JSON.parse(new TextDecoder().decode(list)) as Record<string, string>;
+        for (const [dup, original] of Object.entries(aliases)) {
+            const bytes = out.get(original);
+            if (bytes) out.set(dup, bytes);
+        }
+    } catch (e) {
+        console.warn('[assets] bad pack alias list', e);
+    }
+    return out;
+}
+
 export class AssetPack {
     constructor(private readonly entries: ReadonlyMap<string, Uint8Array>) {}
 
@@ -36,7 +57,7 @@ export function loadPack(name: PackName): Promise<AssetPack | null> {
                 const files = await new Promise<Record<string, Uint8Array>>((resolve, reject) => {
                     unzip(zip, (err, data) => (err ? reject(err) : resolve(data)));
                 });
-                return new AssetPack(new Map(Object.entries(files)));
+                return new AssetPack(packEntries(files));
             } catch (e) {
                 console.warn(`[assets] pack ${name} unavailable, fetching its files one by one`, e);
                 return null;

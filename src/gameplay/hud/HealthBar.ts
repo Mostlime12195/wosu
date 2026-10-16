@@ -3,6 +3,7 @@ import { Easing } from '../../core/easing';
 import { lerpColor } from '../../core/math';
 import type { SkinTexture } from '../../skin/LegacySkin';
 import type { SkinChain } from '../../skin/SkinChain';
+import { layerVersion } from '../drawables/context';
 
 /** lazer's LegacySkin.STABLE_MAGIC_SCALE_FACTOR (stable's 640 → 1024 layout). */
 const MAGIC = 1.6;
@@ -95,9 +96,7 @@ export class HealthBar extends Container {
         };
         const provider = from[0]?.skin ?? null;
         // osu!: no skin.ini at all means "latest"; a skin.ini without Version means 1.0.
-        const cfg = provider?.config ?? {};
-        const version = cfg.version ?? (Object.keys(cfg).length ? 1 : 2.7);
-        this.newStyle = version >= 2;
+        this.newStyle = layerVersion(provider?.config ?? {}) >= 2;
 
         const bg = tex('scorebar-bg');
         if (bg) {

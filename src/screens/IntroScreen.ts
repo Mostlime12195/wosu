@@ -111,7 +111,8 @@ export class IntroScreen extends Screen {
         if (!this.waiting || !this.isCurrent) return;
         this.waiting = false;
         void this.game.audio.unlock();
-        this.game.uiSounds.play('Menu/osu-logo-select');
+        // An osu!stable skin's welcome sound replaces the logo's.
+        this.game.uiSounds.play('Menu/osu-logo-select', { skin: ['welcome'] });
         tween(this.hint, { alpha: 0 }, { duration: 200 });
         tween(this.disclaimer, { alpha: 0 }, { duration: 400 });
         tween(this.tip, { alpha: 0 }, { duration: 400 });
@@ -139,6 +140,7 @@ export class IntroScreen extends Screen {
         this.game.music.pause();
         this.alpha = 1;
         this.welcome.text = 'see you next time!';
+        this.game.uiSounds.playSkin(['seeya']);
         this.welcome.alpha = 0;
         tween(this.welcome, { alpha: 1 }, { duration: 600 });
         this.logo.alpha = 0;

@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { zipSync, type Zippable } from 'fflate';
+import { strToU8, zipSync, type Zippable } from 'fflate';
 import type { Plugin } from 'vite';
 
 interface PackSpec {
@@ -25,6 +25,13 @@ interface PackSpec {
 const AUDIO = /\.(wav|ogg|mp3)$/i;
 /** Already compressed: stored as-is (deflating them only costs time). */
 const STORED = /\.(png|jpe?g|ogg|mp3)$/i;
+/**
+ * Files whose bytes repeat an earlier file are stored once and listed here
+ * ({ duplicate: original }); the client (src/core/assetPacks.ts, PACK_ALIASES)
+ * serves them under both names. The default skin's three identical
+ * spinnerbonus WAVs alone were 1.7 MB of the hitsound pack.
+ */
+export const PACK_ALIASES = '.aliases.json';
 /** Fixed timestamps keep the zip bytes (and so the hash) the same on every build. */
 const MTIME = new Date('2026-01-01T00:00:00Z');
 
@@ -56,10 +63,21 @@ export function buildPack(root: string, spec: PackSpec): { bytes: Uint8Array; fi
     const all = walk(dir).sort();
     const set = new Set(all);
     const zip: Zippable = {};
+    const byContent = new Map<string, string>();
+    const aliases: Record<string, string> = {};
     for (const rel of all) {
         if (!spec.include(rel, set)) continue;
-        zip[rel] = [fs.readFileSync(path.join(dir, rel)), { level: STORED.test(rel) ? 0 : 6, mtime: MTIME }];
+        const data = fs.readFileSync(path.join(dir, rel));
+        const digest = createHash('sha256').update(data).digest('hex');
+        const original = byContent.get(digest);
+        if (original) {
+            aliases[rel] = original;
+            continue;
+        }
+        byContent.set(digest, rel);
+        zip[rel] = [data, { level: STORED.test(rel) ? 0 : 6, mtime: MTIME }];
     }
+    if (Object.keys(aliases).length) zip[PACK_ALIASES] = [strToU8(JSON.stringify(aliases)), { level: 6, mtime: MTIME }];
     const bytes = zipSync(zip);
     const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 10);
     return { bytes, fileName: `assets/packs/${spec.name}.${hash}.zip` };

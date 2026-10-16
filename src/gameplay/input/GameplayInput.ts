@@ -7,6 +7,23 @@ export type GameplayButton = 'K1' | 'K2' | 'M1' | 'M2';
 
 export const GAMEPLAY_BUTTONS: readonly GameplayButton[] = ['K1', 'K2', 'M1', 'M2'];
 
+/** Longest event-queue delay credited back to a press (guards against bogus timestamps). */
+export const MAX_EVENT_LAG_MS = 100;
+
+/**
+ * Song time at which an input event really happened: the clock read in the
+ * handler (`now`) minus how long the event waited for the main thread
+ * (`perfNow - timeStamp`, scaled to song time by `rate`). Never earlier than
+ * `floor` (the time judgement has already been stepped to), never later
+ * than `now`, and `now` itself when the timestamp is missing or implausible.
+ */
+export function eventSongTime(now: number, perfNow: number, timeStamp: number | undefined, rate: number, floor: number): number {
+    const lag = perfNow - (timeStamp ?? NaN);
+    if (!(lag > 0) || !(rate > 0)) return now;
+    const t = now - Math.min(lag, MAX_EVENT_LAG_MS) * rate;
+    return Math.min(now, Math.max(t, floor));
+}
+
 /**
  * Collects gameplay presses with the song time at the moment of the
  * event (not the next frame), plus held state for slider/spinner
@@ -33,6 +50,12 @@ export class GameplayInput {
     /** Logical cursor position (last pointer / touch). */
     x = 0;
     y = 0;
+    /**
+     * The play's clock, when presses should be judged at the event's own
+     * timestamp rather than when the (possibly busy) main thread got to
+     * the handler. `frameTime` is the earliest time a press may take.
+     */
+    timing: { readonly rate: number; readonly frameTime: number } | null = null;
     /** Accepts input (off while paused / failed / finished). */
     enabled = false;
     /** Pointer presses on on-screen controls (hold-for-menu, skip) aren't gameplay input. */
@@ -76,7 +99,7 @@ export class GameplayInput {
             this.smoke = true;
             return true;
         }
-        if (!e.repeat && !this.down[button]) this.press(button);
+        if (!e.repeat && !this.down[button]) this.press(button, e);
         return true;
     }
 
@@ -112,7 +135,7 @@ export class GameplayInput {
         if (e.button === 0 || e.button === 2) {
             const button: GameplayButton = e.button === 0 ? 'M1' : 'M2';
             if (e.buttons & (e.button === 0 ? 1 : 2)) {
-                if (this.settings.mouseButtons.value && !this.down[button] && !this.ignorePointer?.(this.x, this.y)) this.press(button);
+                if (this.settings.mouseButtons.value && !this.down[button] && !this.ignorePointer?.(this.x, this.y)) this.press(button, e);
                 return;
             }
             this.release(button);
@@ -137,7 +160,7 @@ export class GameplayInput {
             // Alternate the two virtual buttons so streams register as presses.
             const button: GameplayButton = this.down.M1 ? 'M2' : 'M1';
             this.touches.set(e.pointerId, button);
-            if (!this.down[button]) this.press(button);
+            if (!this.down[button]) this.press(button, e);
             return;
         }
         if (!this.settings.mouseButtons.value) return;
@@ -145,7 +168,7 @@ export class GameplayInput {
         if (!button) return;
         this.x = p.x;
         this.y = p.y;
-        if (!this.down[button]) this.press(button);
+        if (!this.down[button]) this.press(button, e);
     }
 
     private onUp(e: PointerEvent): void {
@@ -160,12 +183,15 @@ export class GameplayInput {
         else if (e.button === 2) this.release('M2');
     }
 
-    private press(button: GameplayButton): void {
+    private press(button: GameplayButton, e: Event): void {
         this.down[button] = true;
         this.anyPress.emit(this.x, this.y);
         if (!this.enabled) return;
         this.counts[button]++;
-        this.pressed.emit(this.now(), this.x, this.y, button);
+        const now = this.now();
+        const t = this.timing;
+        const time = t ? eventSongTime(now, performance.now(), e.timeStamp, t.rate, t.frameTime) : now;
+        this.pressed.emit(time, this.x, this.y, button);
     }
 
     private release(button: GameplayButton): void {

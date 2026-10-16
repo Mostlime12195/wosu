@@ -1,12 +1,17 @@
 import { unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { PACKS, buildPack } from '../tools/assetPacks';
+import { packEntries } from '../src/core/assetPacks';
+import { PACK_ALIASES, PACKS, buildPack } from '../tools/assetPacks';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 
-function contents(name: string): string[] {
+function unpack(name: string): Map<string, Uint8Array> {
     const spec = PACKS.find(p => p.name === name)!;
-    return Object.keys(unzipSync(buildPack(ROOT, spec).bytes)).sort();
+    return packEntries(unzipSync(buildPack(ROOT, spec).bytes));
+}
+
+function contents(name: string): string[] {
+    return [...unpack(name).keys()].sort();
 }
 
 describe('asset packs', () => {
@@ -32,6 +37,18 @@ describe('asset packs', () => {
         expect(files.length).toBeGreaterThan(50);
         expect(files.every(f => f.endsWith('.mp3'))).toBe(true);
         expect(files.some(f => f.startsWith('UI/'))).toBe(true);
+    });
+
+    it('stores identical files once and restores them under every name', () => {
+        const spec = PACKS.find(p => p.name === 'default-hitsounds')!;
+        const raw = unzipSync(buildPack(ROOT, spec).bytes);
+        // The three sample sets share one spinnerbonus WAV.
+        expect(raw[PACK_ALIASES]).toBeDefined();
+        expect(Object.keys(raw).filter(f => f.endsWith('-spinnerbonus.wav'))).toHaveLength(1);
+        const files = unpack('default-hitsounds');
+        expect(files.has(PACK_ALIASES)).toBe(false);
+        const bonus = ['normal', 'soft', 'drum'].map(set => files.get(`${set}-spinnerbonus.wav`));
+        expect(bonus.every(b => b && b.length > 0 && b === bonus[0])).toBe(true);
     });
 
     it('builds the same bytes every time (stable hashed names)', () => {

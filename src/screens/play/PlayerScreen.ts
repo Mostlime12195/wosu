@@ -305,6 +305,8 @@ export class PlayerScreen extends Screen {
 
         this.input = new GameplayInput(g.app, g.settings, () => this.clock.now, { x: g.input.pointer.x, y: g.input.pointer.y });
         this.input.relative = g.input.pointerLock;
+        // Presses are judged at their event timestamps (a busy frame doesn't make them late).
+        this.input.timing = this.clock;
         this.input.ignorePointer = (x, y) => {
             const onHold = this.holdButton.containsPoint(x, y);
             const onSkip = this.skip.available && x >= this.skip.x && y >= this.skip.y && x <= this.skip.x + this.skip.w && y <= this.skip.y + this.skip.h;
@@ -345,7 +347,8 @@ export class PlayerScreen extends Screen {
         this.playfield.judgements.hideGreat = g.settings.hideGreat.value;
         this.playfield.judgements.hitLighting = g.settings.hitLighting.value;
         this.smoke = new SmokeLayer(chain);
-        this.fieldWrap.addChild(this.smoke, this.playfield);
+        // SpinnerFadePlayfield's black sits under everything on the playfield's layer.
+        this.fieldWrap.addChild(this.playfield.spinnerFade, this.smoke, this.playfield);
 
         if (mods.has('FL')) {
             this.flashlight = new Flashlight(flashlightSettings(mods));
@@ -424,6 +427,7 @@ export class PlayerScreen extends Screen {
         this.bgCustom.addChild(this.bgBacking);
         if (o.storyboard?.sprites.length || o.storyboard?.samples.length) {
             const sb = (this.storyboard = new StoryboardView(o.storyboard, o.data.general.widescreenStoryboard));
+            sb.setMaskingBorder(g.skins.current.value?.texture('masking-border')?.texture ?? null);
             this.bgCustom.addChild(sb.back);
             this.failContent.addChildAt(sb.front, this.failContent.getChildIndex(this.fieldWrap) + 1);
         }
@@ -700,6 +704,7 @@ export class PlayerScreen extends Screen {
         const time = this.phase === 'loading' ? this.clock.frameTime : this.clock.tick(dt);
         this.updatePointerLock();
         const cursor = this.updateCursor(time, dt);
+        this.updateCursorParticles(time, cursor.held);
 
         if (this.phase === 'playing') {
             this.feedRules(time, cursor);
@@ -832,6 +837,38 @@ export class PlayerScreen extends Screen {
         c.moveTo(this.input.x, this.input.y, true);
         const p = this.toPlayfield(this.input.x, this.input.y);
         return { x: p.x, y: p.y, held: this.input.held };
+    }
+
+    /**
+     * What the skin's star2 cursor particles show (lazer's LegacyCursorParticles):
+     * break stars during breaks, kiai stars while a kiai slider is tracked or
+     * a kiai spinner is spun.
+     */
+    private updateCursorParticles(time: number, held: boolean): void {
+        const p = this.game.cursor.gameplay.particles;
+        const down = this.keysDown;
+        const playing = this.phase === 'playing';
+        let kiai = false;
+        const cp = this.beatmap.controlPoints;
+        if (playing && cp.at(time).kiai) {
+            const objs = this.beatmap.hitObjects;
+            for (let i = this.loopStart; i < objs.length && !kiai; i++) {
+                const h = objs[i];
+                if (h.time > time) break;
+                if (time > h.endTime || !cp.at(h.time).kiai) continue;
+                const s = this.rules.states[i];
+                if (s.kind === 'slider') kiai = (s as SliderState).tracking;
+                else if (s.kind === 'spinner') kiai = held && (s as SpinnerState).result === null;
+            }
+        }
+        p.state = {
+            kiai,
+            breakTime: playing && this.hud.isBreak(time),
+            left: down.K1 || down.M1,
+            right: down.K2 || down.M2,
+            running: playing || this.phase === 'completed',
+            rate: this.clock.rate,
+        };
     }
 
     /** Held gameplay buttons as shown (key overlay, cursor): Autoplay's, the replay's or the user's. */
@@ -1313,6 +1350,8 @@ export class PlayerScreen extends Screen {
                 applause: skinApplause([
                     this.game.settings.beatmapHitsounds.value ? this.options.beatmapSkin : null, this.game.skins.current.value,
                 ], result.grade),
+                // The play's skins: a skin's ranking screen and grade letters.
+                skin: this.skinChain ?? undefined,
                 // Back through the loader beneath (lazer's Player.Restart from results).
                 onRetry: quick => this.restartFromResults(quick),
             }));

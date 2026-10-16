@@ -6,9 +6,12 @@ import type { ReplayInfo } from '../../gameplay/replay/Replay';
 import type { ScoreResult } from '../../gameplay/ScoreResult';
 import type { Action } from '../../input/bindings';
 import type { LegacySkin } from '../../skin/LegacySkin';
+import type { SkinChain } from '../../skin/SkinChain';
 import type { Grade } from '../../storage/ScoreStore';
 import { BackButton, Button } from '../../ui/Button';
 import { Colors } from '../../ui/theme';
+import { LEGACY_T_END, LEGACY_T_GRADE, LegacyRanking } from './LegacyRanking';
+import { importedSkinElement, legacyRankingSource, rankingGradeElements } from './rankingLayout';
 import { ScorePanel, PANEL_H, PANEL_W, T_END, T_RANK } from './ScorePanel';
 import { StatisticsPanel, STATS_W } from './StatisticsPanel';
 import { clamp01, easeOutQuint } from './resultsMath';
@@ -32,6 +35,13 @@ export interface ResultsOptions {
      * of lazer's; null = the skin silences it; undefined = lazer's own.
      */
     applause?: AudioBuffer | null;
+    /**
+     * The play's skins (beatmap → selected → default): an imported skin
+     * with a ranking-panel gets osu!stable's ranking screen (Settings →
+     * Skin → "Use the skin's results screen"), and its grade letters show
+     * on wosu!'s results otherwise.
+     */
+    skin?: SkinChain;
 }
 
 /**
@@ -59,12 +69,18 @@ export function skinApplause(skins: readonly (LegacySkin | null | undefined)[], 
  * osu!lazer's results screen: the expanded score panel (accuracy circle,
  * rank, score, statistics) beside the statistics panel (timing
  * distribution, health graph). Every reveal is driven by one clock, so a
- * click anywhere jumps straight to the final state.
+ * click anywhere jumps straight to the final state. With an imported
+ * skin that has a ranking-panel it shows osu!stable's ranking screen
+ * instead (LegacyRanking), with the same actions and keys.
  */
 export class ResultsScreen extends Screen {
     override readonly catchesClicks = true;
-    private panel!: ScorePanel;
-    private stats!: StatisticsPanel;
+    /** Set in load(): stable's ranking screen has its own top bar where the toolbar would be. */
+    override hideToolbar = false;
+    private panel: ScorePanel | null = null;
+    private stats: StatisticsPanel | null = null;
+    /** osu!stable's ranking screen (an imported skin's ranking-panel), instead of the panels. */
+    private legacy: LegacyRanking | null = null;
     private readonly panelWrap = new Container();
     private readonly statsWrap = new Container();
     private readonly buttons = new Container();
@@ -80,22 +96,45 @@ export class ResultsScreen extends Screen {
         super();
     }
 
+    /** End of the reveal sequence (the stable screen's is shorter). */
+    private get endTime(): number {
+        return this.legacy ? LEGACY_T_END : T_END;
+    }
+
     override load(): void {
         const g = this.game;
-        this.panel = new ScorePanel(g, this.result, this.selection);
-        this.panel.onRankRevealed = () => this.playRankSounds();
-        this.stats = new StatisticsPanel(this.result, this.selection);
-        this.panelWrap.addChild(this.panel);
-        this.statsWrap.addChild(this.stats);
+        const chain = this.options.skin ?? g.skins.chain();
+        const source = g.settings.skinResultsScreen.value ? legacyRankingSource(chain.layers, g.skins.default) : null;
+        if (source) {
+            this.legacy = new LegacyRanking(chain, this.result, {
+                version: source.config.version ?? 1,
+                allowRetry: this.options.allowRetry !== false,
+                hasReplay: !!this.options.replay,
+                onRetry: () => this.retry(),
+                onReplay: () => this.watchReplay(),
+            });
+            this.legacy.onGradeShown = () => this.playRankSounds();
+            this.hideToolbar = true;
+            this.panelWrap.addChild(this.legacy);
+        } else {
+            // The skin's grade letter (ranking-A…) in the accuracy circle, when it has one.
+            const letter = this.result.passed ? importedSkinElement(chain.layers, g.skins.default, rankingGradeElements(this.result.grade)) : null;
+            this.panel = new ScorePanel(g, this.result, this.selection, letter);
+            this.panel.onRankRevealed = () => this.playRankSounds();
+            this.stats = new StatisticsPanel(this.result, this.selection);
+            this.panelWrap.addChild(this.panel);
+            this.statsWrap.addChild(this.stats);
+        }
 
         const triangles = g.skin.tex('triangle');
         // The footer's back button already returns to song select (lazer has just Retry and the replay here).
-        if (this.options.allowRetry !== false) {
+        // The stable screen has the skin's ranking-retry / ranking-replay; ours stand in for any it lacks.
+        if (this.options.allowRetry !== false && !this.legacy?.skinnedRetry) {
             this.retryButton = new Button('Retry', { color: Colors.pink, icon: 'retry', triangles, width: 170, height: 44 });
             this.retryButton.onActivate = () => this.retry();
             this.buttons.addChild(this.retryButton);
         }
-        if (this.options.replay) {
+        if (this.options.replay && !this.legacy?.skinnedReplay) {
             this.replayButton = new Button('Watch replay', { color: Colors.blueDarker, icon: 'circlePlay', triangles, width: 190, height: 44 });
             this.replayButton.onActivate = () => this.watchReplay();
             this.buttons.addChild(this.replayButton);
@@ -115,6 +154,10 @@ export class ResultsScreen extends Screen {
     protected override onResize(w: number, h: number): void {
         (this.hitArea as Rectangle).width = w;
         (this.hitArea as Rectangle).height = h;
+        if (this.legacy) {
+            this.layoutLegacy(w, h);
+            return;
+        }
         if (!this.panel) return;
         const toolbar = this.game.toolbarVisible.value ? this.game.toolbar.h : 0;
         const groupW = PANEL_W + GAP + STATS_W;
@@ -164,6 +207,22 @@ export class ResultsScreen extends Screen {
         this.applyTime();
     }
 
+    /** The stable screen fills the window; wosu!'s buttons for actions the skin lacks sit bottom right. */
+    private layoutLegacy(w: number, h: number): void {
+        const legacy = this.legacy;
+        if (!legacy) return;
+        legacy.resize(w, h);
+        let x = 0;
+        for (const b of [this.retryButton, this.replayButton]) {
+            if (!b) continue;
+            b.position.set(x, 0);
+            x += b.w + BUTTON_GAP;
+        }
+        this.buttons.position.set(Math.round(w - x + BUTTON_GAP - 16), h - 60);
+        this.backButton.position.set(0, h - this.backButton.h);
+        this.applyTime();
+    }
+
     /** lazer's AccuracyCircle: rank impact, then applause for the grade (the skin's, if it has one). */
     private playRankSounds(): void {
         const s = this.game.uiSounds;
@@ -172,7 +231,8 @@ export class ResultsScreen extends Screen {
             : grade === 'S' || grade === 'SH' || grade === 'A' ? 'Results/rank-impact-pass'
                 : grade === 'B' || grade === 'C' ? 'Results/rank-impact-fail'
                     : 'Results/rank-impact-fail-d';
-        s.play(impact);
+        // osu!stable's ranking screen has no rank impact, just the applause.
+        if (!this.legacy) s.play(impact);
         const applause = grade === 'X' || grade === 'XH' || grade === 'S' || grade === 'SH' ? 'Results/applause-s'
             : grade === 'A' ? 'Results/applause-a'
                 : grade === 'B' ? 'Results/applause-b'
@@ -188,8 +248,9 @@ export class ResultsScreen extends Screen {
 
     override onEntering(): void {
         const bg = this.game.background;
-        bg.setBlur(0.5, 800);
-        bg.setDim(0.6, 800);
+        // stable's ranking screen shows the beatmap's background unblurred.
+        bg.setBlur(this.legacy ? 0 : 0.5, 800);
+        bg.setDim(this.legacy ? 0.5 : 0.6, 800);
         this.game.music.loopFromPreview = false;
         this.alpha = 0;
         this.fadeIn(300);
@@ -204,7 +265,7 @@ export class ResultsScreen extends Screen {
     }
 
     override update(dt: number): void {
-        if (this.clock < T_END + 1000) {
+        if (this.clock < this.endTime + 1000) {
             this.clock += dt;
             this.applyTime();
         }
@@ -212,6 +273,12 @@ export class ResultsScreen extends Screen {
 
     private applyTime(): void {
         const t = this.clock;
+        if (this.legacy) {
+            this.legacy.applyTime(t);
+            this.buttons.alpha = clamp01((t - LEGACY_T_GRADE) / 400);
+            return;
+        }
+        if (!this.panel || !this.stats) return;
         this.panel.applyTime(t);
         this.stats.applyTime(t);
         const a = clamp01(t / 500);
@@ -222,8 +289,8 @@ export class ResultsScreen extends Screen {
 
     /** Jump every animation to its final state. */
     skip(): void {
-        if (this.clock < T_END) {
-            this.clock = T_END;
+        if (this.clock < this.endTime) {
+            this.clock = this.endTime;
             this.applyTime();
         }
     }
@@ -267,7 +334,7 @@ export class ResultsScreen extends Screen {
             this.retry(true);
             return true;
         }
-        if ((action === 'select' || e.code === 'Space') && this.clock < T_END) {
+        if ((action === 'select' || e.code === 'Space') && this.clock < this.endTime) {
             this.skip();
             return true;
         }

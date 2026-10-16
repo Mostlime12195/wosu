@@ -10,6 +10,8 @@ export interface InteractiveOptions {
     sounds?: boolean | UISampleSet;
     /** A specific sample to play on activation instead of the set's select sound (null: none). */
     selectSample?: string | null;
+    /** osu!stable sounds the menu skin may play instead of the hover / select sound (e.g. back-button-hover). */
+    skinSounds?: { hover?: readonly string[]; select?: readonly string[] };
     /** Use a rectangular hit area matching the logical size (default true). */
     rectHitArea?: boolean;
 }
@@ -110,7 +112,7 @@ export class UIComponent extends Container {
     private handleOver(): void {
         if (!this._enabled) return;
         this.hovered = true;
-        if (this.interactiveOpts?.sounds !== false) uiSounds()?.hover(this.sampleSet);
+        if (this.interactiveOpts?.sounds !== false) uiSounds()?.hover(this.sampleSet, this.interactiveOpts?.skinSounds?.hover);
         if (this._tooltip) ui().tooltips.show(this._tooltip, this);
         this.onHoverChange(true);
     }
@@ -160,8 +162,9 @@ export class UIComponent extends Container {
         if (!this._enabled) return;
         const o = this.interactiveOpts;
         if (o?.sounds !== false) {
-            if (o?.selectSample === undefined) uiSounds()?.click(this.sampleSet);
-            else if (o.selectSample) uiSounds()?.play(o.selectSample);
+            const skin = o?.skinSounds?.select;
+            if (o?.selectSample === undefined) uiSounds()?.click(this.sampleSet, skin);
+            else if (o.selectSample) uiSounds()?.play(o.selectSample, { skin });
         }
         this.onClick();
         this.onActivate?.();

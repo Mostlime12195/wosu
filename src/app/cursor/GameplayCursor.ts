@@ -1,5 +1,6 @@
 import { Container, Sprite, Texture } from 'pixi.js';
 import { STABLE_MAGIC_SCALE, type CursorSkin } from './CursorSkin';
+import { CursorParticles } from './CursorParticles';
 import { CursorRipples } from './CursorRipples';
 import { CursorTrail } from './CursorTrail';
 import { Anim, Ease } from './transforms';
@@ -48,6 +49,8 @@ export class GameplayCursor extends Container {
     private readonly middle = new Sprite(Texture.EMPTY);
     /** Between the trail and the cursor, like lazer's OsuCursorContainer. */
     private readonly ripples = new CursorRipples();
+    /** star2 particles (lazer's LegacyCursorParticles), above the trail and ripples; gameplay sets their `state`. */
+    readonly particles = new CursorParticles();
     /** Presses waiting for a ripple at the next update (after this frame's moveTo). */
     private pendingRipples = 0;
     private readonly fadeAnim = new Anim(1);
@@ -79,7 +82,7 @@ export class GameplayCursor extends Container {
     constructor() {
         super();
         this.eventMode = 'none';
-        this.addChild(this.ripples, this.sprite, this.middle);
+        this.addChild(this.ripples, this.particles, this.sprite, this.middle);
     }
 
     /** Use the skin's cursor, middle and trail (rebuilds the trail; keeps position and state). */
@@ -94,6 +97,7 @@ export class GameplayCursor extends Container {
         this.middle.visible = !!skin.middle;
         this.middle.anchor.set(anchor);
         this.ripples.texture = skin.ripple;
+        this.particles.setSkin(skin.particles);
         if (!skin.rotate) this.spin = 0;
         if (this.expandAnim.end !== 1) this.expandAnim.set(this.downCount > 0 && this.canExpand ? this.style.pressed : 1);
 
@@ -179,6 +183,7 @@ export class GameplayCursor extends Container {
         this.downCount = 0;
         this.pendingRipples = 0;
         this.ripples.clear();
+        this.particles.clear();
         this.expandAnim.set(1);
         this.trail?.reset();
     }
@@ -208,6 +213,7 @@ export class GameplayCursor extends Container {
         if (this.skin?.rotate) this.spin = (this.spin + (dt / REVOLUTION_DURATION) * Math.PI * 2) % (Math.PI * 2);
         for (; this.pendingRipples > 0; this.pendingRipples--) this.ripples.add(this.x0, this.y0, this.playfieldScale * this.cursorScale);
         this.ripples.tick(dt);
+        this.particles.tick(dt, this.x0, this.y0, this.playfieldScale);
         const unit = (this.playfieldScale * this.cursorScale * pop) / STABLE_MAGIC_SCALE;
         const c = this.skin?.cursor;
         if (c) {

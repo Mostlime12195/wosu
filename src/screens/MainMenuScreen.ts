@@ -3,6 +3,7 @@ import { Screen } from '../app/Screen';
 import type { NowPlaying } from '../app/MusicController';
 import { tween, delay } from '../core/Tweener';
 import type { Action } from '../input/bindings';
+import { menuSkin } from '../skin/MenuSkin';
 import { label, fitText } from '../ui/text';
 import { uiSounds } from '../ui/UIContext';
 import { Colors } from '../ui/theme';
@@ -87,23 +88,23 @@ export class MainMenuScreen extends Screen {
         );
         this.logo.onClickLogo = () => this.onLogo();
 
-        const solo = new MenuButton('solo', 'user', 0x6644cc, ['KeyS', 'KeyP'], { left: MENU_WEDGE });
+        const solo = new MenuButton('solo', 'user', 0x6644cc, ['KeyS', 'KeyP'], { left: MENU_WEDGE }, undefined, 'freeplay');
         solo.onActivate = () => this.game.openSongSelect();
         const imp = new MenuButton('import', 'fileImport', 0xee9900, ['KeyI']);
         imp.onActivate = () => this.game.pickFiles();
         this.playButtons = [solo, imp];
 
-        const play = new MenuButton('play', 'play', 0x6644cc, ['KeyP'], { left: MENU_WEDGE }, 'Menu/button-play-select');
+        const play = new MenuButton('play', 'play', 0x6644cc, ['KeyP'], { left: MENU_WEDGE }, 'Menu/button-play-select', 'play');
         play.onActivate = () => this.setState('play');
-        const browse = new MenuButton('browse', 'download', 0xa5cc00, ['KeyB', 'KeyD']);
+        const browse = new MenuButton('browse', 'download', 0xa5cc00, ['KeyB', 'KeyD'], {}, undefined, 'direct');
         browse.onActivate = () => this.game.listing.show();
-        const exit = new MenuButton('exit', 'signOut', 0xee3399, ['KeyQ', 'KeyX']);
+        const exit = new MenuButton('exit', 'signOut', 0xee3399, ['KeyQ', 'KeyX'], {}, undefined, 'exit');
         exit.onActivate = () => this.doExit();
         this.topButtons = [play, browse, exit];
 
-        this.settingsButton = new MenuButton('settings', 'gear', 0x555555, ['KeyO'], { right: MENU_WEDGE });
+        this.settingsButton = new MenuButton('settings', 'gear', 0x555555, ['KeyO'], { right: MENU_WEDGE }, undefined, 'options');
         this.settingsButton.onActivate = () => this.game.settingsOverlay.toggle();
-        this.backButton = new MenuButton('back', 'chevronLeft', 0x333a5e, [], { right: MENU_WEDGE });
+        this.backButton = new MenuButton('back', 'chevronLeft', 0x333a5e, [], { right: MENU_WEDGE }, undefined, 'back');
         this.backButton.onActivate = () => this.setState('top');
 
         // lazer's flow order: settings, back, [logo], play-submenu, top level.
@@ -149,6 +150,15 @@ export class MainMenuScreen extends Screen {
         this.eventMode = 'passive';
 
         this.disposer.add(g.music.current.bind(n => this.onTrack(n), true));
+        this.disposer.add(g.settings.menuBackgroundSource.bind(() => {
+            if (this.isCurrent) this.showBackground(g.music.current.value);
+        }));
+        // skin.ini MenuGlow: lazer's logo visualiser and side flash colour.
+        this.disposer.add(menuSkin.bind(skin => {
+            const glow = skin?.config.menuGlow ?? 0xffffff;
+            this.logo.visualiser.tint = glow;
+            this.leftFlash.tint = this.rightFlash.tint = glow;
+        }, true));
         this.disposer.add(g.input.pointerMoved.add(() => (this.idle = 0)));
     }
 
@@ -157,14 +167,7 @@ export class MainMenuScreen extends Screen {
     private onTrack(n: NowPlaying | null): void {
         if (!this.isCurrent && this.stack) return;
         if (!n) return;
-        // Online covers are small (900×250), so blur them like osu! does.
-        if (n.kind === 'library') {
-            void this.game.setBackgroundForSet(n.set);
-            this.game.background.setBlur(0, 800);
-        } else {
-            void this.game.setBackgroundForOnline(n.sid);
-            this.game.background.setBlur(0.35, 800);
-        }
+        this.showBackground(n);
         this.tickerTitle.text = n.title;
         this.tickerArtist.text = n.artist;
         fitText(this.tickerTitle, this._w * 0.5, n.title);
@@ -173,6 +176,22 @@ export class MainMenuScreen extends Screen {
         this.ticker.x = this._w - 10 + 30;
         tween(this.ticker, { alpha: 1, x: this._w - 10 }, { duration: 1000, ease: 'OutQuint' });
         tween(this.ticker, { alpha: 0 }, { duration: 1000, delay: 5000 });
+    }
+
+    /** lazer's BackgroundSource: the skin's background (menu-background, else wosu!'s), or the track's beatmap. */
+    private showBackground(n: NowPlaying | null): void {
+        const bg = this.game.background;
+        if (this.game.settings.menuBackgroundSource.value === 'skin') {
+            bg.setDefault();
+            bg.setBlur(0, 800);
+        } else if (n?.kind === 'library') {
+            void this.game.setBackgroundForSet(n.set);
+            bg.setBlur(0, 800);
+        } else if (n) {
+            // Online covers are small (900×250), so blur them like osu! does.
+            void this.game.setBackgroundForOnline(n.sid);
+            bg.setBlur(0.35, 800);
+        }
     }
 
     private onLogo(): void {

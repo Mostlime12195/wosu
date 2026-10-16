@@ -1,6 +1,7 @@
 import { Container, Graphics, type FederatedPointerEvent, type Text } from 'pixi.js';
 import { tween, type Tween } from '../../core/Tweener';
 import { clamp01, lerpColor } from '../../core/math';
+import { menuButtonSounds, type StableMenuButton } from '../../audio/stableUISounds';
 import { icon, type IconName } from '../../ui/icons';
 import { label } from '../../ui/text';
 import { UIComponent } from '../../ui/UIComponent';
@@ -62,6 +63,8 @@ export class MenuButton extends UIComponent {
         private readonly pad: { left?: number; right?: number } = {},
         /** lazer's MainMenuButton sampleName (play uses its own). */
         selectSample: string = 'Menu/button-default-select',
+        /** osu!stable's button of the same role, for a skin's menu-<name>-hover / -click sounds. */
+        stableSounds: StableMenuButton | null = null,
     ) {
         super();
         this.hotkeys = hotkeys;
@@ -74,7 +77,8 @@ export class MenuButton extends UIComponent {
         this.iconHolder.addChild(this.glyph);
         this.content.addChild(this.iconHolder, this.caption);
         this.addChild(this.shadow, this.slab, this.flash, this.content);
-        this.makeInteractive({ sounds: 'menu', selectSample });
+        const skin = stableSounds ? menuButtonSounds(stableSounds) : null;
+        this.makeInteractive({ sounds: 'menu', selectSample, skinSounds: skin ? { hover: [skin.hover], select: [skin.click] } : undefined });
         this._h = MENU_BUTTON_HEIGHT;
         this.alpha = 0;
         this.visible = false;

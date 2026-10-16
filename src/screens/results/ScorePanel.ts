@@ -2,6 +2,7 @@ import { BitmapText, Container, Graphics, Sprite, type Text } from 'pixi.js';
 import type { Game, Selection } from '../../app/Game';
 import { formatNumber } from '../../core/math';
 import type { ScoreResult } from '../../gameplay/ScoreResult';
+import type { SkinTexture } from '../../skin/LegacySkin';
 import { extendedModInfo, sortedMods, sanitizeMods } from '../../gameplay/mods';
 import { textureFromBlob, textureFromUrl } from '../../graphics/textures';
 import { coverUrl } from '../../online/providers';
@@ -72,7 +73,8 @@ export class ScorePanel extends UIComponent {
     /** Fired once when the rank lands (screen plays the sound). */
     onRankRevealed: (() => void) | null = null;
 
-    constructor(private readonly game: Game, private readonly result: ScoreResult, selection: Selection) {
+    /** `letter`: the skin's grade image (ranking-A…) in place of the drawn letter. */
+    constructor(private readonly game: Game, private readonly result: ScoreResult, selection: Selection, letter: SkinTexture | null = null) {
         super();
         const r = result;
         this.bg.roundRect(0, 0, PANEL_W, PANEL_H, RADIUS).fill({ color: 0x1b1b22, alpha: 0.94 });
@@ -108,6 +110,8 @@ export class ScorePanel extends UIComponent {
             { triangle: skin.tex('triangle'), glow: skin.tex('glow'), circle: skin.tex('circle') },
             r.passed ? r.grade : 'F',
             r.passed,
+            105,
+            letter,
         );
         this.circle.position.set(PANEL_W / 2, CIRCLE_Y);
         this.addChild(this.circle);

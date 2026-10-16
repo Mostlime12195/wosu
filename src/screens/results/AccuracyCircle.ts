@@ -4,7 +4,10 @@ import { label } from '../../ui/text';
 import { Fonts, gradeColor, gradeLabel } from '../../ui/theme';
 import { UIComponent } from '../../ui/UIComponent';
 import { uiSounds } from '../../ui/UIContext';
+import type { SkinTexture } from '../../skin/LegacySkin';
+import { opaqueBounds } from '../../skin/opaqueBounds';
 import type { Grade } from '../../storage/ScoreStore';
+import { isGradeLetterSized } from './rankingLayout';
 import { GRADE_SPACING, RANK_CUTOFFS, VIRTUAL_SS } from './resultsMath';
 
 type BandGrade = 'D' | 'C' | 'B' | 'A' | 'S' | 'X';
@@ -82,7 +85,8 @@ export class AccuracyCircle extends UIComponent {
     private readonly glow: Sprite;
     private readonly flash: Sprite;
     private readonly superFlash: Sprite;
-    private readonly letter: BitmapText;
+    /** The rank letter: drawn text, or the skin's ranking-* image. */
+    private readonly letter: BitmapText | Sprite;
     private readonly particleLayer = new Container();
     private readonly particles: Particle[] = [];
     private readonly gradient: FillGradient;
@@ -100,6 +104,7 @@ export class AccuracyCircle extends UIComponent {
         private readonly grade: Grade,
         private readonly passed: boolean,
         readonly radius = 105,
+        skinLetter: SkinTexture | null = null,
     ) {
         super();
         const r = radius;
@@ -154,13 +159,24 @@ export class AccuracyCircle extends UIComponent {
         this.superFlash.anchor.set(0.5);
         this.superFlash.alpha = 0;
         this.superFlash.blendMode = 'add';
-        this.letter = new BitmapText({ text: gradeLabel(grade), style: { fontFamily: Fonts.venera, fontSize: 96 } });
-        this.letter.anchor.set(0.5);
-        this.letter.tint = color;
         // Keep wide letters ("SS") inside the inner disc.
         const maxW = (r * BANDS_R - 12) * 1.6;
         const maxH = (r * BANDS_R - 12) * 1.25;
-        this.letterScale = Math.min(1, maxW / this.letter.width, maxH / this.letter.height);
+        const letterBounds = skinLetter ? opaqueBounds(skinLetter.texture) : null;
+        if (skinLetter && letterBounds && isGradeLetterSized(letterBounds.width * skinLetter.scale, letterBounds.height * skinLetter.scale)) {
+            // The skin's letter keeps its own colours; its visible part (many skins pad
+            // the letter with a large transparent canvas) is fitted to the same box.
+            const tex = skinLetter.texture;
+            const b = letterBounds;
+            this.letter = new Sprite(tex);
+            this.letter.anchor.set((b.x + b.width / 2) / Math.max(1, tex.width), (b.y + b.height / 2) / Math.max(1, tex.height));
+            this.letterScale = Math.min(maxW / Math.max(1, b.width), (maxH * 1.15) / Math.max(1, b.height));
+        } else {
+            this.letter = new BitmapText({ text: gradeLabel(grade), style: { fontFamily: Fonts.venera, fontSize: 96 } });
+            this.letter.anchor.set(0.5);
+            this.letter.tint = color;
+            this.letterScale = Math.min(1, maxW / this.letter.width, maxH / this.letter.height);
+        }
         this.letter.scale.set(this.letterScale);
         this.rankLayer.addChild(this.glow, this.letter, this.flash, this.superFlash);
         this.rankLayer.visible = false;

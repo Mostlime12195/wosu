@@ -127,8 +127,8 @@ describe('snapping', () => {
 
 describe('layout defaults and serialisation', () => {
     it('lists the built-in layouts\' components, health bar in front', () => {
-        expect(builtInComponents('default')).toEqual(['songProgress', 'hitErrorMeter', 'keyCounter', 'leaderboard', 'score', 'accuracy', 'combo', 'health']);
-        expect(builtInComponents('legacy')).toEqual(['legacySongProgress', 'legacyHitErrorMeter', 'keyCounter', 'leaderboard', 'score', 'accuracy', 'combo', 'health']);
+        expect(builtInComponents('default')).toEqual(['songProgress', 'hitErrorMeter', 'keyCounter', 'leaderboard', 'score', 'accuracy', 'combo', 'health', 'modDisplay']);
+        expect(builtInComponents('legacy')).toEqual(['legacySongProgress', 'legacyHitErrorMeter', 'keyCounter', 'leaderboard', 'score', 'accuracy', 'combo', 'health', 'modDisplay']);
     });
 
     it('names extra copies and places new components', () => {

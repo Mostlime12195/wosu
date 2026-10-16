@@ -117,6 +117,8 @@ export class BackgroundManager {
     /** Screens that switched parallax off (gameplay: lazer's Player uses no parallax). */
     private readonly parallaxBlockers = new Set<object>();
     private requestSeq = 0;
+    /** Names the default texture, so a different one (a skin's menu-background) crossfades in. */
+    defaultKey: () => string = () => 'default';
 
     constructor(private readonly renderer: Renderer, private readonly defaultTexture: () => Texture) {
         this.root.addChild(this.content, this.dimRect);
@@ -128,7 +130,12 @@ export class BackgroundManager {
     }
 
     setDefault(): void {
-        this.setTexture('default', this.defaultTexture(), false);
+        this.setTexture(this.defaultKey(), this.defaultTexture(), false);
+    }
+
+    /** The default background (no beatmap's) is what's showing or fading in. */
+    get showingDefault(): boolean {
+        return this.currentKey?.startsWith('default') ?? false;
     }
 
     /**

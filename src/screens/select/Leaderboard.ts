@@ -1,4 +1,4 @@
-import { Container, Graphics, type FederatedPointerEvent, type Text, type Texture } from 'pixi.js';
+import { Container, Graphics, Sprite, type FederatedPointerEvent, type Text, type Texture } from 'pixi.js';
 import type { Game } from '../../app/Game';
 import type { LibrarySet } from '../../beatmap/Library';
 import type { DifficultySummary } from '../../beatmap/types';
@@ -7,6 +7,7 @@ import { tween } from '../../core/Tweener';
 import { formatNumber } from '../../core/math';
 import { sanitizeMods } from '../../gameplay/mods';
 import { ModIconRow } from '../../overlays/mods/ModIcon';
+import type { LegacySkin } from '../../skin/LegacySkin';
 import { beatmapKeyOf, type ScoreRecord } from '../../storage/ScoreStore';
 import { Avatar } from '../../ui/Avatar';
 import { ContextMenu, MENU_SPACER, type MenuEntry } from '../../ui/ContextMenu';
@@ -16,6 +17,7 @@ import { ScrollContainer } from '../../ui/ScrollContainer';
 import { label, fitText } from '../../ui/text';
 import { Colors, gradeColor, gradeLabel } from '../../ui/theme';
 import { UIComponent } from '../../ui/UIComponent';
+import { smallGradeTexture } from './carousel/RankBadge';
 import { relativeDate } from './visuals';
 
 const ROW_HEIGHT = 58;
@@ -38,6 +40,8 @@ class ScoreRow extends UIComponent {
     private readonly badge = new Graphics();
     private readonly position_: Text;
     private readonly grade: Text;
+    /** An imported skin's ranking-*-small image, in place of the badge. */
+    private readonly gradeImage = new Sprite();
     private readonly player: Text;
     private readonly stats: Text;
     private readonly date: Text;
@@ -49,7 +53,7 @@ class ScoreRow extends UIComponent {
     /** Right-click / long-press on the row: (record, global x, y). */
     onMenu: ((r: ScoreRecord, x: number, y: number) => void) | null = null;
 
-    constructor(avatar: ReadonlyBindable<Texture | null>) {
+    constructor(avatar: ReadonlyBindable<Texture | null>, private readonly skin: () => LegacySkin | null = () => null) {
         super();
         // Every local score is this device's player.
         this.avatar = new Avatar(40, avatar, { radius: 6 });
@@ -65,7 +69,8 @@ class ScoreRow extends UIComponent {
         this.score.anchor.set(1, 0);
         this.replayGlyph = icon('circlePlay', 12, Colors.grayC);
         this.replayGlyph.anchor.set(0, 0.5);
-        this.addChild(this.bg, this.position_, this.badge, this.grade, this.avatar, this.player, this.replayGlyph, this.stats, this.date, this.score, this.mods);
+        this.gradeImage.anchor.set(0.5);
+        this.addChild(this.bg, this.position_, this.badge, this.grade, this.gradeImage, this.avatar, this.player, this.replayGlyph, this.stats, this.date, this.score, this.mods);
         // lazer's LeaderboardScore: click to view the score (here: watch its replay), right-click for its menu.
         this.makeInteractive();
         this.on('rightclick', (e: FederatedPointerEvent) => {
@@ -100,7 +105,16 @@ class ScoreRow extends UIComponent {
         const boxX = 36;
         this.bg.clear().roundRect(boxX, 0, w - boxX, h, 6).fill({ color: 0x000000, alpha: this.hovered && r.hasReplay ? 0.7 : 0.5 });
         this.position_.position.set(boxX / 2, h / 2);
-        // Grade: a pill in the grade colour (lazer's DrawableRank).
+        // Grade: a pill in the grade colour (lazer's DrawableRank), or the skin's small grade image.
+        const skinned = smallGradeTexture(this.skin(), r.grade);
+        this.gradeImage.visible = !!skinned;
+        this.badge.visible = this.grade.visible = !skinned;
+        if (skinned) {
+            const k = Math.min(34 / skinned.texture.height, 46 / skinned.texture.width);
+            this.gradeImage.texture = skinned.texture;
+            this.gradeImage.scale.set(k);
+            this.gradeImage.position.set(boxX + 33, h / 2);
+        }
         const gc = gradeColor(r.grade);
         this.badge.clear().roundRect(boxX + 10, h / 2 - 12, 46, 24, 12).fill(gc);
         this.grade.tint = r.grade.endsWith('H') || r.grade === 'F' ? 0x222222 : 0x2a1a00;
@@ -167,6 +181,17 @@ export class LocalLeaderboard extends UIComponent {
             if (rec.beatmapKey === this.key) this.refresh();
         }));
         this.disposer.add(game.scores.removed.add(() => this.refresh()));
+        // Grades follow the selected skin's ranking-*-small images.
+        const regrade = () => {
+            for (const row of this.rows) if (row.visible) row.relayout();
+        };
+        this.disposer.add(game.skins.current.bind(regrade));
+        this.disposer.add(game.settings.skinInMenus.bind(regrade));
+    }
+
+    /** The imported skin whose small grade images rows use (null = wosu!'s badges). */
+    private gradeSkin(): LegacySkin | null {
+        return this.game.settings.skinInMenus.value ? this.game.skins.current.value : null;
     }
 
     /** Show scores for a difficulty (null clears). */
@@ -205,7 +230,7 @@ export class LocalLeaderboard extends UIComponent {
         this.records = list;
         const shown = list.slice(0, MAX_ROWS);
         while (this.rows.length < shown.length) {
-            const row = new ScoreRow(this.game.profile.avatar);
+            const row = new ScoreRow(this.game.profile.avatar, () => this.gradeSkin());
             row.onActivate = () => {
                 const r = row.scoreRecord;
                 if (r?.hasReplay) this.onWatchReplay?.(r);

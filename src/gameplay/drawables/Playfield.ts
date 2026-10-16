@@ -1,9 +1,9 @@
-import { Container, type Renderer } from 'pixi.js';
+import { Container, Graphics, type Renderer } from 'pixi.js';
 import type { PlayableBeatmap } from '../../beatmap/types';
 import { SliderResources } from '../../graphics/slider/SliderRenderer';
 import type { SkinChain } from '../../skin/SkinChain';
 import type { GameplayRules } from '../GameplayRules';
-import { OBJECT_SIZE, cappedFrames, fromDefaultSkin, legacyScale, makeKiaiFlash, type DrawableContext } from './context';
+import { OBJECT_SIZE, cappedFrames, fromDefaultSkin, legacyScale, makeKiaiFlash, makeLegacyKiaiFlash, type DrawableContext } from './context';
 import { DrawableHitCircle, type Drawable } from './DrawableHitCircle';
 import { DrawableSlider } from './DrawableSlider';
 import { DrawableSpinner } from './DrawableSpinner';
@@ -50,6 +50,13 @@ export class Playfield extends Container {
     private readonly failState = new Map<Drawable, { spin: number; x: number; y: number }>();
     private next = 0;
     private readonly offNested: () => void;
+    /**
+     * osu!stable's SpinnerFadePlayfield (skin.ini): the screen behind the
+     * playfield goes black while a spinner shows, fading with the spinner.
+     * The player puts it under everything else on the playfield's layer.
+     */
+    readonly spinnerFade = new Graphics();
+    private readonly fadeForSpinners: boolean;
 
     constructor(private readonly o: PlayfieldOptions) {
         super();
@@ -74,6 +81,7 @@ export class Playfield extends Container {
             pixelsPerUnit: 1,
             kiaiFlashes: o.kiaiFlashes ?? false,
             kiaiFlash: () => 0,
+            legacyKiaiFlash: makeLegacyKiaiFlash(b),
         };
         const ctx = this.ctx;
         ctx.kiaiFlash = makeKiaiFlash(b, () => ctx.kiaiFlashes);
@@ -85,6 +93,11 @@ export class Playfield extends Container {
             : new FollowPoints(b, fpFrames, o.skin.frameDuration(fpFrames.length), d.preempt, d.fadeIn, d.circleRadius,
                 legacyScale(d.circleRadius, fp), fromDefaultSkin(o.skin, 'followpoint', true));
         this.judgements = new Judgements(o.skin, d.circleRadius);
+        this.fadeForSpinners = o.skin.config('spinnerFadePlayfield');
+        // Far past any screen edge in playfield units.
+        this.spinnerFade.rect(-PLAYFIELD_W * 8, -PLAYFIELD_H * 8, PLAYFIELD_W * 17, PLAYFIELD_H * 17).fill(0x000000);
+        this.spinnerFade.eventMode = 'none';
+        this.spinnerFade.visible = false;
         if (this.followPoints) this.addChild(this.followPoints);
         // New-style skin judgements (and their particles) sit under the objects, like lazer's.
         this.addChild(this.judgements.below, this.objectLayer, this.approachLayer, this.judgements);
@@ -96,7 +109,7 @@ export class Playfield extends Container {
             const s = o.rules.states[index];
             const time = ev.kind !== 'head' ? ev.time
                 : hit && s.kind === 'slider' ? s.headAt : ev.time + o.rules.windows.w50;
-            this.judgements.addNested(hit, ev.x, ev.y, time);
+            this.judgements.addNested(hit, ev.x, ev.y, time, ev.kind === 'tick');
         });
     }
 
@@ -147,13 +160,16 @@ export class Playfield extends Container {
             this.active.push(d);
             this.next++;
         }
+        let spinnerFade = 0;
         for (let i = this.active.length - 1; i >= 0; i--) {
             const d = this.active[i];
             if (!d.updateAt(time)) {
                 this.active.splice(i, 1);
                 d.destroy();
-            }
+            } else if (d instanceof DrawableSpinner) spinnerFade = Math.max(spinnerFade, d.fadeAlpha);
         }
+        this.spinnerFade.visible = this.fadeForSpinners && spinnerFade > 0.001;
+        this.spinnerFade.alpha = spinnerFade;
         this.followPoints?.update(time);
         this.judgements.update(time);
     }
@@ -204,6 +220,7 @@ export class Playfield extends Container {
         for (const d of this.active) d.destroy();
         this.active.length = 0;
         super.destroy({ children: true });
+        if (!this.spinnerFade.destroyed) this.spinnerFade.destroy();
         this.sliderResources.destroy();
     }
 }

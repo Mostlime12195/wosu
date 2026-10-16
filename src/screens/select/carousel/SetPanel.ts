@@ -46,7 +46,8 @@ export class SetPanel extends UIComponent {
         this.badge = label('VIDEO', { size: 10, weight: '800', color: 0x000000 });
         this.hoverWash.alpha = 0;
         this.addChild(this.glow, this.bg, this.hoverWash, this.border, this.title, this.artist, this.mapper, this.dots, this.badge);
-        this.makeInteractive();
+        // osu!stable skins: menuclick when hovering beatmaps (instead of click-short).
+        this.makeInteractive({ skinSounds: { hover: ['menuclick'] } });
         this.resize(500, SET_HEIGHT);
     }
 

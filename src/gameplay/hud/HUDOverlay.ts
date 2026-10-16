@@ -441,6 +441,28 @@ export class HUDOverlay extends Container {
         const keys = this.find('keyCounter');
         if (keys) (keys.view as Container & { place(w: number, h: number, unit: number, lu: number): void }).place(w, h, unit, lu);
         this.placeLeaderboard();
+        this.placeModDisplay();
+    }
+
+    /**
+     * lazer's HUDOverlay TopRightElements (where its ModDisplay lives): 10
+     * units in from the right edge, 10 below the lowest top-right component
+     * shown (score, accuracy, progress pie), like stable's mod icons under
+     * the score.
+     */
+    private placeModDisplay(): void {
+        const mods = this.find('modDisplay');
+        if (!mods) return;
+        const lu = this.legacyUnit;
+        let bottom = 0;
+        for (const e of this.elements) {
+            if (e === mods || !e.allowed()) continue;
+            if (e.type !== 'score' && e.type !== 'accuracy' && e.type !== 'legacySongProgress') continue;
+            const b = e.box();
+            bottom = Math.max(bottom, e.view.y + (b.y + b.h) * e.view.scale.y);
+        }
+        mods.view.scale.set(lu);
+        mods.view.position.set(this.areaW - 10 * lu, bottom + 10 * lu);
     }
 
     /**

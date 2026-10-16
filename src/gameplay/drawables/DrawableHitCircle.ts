@@ -40,14 +40,14 @@ export class DrawableHitCircle extends Container implements Drawable {
         if (s.result === null || time < s.judgedAt) {
             const a = approachAlpha(ctx, time, h.time, ctx.hidden && this.hiddenApplies);
             this.lastAlpha = a;
-            this.piece.showIdle(a, ctx.kiaiFlash(time));
+            this.piece.showIdle(a, time);
             this.approach.showAt(ctx, time, h.time, this.x, h.y);
             return true;
         }
         const dt = time - s.judgedAt;
         this.approach.visible = false;
         if (s.result === 'miss') return this.piece.showMiss(dt, this.lastAlpha) || dt < 100;
-        return this.piece.showHit(dt);
+        return this.piece.showHit(dt, time);
     }
 
     override destroy(): void {

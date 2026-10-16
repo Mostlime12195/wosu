@@ -67,7 +67,8 @@ export type HudComponentType =
     | 'beatmapInfo'
     | 'unstableRate'
     | 'performancePoints'
-    | 'judgementCounter';
+    | 'judgementCounter'
+    | 'modDisplay';
 
 export interface HudComponentInfo {
     type: HudComponentType;
@@ -91,6 +92,7 @@ export const HUD_COMPONENTS: readonly HudComponentInfo[] = [
     { type: 'unstableRate', name: 'Unstable rate', description: 'Hit timing consistency: 10 × the standard deviation of your hit errors (lower is better).' },
     { type: 'performancePoints', name: 'Performance points (pp)', description: 'A live estimate of the pp for what you have played so far (osu!standard formula, wosu!\'s own difficulty calculation).' },
     { type: 'judgementCounter', name: 'Judgement counter', description: 'How many 300s, 100s, 50s and misses so far.' },
+    { type: 'modDisplay', name: 'Mod display', description: 'The mods in play: the skin\'s selection-mod icons where it has them, otherwise wosu!\'s mod badges.' },
 ];
 
 const INFO = new Map(HUD_COMPONENTS.map(c => [c.type, c]));
@@ -103,11 +105,15 @@ export function isComponentType(v: unknown): v is HudComponentType {
     return typeof v === 'string' && INFO.has(v as HudComponentType);
 }
 
-/** The components of a built-in layout, in draw order (the health bar in front, for full-screen scorebar frames). */
+/**
+ * The components of a built-in layout, in draw order: the health bar in
+ * front for full-screen scorebar frames, and the mod display above all
+ * (lazer's TopRightElements sit over the skinnable components).
+ */
 export function builtInComponents(kind: LayoutKind): HudComponentType[] {
     return kind === 'legacy'
-        ? ['legacySongProgress', 'legacyHitErrorMeter', 'keyCounter', 'leaderboard', 'score', 'accuracy', 'combo', 'health']
-        : ['songProgress', 'hitErrorMeter', 'keyCounter', 'leaderboard', 'score', 'accuracy', 'combo', 'health'];
+        ? ['legacySongProgress', 'legacyHitErrorMeter', 'keyCounter', 'leaderboard', 'score', 'accuracy', 'combo', 'health', 'modDisplay']
+        : ['songProgress', 'hitErrorMeter', 'keyCounter', 'leaderboard', 'score', 'accuracy', 'combo', 'health', 'modDisplay'];
 }
 
 export interface HudElementLayout {
@@ -369,6 +375,7 @@ const NEW_PLACEMENT: Partial<Record<HudComponentType, { anchor: Anchor; x: numbe
     unstableRate: { anchor: 'BottomCentre', x: 0, y: -72 },
     beatmapInfo: { anchor: 'TopCentre', x: 0, y: 36 },
     judgementCounter: { anchor: 'CentreRight', x: -10, y: 120 },
+    modDisplay: { anchor: 'TopRight', x: -10, y: 130 },
 };
 
 /** A component added from the toolbox (another copy of a type goes a little lower, so it doesn't hide the first). */

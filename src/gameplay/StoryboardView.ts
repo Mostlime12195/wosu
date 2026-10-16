@@ -55,10 +55,15 @@ export class StoryboardView {
     private lastTime = -Infinity;
     private readonly tmp = [0, 0, 0];
     private readonly mask = new Graphics();
+    private readonly widescreen: boolean;
+    /** The skin's masking-border pillars over the sides of a 4:3 storyboard (left, right). */
+    private borders: [Sprite, Sprite] | null = null;
+    private size = { w: 0, h: 0 };
     /** The four layers behind the playfield (one container, so one mask crops them). */
     private readonly stage = new Container();
 
     constructor(private readonly storyboard: Storyboard, widescreen: boolean) {
+        this.widescreen = widescreen;
         this.back.eventMode = this.front.eventMode = 'none';
         this.back.addChild(this.stage);
         for (const name of STORYBOARD_LAYERS) {
@@ -138,8 +143,30 @@ export class StoryboardView {
         }
     }
 
+    /**
+     * osu!stable's masking-border.png (the selected skin's; not beatmap
+     * skinnable): on a 4:3 storyboard, pillars stretched over the screen
+     * outside its area, the right one flipped (osu! wiki, Skinning/Interface).
+     */
+    setMaskingBorder(texture: Texture | null): void {
+        if (this.borders) {
+            for (const b of this.borders) b.destroy();
+            this.borders = null;
+        }
+        if (!texture || this.widescreen) return;
+        const make = () => {
+            const s = new Sprite(texture);
+            s.eventMode = 'none';
+            this.back.addChild(s);
+            return s;
+        };
+        this.borders = [make(), make()];
+        if (this.size.w) this.layout(this.size.w, this.size.h);
+    }
+
     /** Fit the 640×480 storyboard space to the screen (height-fitted and centred, like osu!). */
     layout(w: number, h: number): void {
+        this.size = { w, h };
         const scale = h / SB_H;
         const x = (w - SB_W * scale) / 2;
         for (const layer of this.layers.values()) {
@@ -147,6 +174,21 @@ export class StoryboardView {
             layer.position.set(x, 0);
         }
         this.mask.clear().rect(x, 0, SB_W * scale, h).fill(0xffffff);
+        if (this.borders) {
+            const [left, right] = this.borders;
+            const side = Math.max(0, x);
+            // Origin: right edge, against the storyboard area.
+            left.anchor.set(1, 0);
+            left.position.set(side, 0);
+            right.anchor.set(1, 0);
+            right.position.set(w - side, 0);
+            for (const b of this.borders) {
+                b.visible = side > 0.5;
+                b.width = side;
+                b.height = h;
+            }
+            right.scale.x = -Math.abs(right.scale.x);
+        }
     }
 
     /** osu! swaps the Pass layer for the Fail layer once the player fails. */

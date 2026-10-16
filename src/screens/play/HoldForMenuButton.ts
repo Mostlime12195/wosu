@@ -22,6 +22,8 @@ export class HoldForMenuButton extends UIComponent {
     private fired = false;
     /** Faint until the pointer comes near (or always shown on touch). */
     private shown = 0.25;
+    /** Hold progress the ring was last drawn at (-1: never drawn). */
+    private drawnProgress = -1;
     onHeld: (() => void) | null = null;
 
     constructor() {
@@ -76,8 +78,11 @@ export class HoldForMenuButton extends UIComponent {
         this.shown = damp(this.shown, touch || near || this.held > 0 ? 1 : 0.25, 80, dt);
         this.alpha = this.shown;
         this.caption.alpha = Math.max(0, (this.shown - 0.4) / 0.6);
-        const r = SIZE / 2 - 3;
         const p = this.holdMs > 0 ? Math.min(1, this.held / this.holdMs) : 0;
+        // Rebuilding the ring's geometry allocates (stroke triangulation), so only redraw when it changes.
+        if (p === this.drawnProgress) return;
+        this.drawnProgress = p;
+        const r = SIZE / 2 - 3;
         this.ring.clear()
             .circle(SIZE / 2, SIZE / 2, r).fill({ color: 0x000000, alpha: 0.4 })
             .circle(SIZE / 2, SIZE / 2, r).stroke({ width: 2, color: 0xffffff, alpha: 0.35 });

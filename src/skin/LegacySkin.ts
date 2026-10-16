@@ -1,4 +1,6 @@
 import { Texture } from 'pixi.js';
+import { STABLE_UI_SAMPLE_NAMES } from '../audio/stableUISounds';
+import { MOD_ICON_IMAGE_NAMES } from './modIcons';
 import { parseSkinIni, type SkinConfig } from './SkinIni';
 
 /**
@@ -44,13 +46,13 @@ const ELEMENTS = [
     'sliderb', 'sliderb-nd', 'sliderb-spec', 'sliderfollowcircle', 'sliderscorepoint', 'reversearrow', 'followpoint',
     // judgements
     'hit0', 'hit50', 'hit100', 'hit300', 'hit100k', 'hit300k', 'hit300g',
-    'particle50', 'particle100', 'particle300', 'slidertickmiss', 'sliderpoint30',
+    'particle50', 'particle100', 'particle300', 'slidertickmiss', 'sliderpoint10', 'sliderpoint30',
     // spinners (new and old style)
     'spinner-glow', 'spinner-bottom', 'spinner-top', 'spinner-middle', 'spinner-middle2',
     'spinner-background', 'spinner-circle', 'spinner-metre', 'spinner-approachcircle',
     'spinner-clear', 'spinner-spin', 'spinner-rpm', 'spinner-osu',
     // cursor
-    'cursor', 'cursormiddle', 'cursortrail', 'cursor-smoke', 'cursor-ripple',
+    'cursor', 'cursormiddle', 'cursortrail', 'cursor-smoke', 'cursor-ripple', 'star2',
     // HUD
     'scorebar-bg', 'scorebar-colour', 'scorebar-ki', 'scorebar-kidanger', 'scorebar-kidanger2', 'scorebar-marker',
     'inputoverlay-key', 'inputoverlay-background', 'play-skip', 'comboburst',
@@ -58,6 +60,14 @@ const ELEMENTS = [
     'ready', 'count3', 'count2', 'count1', 'go', 'section-pass', 'section-fail',
     'play-warningarrow', 'arrow-warning', 'arrow-pause',
     'pause-overlay', 'fail-background', 'pause-continue', 'pause-retry', 'pause-back',
+    // 4:3 storyboards on widescreen
+    'masking-border',
+    // menus (when skins apply to them): the main menu background and mod icons
+    'menu-background', ...MOD_ICON_IMAGE_NAMES,
+    // ranking screen and grade letters (results, song select, leaderboards)
+    'ranking-panel', 'ranking-title', 'ranking-graph', 'ranking-perfect', 'ranking-maxcombo', 'ranking-accuracy',
+    'ranking-replay', 'ranking-retry',
+    ...['xh', 'x', 'sh', 's', 'a', 'b', 'c', 'd'].flatMap(g => [`ranking-${g}`, `ranking-${g}-small`]),
 ];
 /** Font glyph suffixes (prefix-0 … prefix-x). */
 const GLYPHS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'comma', 'dot', 'percent', 'x'];
@@ -69,6 +79,8 @@ const OTHER_SAMPLES = new Set([
     'combobreak', 'spinnerspin', 'spinnerbonus', 'failsound', 'sectionpass', 'sectionfail', 'applause', 'comboburst',
     'readys', 'count3s', 'count2s', 'count1s', 'count', 'gos', 'pause-loop', 'pause-hover',
     'pause-continue-hover', 'pause-retry-hover', 'pause-back-hover', 'pause-continue-click', 'pause-retry-click', 'pause-back-click',
+    // interface sounds (menus, song select, typing)
+    ...STABLE_UI_SAMPLE_NAMES,
 ]);
 /** comboburst-0, comboburst-1…, the Nightcore mod's beat samples and lazer's per-grade applause. */
 const NUMBERED_SAMPLES_RE = /^(comboburst-\d+|nightcore-(kick|clap|hat|finish)|applause-[sabcd])$/;

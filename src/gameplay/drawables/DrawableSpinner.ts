@@ -1,7 +1,7 @@
 import { Container, Texture, type Sprite } from 'pixi.js';
 import type { PlayableSpinner } from '../../beatmap/types';
 import type { SpinnerState } from '../GameplayRules';
-import { clamp01, ease, sprite, type DrawableContext } from './context';
+import { clamp01, ease, fromDefaultSkin, legacyVersion, sprite, type DrawableContext } from './context';
 import type { Drawable } from './DrawableHitCircle';
 import {
     LegacyNewStyleSpinner, LegacyOldStyleSpinner, SPINNER_TOP_OFFSET, SPRITE_SCALE, spinnerStyle, WINDOW_TOP,
@@ -13,6 +13,8 @@ import { LegacySpriteText } from './LegacySpriteText';
 const FADE_OUT = 240;
 /** LegacySpinner.spm_hide_offset: the RPM counter slides up this far while fading in. */
 const SPM_HIDE_OFFSET = 50;
+/** How long Version 1 skins' spinner-osu takes to fade once the spinner is gone (an estimate: stable's timing isn't documented). */
+const OSU_TEXT_FADE = 600;
 
 /**
  * A spinner skinned like osu! (lazer's LegacySpinner and its two
@@ -21,6 +23,9 @@ const SPM_HIDE_OFFSET = 50;
  * lazer's OsuLegacySkinTransformer, plus the shared spinner-approachcircle,
  * spinner-spin and spinner-clear prompts, the spinner-rpm counter and
  * the bonus counter in the skin's score font.
+ *
+ * Version 1 skins with spinner-osu (osu!stable's old "osu!" text) show it
+ * where the spinner was once a cleared spinner has faded out.
  *
  * Everything is a function of song time and the rules' SpinnerState; the
  * only memory is when the spinner was completed, first spun and last gave
@@ -36,6 +41,11 @@ export class DrawableSpinner extends Container implements Drawable {
     private readonly spmBackground: Sprite;
     private readonly spmCounter: LegacySpriteText;
     private readonly frame: SpinnerFrame;
+    /** The spinner's own parts (body and prompts), faded together. */
+    private readonly parts = new Container();
+    private readonly osuText: Sprite | null = null;
+    /** The body's opacity this frame (0 when gone): how far osu!stable's SpinnerFadePlayfield darkens the screen. */
+    fadeAlpha = 0;
     private completedAt = Infinity;
     private firstSpinAt = Infinity;
     private lastBonus = 0;
@@ -74,7 +84,14 @@ export class DrawableSpinner extends Container implements Drawable {
         // The shared parts sit in front of the body (Depth = float.MinValue).
         const front = new Container();
         front.addChild(this.bonusCounter, this.spmBackground, this.spmCounter, this.spin, this.clear);
-        this.addChild(this.body, front);
+        this.parts.addChild(this.body, front);
+        this.addChild(this.parts);
+        // stable: Version 1 skins only ("Beatmap skinnable if the player skin is using v1.0").
+        if (legacyVersion(chain) < 2 && chain.texture('spinner-osu') && !fromDefaultSkin(chain, 'spinner-osu')) {
+            this.osuText = skinSprite('spinner-osu');
+            this.osuText.visible = false;
+            this.addChild(this.osuText);
+        }
 
         this.frame = { time: 0, start: h.time, end: h.endTime, progress: 0, rotation: 0, bonusAt: -Infinity };
     }
@@ -85,16 +102,27 @@ export class DrawableSpinner extends Container implements Drawable {
         const fadeIn = Math.max(1, ctx.fadeIn);
         // lazer's HitStateUpdateTime: the judgement, or the end time until then.
         const judged = s.result !== null ? s.judgedAt : h.endTime;
-        if (time > judged + FADE_OUT) return false;
+        const gone = judged + FADE_OUT;
+        const osuText = this.osuText && s.result !== null && s.result !== 'miss' ? this.osuText : null;
+        if (time > gone + (osuText ? OSU_TEXT_FADE : 0)) {
+            this.fadeAlpha = 0;
+            return false;
+        }
         this.observe(time, s);
 
         // The body fades in over TimeFadeIn before the start (LegacyNew/OldStyleSpinner);
         // the whole spinner fades out over 240ms from the judgement (DrawableSpinner).
         let alpha = clamp01((time - (h.time - fadeIn)) / fadeIn);
         if (time > judged) alpha *= 1 - clamp01((time - judged) / FADE_OUT);
-        this.visible = alpha > 0.001;
-        this.alpha = alpha;
-        if (!this.visible) return true;
+        this.fadeAlpha = alpha;
+        this.parts.visible = alpha > 0.001;
+        this.parts.alpha = alpha;
+        if (this.osuText) {
+            this.osuText.visible = !!osuText && time >= gone;
+            this.osuText.alpha = 1 - clamp01((time - gone) / OSU_TEXT_FADE);
+        }
+        this.visible = this.parts.visible || this.osuText?.visible === true;
+        if (!this.parts.visible) return true;
 
         const f = this.frame;
         f.time = time;

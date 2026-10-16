@@ -40,6 +40,7 @@ import { ProfileOverlay } from '../overlays/profile/ProfileOverlay';
 import { LocalProfile } from './Profile';
 import { GameSettings } from '../settings/Settings';
 import { Skin } from '../skin/Skin';
+import { menuSkin } from '../skin/MenuSkin';
 import { DEFAULT_SKIN_URL, SkinManager } from '../skin/SkinManager';
 import { Favourites } from '../storage/Favourites';
 import { KnownVideos } from '../storage/KnownVideos';
@@ -153,7 +154,9 @@ export class Game {
         this.api = new BeatmapApi(providers);
         this.downloads = new DownloadManager(providers);
         this.music = new MusicController(this.audio, this.preview, this.library);
-        this.background = new BackgroundManager(app.renderer, () => skin.defaultBackground);
+        // With skins in menus, a skin's menu-background stands in for wosu!'s own (like osu!stable).
+        this.background = new BackgroundManager(app.renderer, () => menuSkin.value?.texture('menu-background')?.texture ?? skin.defaultBackground);
+        this.background.defaultKey = () => (menuSkin.value?.texture('menu-background') ? `default:${skins.currentInfo.value?.id ?? 'skin'}` : 'default');
         this.screens = new ScreenStack(this);
         this.tooltips = new TooltipLayer(() => this.input.pointer, () => ({ width: app.width, height: app.height }));
         // The gameplay cursor and trail come from the osu! skins (selected → default).
@@ -331,12 +334,15 @@ export class Game {
         s.frameLimit.bind(v => this.app.setMaxFps(v), true);
         s.showFps.bind(v => (this.fps.visible = v), true);
         s.parallax.bind(v => (this.background.parallaxEnabled = v), true);
-        s.menuCursorSize.bind(v => this.cursor.menu.setCursorSize(v), true);
+        s.menuCursorSize.bind(v => {
+            this.cursor.menu.setCursorSize(v);
+            this.cursor.menuSkinned.userScale = v;
+        }, true);
         s.cursorSize.bind(v => (this.cursor.gameplay.userScale = v), true);
         s.autoCursorSize.bind(v => (this.cursor.gameplay.autoSize = v), true);
         s.cursorTrail.bind(v => this.cursor.gameplay.setTrailEnabled(v), true);
         s.cursorRipples.bind(v => (this.cursor.gameplay.ripplesEnabled = v), true);
-        s.cursorExpand.bind(v => (this.cursor.gameplay.expandEnabled = v), true);
+        s.cursorExpand.bind(v => (this.cursor.gameplay.expandEnabled = this.cursor.menuSkinned.expandEnabled = v), true);
         s.cursorRotation.bind(v => (this.cursor.menu.rotationEnabled = v), true);
         s.hardwareCursor.bind(() => this.updateCursorVisibility(), true);
         s.gameplayCursorDuringTouch.bind(() => this.updateCursorVisibility());
@@ -353,6 +359,14 @@ export class Game {
         this.input.lastPointerKind.bind(() => this.updateCursorVisibility());
         this.input.pointerMoved.once(() => this.updateCursorVisibility());
         this.library.changed.add(() => this.onLibraryChanged());
+        // osu!stable-style skinned menus: the selected skin while "Use skin in menus" is on.
+        const syncMenuSkin = () => (menuSkin.value = s.skinInMenus.value ? this.skins.current.value : null);
+        s.skinInMenus.bind(syncMenuSkin);
+        this.skins.current.bind(syncMenuSkin, true);
+        this.uiSounds.skinSamples = name => menuSkin.value?.sample(name);
+        menuSkin.bind(() => {
+            if (this.background.showingDefault) this.background.setDefault();
+        });
     }
 
     /**
@@ -514,6 +528,8 @@ export class Game {
         this.toasts.layout(w);
         this.volume.resize(w, h);
         this.fps.position.set(w - 8, h - 8);
+        // The skinned menu cursor takes its gameplay size (a playfield unit is h / 480).
+        this.cursor.menuPlayfieldScale = h / 480;
     }
 
     private update(dt: number): void {
@@ -727,6 +743,7 @@ export class Game {
     async takeScreenshot(): Promise<void> {
         try {
             const canvas = this.app.renderer.extract.canvas({ target: this.app.pixi.stage }) as HTMLCanvasElement;
+            this.uiSounds.playSkin(['shutter']);
             const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/png'));
             if (!blob) throw new Error('empty');
             const url = URL.createObjectURL(blob);

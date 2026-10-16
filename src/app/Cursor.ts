@@ -1,5 +1,6 @@
 import { Assets, Container, type Texture } from 'pixi.js';
-import type { SkinChain } from '../skin/SkinChain';
+import { menuSkin } from '../skin/MenuSkin';
+import { SkinChain } from '../skin/SkinChain';
 import type { SkinManager } from '../skin/SkinManager';
 import { resolveCursorSkin } from './cursor/CursorSkin';
 import { GameplayCursor } from './cursor/GameplayCursor';
@@ -9,6 +10,13 @@ const BASE = import.meta.env.BASE_URL;
 
 /** GameIdleTracker(6000): the menu cursor hides after this long without input. */
 const IDLE_MS = 6000;
+
+/** Mouse buttons held, from MouseEvent.buttons. */
+function heldButtons(buttons: number): number {
+    let n = 0;
+    for (let b = buttons; b; b &= b - 1) n++;
+    return n;
+}
 
 export interface CursorTextures {
     menu: Texture;
@@ -26,8 +34,12 @@ export interface CursorTextures {
  *   the player's chain while playing (`useSkin`, so beatmap skins can
  *   override it), the selected skin's otherwise; it follows skin changes
  *   live. The player owns it (`external`), positions it with `moveTo` and
- *   reports held buttons with `setDownCount`. The menu cursor is never
- *   skinned, as in lazer.
+ *   reports held buttons with `setDownCount`.
+ * - `menuSkinned`: osu!stable draws the skin's cursor in menus too, so
+ *   while the menu skin (Settings → Skin → "Use skin in menus") has a
+ *   cursor image, the menu shows it (cursor, cursormiddle, trail and the
+ *   skin.ini cursor options, at its gameplay size × the menu cursor size)
+ *   in place of lazer's arrow. It follows the arrow's visibility and fades.
  *
  * Game decides which one the current screen wants (`menuStateVisible`,
  * `gameplayShown`); this class adds lazer's own rules on top: idle and
@@ -36,6 +48,15 @@ export interface CursorTextures {
 export class Cursor extends Container {
     readonly menu: MenuCursor;
     readonly gameplay: GameplayCursor;
+    /** The menu skin's cursor, shown instead of `menu`'s arrow while `menuSkinActive`. */
+    readonly menuSkinned = new GameplayCursor();
+    private readonly menuSkinLayer = new Container();
+    private menuSkinActive = false;
+    private menuSkinShown = false;
+    /** Pointer samples (logical px) for the skinned menu cursor's trail. */
+    private readonly menuSamples: number[] = [];
+    /** Logical px per playfield unit for the skinned menu cursor (screen height / 480, its gameplay size). */
+    menuPlayfieldScale = 1;
 
     /** Gameplay is still in control of the gameplay cursor (not paused / failed menu). */
     gameplayActive = true;
@@ -81,12 +102,15 @@ export class Cursor extends Container {
         this.gameplay = new GameplayCursor();
         this.gameplay.visible = false;
         this.menu = new MenuCursor(textures.menu, textures.menuAdditive);
-        this.addChild(this.gameplay, this.menu);
+        this.menuSkinLayer.visible = false;
+        this.menuSkinLayer.addChild(this.menuSkinned);
+        this.addChild(this.gameplay, this.menu, this.menuSkinLayer);
         skins.current.bind(() => {
             // A running play keeps its skin (like its playfield); the switch shows from the next play.
             if (!this.playerChain) this.applySkin();
         });
         this.applySkin();
+        menuSkin.bind(() => this.applyMenuSkin(), true);
         this.listen();
     }
 
@@ -102,6 +126,15 @@ export class Cursor extends Container {
     private applySkin(): void {
         if (!this.skins.loaded) return;
         this.gameplay.setSkin(resolveCursorSkin(this.playerChain ?? this.skins.chain(), this.skins.default));
+    }
+
+    /** The menu skin's cursor replaces lazer's arrow when the skin has a cursor image. */
+    private applyMenuSkin(): void {
+        const skin = menuSkin.value;
+        this.menuSkinActive = !!skin?.texture('cursor') && this.skins.loaded;
+        if (!skin || !this.menuSkinActive) return;
+        this.menuSkinned.setSkin(resolveCursorSkin(new SkinChain([{ skin }, { skin: this.skins.default, samples: false }]), this.skins.default));
+        this.menuSkinned.reset();
     }
 
     /** The player owns the gameplay cursor while this is set. */
@@ -169,12 +202,34 @@ export class Cursor extends Container {
         this.menu.setShown(shown);
         this.menu.position.set(pointerX, pointerY);
         this.menu.update(dt);
+        this.updateMenuSkinned(dt, pointerX, pointerY);
 
         if (this._external) {
             this.gameplay.setShown(this.gameplayShown);
             this.gameplay.update(dt);
         }
         this.samples.length = 0;
+    }
+
+    private updateMenuSkinned(dt: number, x: number, y: number): void {
+        const active = this.menuSkinActive;
+        this.menu.renderable = !active;
+        const shown = active && this.menu.visible;
+        this.menuSkinLayer.visible = shown;
+        if (shown) {
+            const g = this.menuSkinned;
+            // Reappearing: no trail streak from where it was last seen.
+            if (!this.menuSkinShown) g.reset();
+            this.menuSkinLayer.alpha = this.menu.alpha;
+            g.playfieldScale = this.menuPlayfieldScale;
+            g.prepareTrail();
+            const s = this.menuSamples;
+            for (let i = 0; i < s.length; i += 2) g.moveTo(s[i], s[i + 1]);
+            g.moveTo(x, y);
+            g.update(dt);
+        }
+        this.menuSkinShown = shown;
+        this.menuSamples.length = 0;
     }
 
     private listen(): void {
@@ -194,7 +249,10 @@ export class Cursor extends Container {
             for (const ev of events.length ? events : [e]) {
                 const p = this.toLogical(ev.clientX, ev.clientY);
                 if (this._external && this.samples.length < 512) this.samples.push(p.x, p.y);
-                if (e.pointerType !== 'touch') this.menu.pointerMove(p.x, p.y);
+                if (e.pointerType !== 'touch') {
+                    this.menu.pointerMove(p.x, p.y);
+                    if (this.menuSkinShown && this.menuSamples.length < 512) this.menuSamples.push(p.x, p.y);
+                }
             }
         }, opts);
         // Mouse events fire for every button (pointer events only for the first one held).
@@ -203,10 +261,12 @@ export class Cursor extends Container {
             interact();
             const p = this.toLogical(e.clientX, e.clientY);
             this.menu.pointerDown(p.x, p.y);
+            if (this.menu.stateVisible) this.menuSkinned.setDownCount(heldButtons(e.buttons));
         }, opts);
         window.addEventListener('mouseup', e => {
             interact();
             this.menu.pointerUp(e.buttons !== 0);
+            this.menuSkinned.setDownCount(heldButtons(e.buttons));
         }, opts);
         window.addEventListener('pointerdown', e => {
             this.pointerInside = true;
@@ -227,6 +287,7 @@ export class Cursor extends Container {
         window.addEventListener('blur', () => {
             this.windowActive = false;
             this.menu.pointerUp(false);
+            this.menuSkinned.setDownCount(0);
         });
         window.addEventListener('focus', () => {
             this.windowActive = true;
