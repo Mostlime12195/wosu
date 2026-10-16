@@ -44,6 +44,9 @@ export function usesNewRankingLayout(version: number | undefined): boolean {
     return (version ?? 1) >= 2;
 }
 
+/** Width of the classic default skin's score digits (score-0@2x is 66×92), in stable units. */
+export const DEFAULT_DIGIT_WIDTH = 33;
+
 export interface Point {
     x: number;
     y: number;
@@ -58,10 +61,10 @@ export interface RightPoint {
 export interface LegacyRankingLayout {
     /** ranking-panel, top-left origin. */
     panel: Point;
-    /** Total score, top-left of the text; digits scaled to `scoreHeight`. */
+    /** Total score, top-left of the text; `scoreHeight` is the default font's digit width at stable's scale (see DEFAULT_DIGIT_WIDTH). */
     score: Point;
     scoreHeight: number;
-    /** Height of the hit counts, combo and accuracy digits. */
+    /** The same for the hit counts, combo and accuracy digits. */
     numberHeight: number;
     /** Centre of the first judgement image (hit300); columns and rows step by these. */
     hitImage: Point;
@@ -115,7 +118,8 @@ export function legacyRankingLayout(version: number | undefined): LegacyRankingL
     // McOsu: the score font at 1.3× (v2) / 1.05× (v1) of a 20 (score) or 17 (counts) unit digit.
     const fontScale = (v2 ? 1.3 : 1.05) * 1.6;
     const labelY = v2 ? 480 : 500;
-    const valueY = labelY + (v2 ? 52 : 48);
+    // McOsu: combo and accuracy values 269 of its units (×1.6) below the panel's top in both layouts.
+    const valueY = panel.y + 430;
     const graph = { x: 256, y: v2 ? 608 : 576 };
     return {
         panel,

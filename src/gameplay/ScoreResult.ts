@@ -44,4 +44,6 @@ export interface ScoreResult {
     /** Map length in ms (for display). */
     length: number;
     stars: number | null;
+    /** Performance points (wosu!'s estimate of the osu! formula); null/absent when unknown (older scores). */
+    pp?: number | null;
 }

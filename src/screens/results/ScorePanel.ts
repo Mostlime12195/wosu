@@ -161,6 +161,8 @@ export class ScorePanel extends UIComponent {
         this.grid([
             { title: 'ACCURACY', value: r.accuracy, format: pct, color: Colors.grayC, integer: false },
             { title: 'MAX COMBO', value: r.maxCombo, format: v => `${formatNumber(v)}x`, color: Colors.grayC, badge: r.perfect ? 'PERFECT' : null },
+            // lazer's third top statistic. wosu!'s estimate of the osu! formula; "-" when unknown.
+            { title: 'PP', value: r.pp ?? 0, format: v => (r.pp == null ? '-' : formatNumber(Math.round(v))), color: Colors.grayC },
         ], GRID_Y, 0);
         this.grid([
             { title: 'GREAT', value: r.count300, format: int, color: Colors.great },

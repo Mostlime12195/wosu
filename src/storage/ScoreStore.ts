@@ -47,6 +47,8 @@ export interface ScoreRecord {
     mechanics?: GameplayMechanics;
     /** A replay is stored for this score (see `replay`). */
     hasReplay?: boolean;
+    /** Performance points when it was set (wosu!'s estimate; absent on older scores). */
+    pp?: number;
 }
 
 /**

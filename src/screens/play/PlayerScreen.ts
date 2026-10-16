@@ -43,6 +43,7 @@ import { label } from '../../ui/text';
 import { beatmapKeyOf } from '../../storage/ScoreStore';
 import { Colors } from '../../ui/theme';
 import { ResultsScreen, skinApplause } from '../results/ResultsScreen';
+import type { LiveScoreStats } from '../../gameplay/hud/livePerformance';
 import { ratingMods } from '../select/modStars';
 import { GameplayMenu } from './GameplayMenu';
 import { LegacyGameplayMenu } from './LegacyGameplayMenu';
@@ -753,12 +754,7 @@ export class PlayerScreen extends Screen {
             counts: this.mode === 'autoplay' ? this.autoCounts : this.replay ? this.replay.counts : this.input.counts,
             // lazer's localUserPlaying (breaks and the intro count as "not playing").
             playing: this.phase === 'playing' && time >= this.playStart && !this.hud.isBreak(time) && !this.rules.finished,
-            stats: {
-                great: this.score.count300, ok: this.score.count100, meh: this.score.count50, miss: this.score.countMiss,
-                maxCombo: this.score.maxCombo, accuracy: this.score.accuracy,
-                sliderEndsJudged: this.score.sliderEndsTotal, sliderEndsHit: this.score.sliderEndsHit,
-                tickMisses: this.score.sliderTicksTotal - this.score.sliderTicksHit,
-            },
+            stats: this.liveStats(),
             hitErrors: this.rules.hitErrors,
         });
         this.stablePlay.update(this.phase === 'failed' ? this.failedAtTime : time, this.health.hp);
@@ -1358,6 +1354,28 @@ export class PlayerScreen extends Screen {
         });
     }
 
+    /** The judgements so far, as the pp calculator takes them. */
+    private liveStats(): LiveScoreStats {
+        const s = this.score;
+        return {
+            great: s.count300, ok: s.count100, meh: s.count50, miss: s.countMiss,
+            maxCombo: s.maxCombo, accuracy: s.accuracy,
+            sliderEndsJudged: s.sliderEndsTotal, sliderEndsHit: s.sliderEndsHit,
+            tickMisses: s.sliderTicksTotal - s.sliderTicksHit,
+        };
+    }
+
+    /** The play's pp (an estimate, see gameplay/performance), or null if it can't be worked out. */
+    private finalPerformance(): number | null {
+        try {
+            const pp = this.hud.performance.pp(this.liveStats());
+            return Number.isFinite(pp) ? pp : null;
+        } catch (e) {
+            console.warn('pp calculation failed', e);
+            return null;
+        }
+    }
+
     private buildResult(): ScoreResult {
         const o = this.options;
         const { set, diff } = o.selection;
@@ -1403,6 +1421,7 @@ export class PlayerScreen extends Screen {
             unstableRate: (Math.sqrt(variance) * 10) / rate,
             length: (this.beatmap.endTime - this.beatmap.startTime) / rate,
             stars: this.playedStars(),
+            pp: this.finalPerformance(),
         };
     }
 
@@ -1453,6 +1472,7 @@ export class PlayerScreen extends Screen {
                 date: r.date,
                 player: r.player,
                 mechanics: replay.mechanics,
+                ...(r.pp != null ? { pp: r.pp } : {}),
             }, data);
         } catch (e) {
             console.warn('saving score failed', e);

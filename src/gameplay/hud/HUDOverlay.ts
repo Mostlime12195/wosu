@@ -123,6 +123,11 @@ export class HUDOverlay extends Container {
     private perf: LivePerformance | null = null;
     private readonly offs: (() => void)[] = [];
 
+    /** The pp calculator for this play (the live counter's; the results screen's final figure). */
+    get performance(): LivePerformance {
+        return (this.perf ??= new LivePerformance(this.beatmap, this.opts.mods ?? NO_MODS, this.opts.mechanics ?? DEFAULT_MECHANICS));
+    }
+
     constructor(chain: SkinChain, private readonly beatmap: PlayableBeatmap, private readonly settings: GameSettings, private readonly opts: HUDOptions = { canFail: true }) {
         super();
         this.eventMode = 'none';
@@ -135,7 +140,7 @@ export class HUDOverlay extends Container {
         const hud = this;
         this.env = {
             chain, beatmap, settings, opts, legacy,
-            performance: () => (this.perf ??= new LivePerformance(beatmap, opts.mods ?? NO_MODS, opts.mechanics ?? DEFAULT_MECHANICS)),
+            performance: () => this.performance,
             beatmapInfo: () => this.beatmapInfo(),
             get leaderboardScores() {
                 return hud.scores;

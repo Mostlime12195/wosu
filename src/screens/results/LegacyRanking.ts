@@ -12,6 +12,7 @@ import { Colors, Fonts, gradeColor, gradeLabel } from '../../ui/theme';
 import { UIComponent } from '../../ui/UIComponent';
 import {
     HIT_COUNT_IMAGES,
+    DEFAULT_DIGIT_WIDTH,
     formatLegacyAccuracy,
     healthGraphPoints,
     legacyRankingLayout,
@@ -20,6 +21,9 @@ import {
     type LegacyRankingLayout,
 } from './rankingLayout';
 import { clamp01, easeOutQuint, formatDate } from './resultsMath';
+
+/** Centre height of the pp under the grade (McOsu: 400 of its 480 units). */
+const PP_Y = 640;
 
 /** Timeline (ms from entry): the screen fades in, the buttons slide in, then the grade lands. */
 const T_FADE = 300;
@@ -89,6 +93,8 @@ export class LegacyRanking extends UIComponent {
     private readonly title: Sprite | null;
     private readonly info: Container;
     private readonly grade: Container | null;
+    /** The play's pp under the grade (McOsu shows it there; stable has no pp on this screen). */
+    private readonly pp: Container | null;
     private readonly mods = new Container();
     private readonly buttons: { button: RankingButton; y: number }[] = [];
     private gradeShown = false;
@@ -111,11 +117,14 @@ export class LegacyRanking extends UIComponent {
 
         // --- score and counts (the skin's score font) -------------------------
         const font = new LegacyFont(chain, 'score');
-        const digitH = Math.max(1, (font.glyph('0')?.texture.height ?? 1) * (font.glyph('0')?.scale ?? 1));
-        const number = (text: string, x: number, y: number, height: number): void => {
+        // Stable draws the numbers at the font's own size times a fixed factor;
+        // the layout's sizes are those factors applied to the classic default
+        // digit (33 units wide), so other fonts keep their proportions
+        // (odometer-style skins line their digits up with slots in the panel).
+        const number = (text: string, x: number, y: number, size: number): void => {
             const t = new LegacySpriteText(font);
             t.text = text;
-            t.scale.set(height / digitH);
+            t.scale.set(size / DEFAULT_DIGIT_WIDTH);
             t.position.set(x, y);
             this.content.addChild(t);
         };
@@ -176,6 +185,11 @@ export class LegacyRanking extends UIComponent {
         if (this.grade) {
             this.grade.alpha = 0;
             this.content.addChild(this.grade);
+        }
+        this.pp = r.pp != null ? this.ppLabel(r.pp) : null;
+        if (this.pp) {
+            this.pp.alpha = 0;
+            this.content.addChild(this.pp);
         }
 
         // --- buttons ---------------------------------------------------------------
@@ -272,6 +286,15 @@ export class LegacyRanking extends UIComponent {
         return c;
     }
 
+    /** "123pp", centred, in wosu!'s font with a shadow so it reads on any skin. */
+    private ppLabel(pp: number): Container {
+        const c = new Container();
+        const t = label(`${Math.round(pp).toLocaleString()}pp`, { size: 44, weight: '800', color: 0xffffff, shadow: true });
+        t.anchor.set(0.5);
+        c.addChild(t);
+        return c;
+    }
+
     protected override onResize(w: number, h: number): void {
         const L = this.layout;
         const s = legacyRankingScale(w, h);
@@ -288,6 +311,7 @@ export class LegacyRanking extends UIComponent {
         }
         this.mods.position.set(wide - L.mods.right, L.mods.y);
         this.grade?.position.set(wide - L.grade.right, L.grade.y);
+        this.pp?.position.set(wide - L.grade.right, PP_Y);
         for (const { button, y } of this.buttons) button.position.set(wide - button.w, y - button.h / 2);
     }
 
@@ -303,6 +327,7 @@ export class LegacyRanking extends UIComponent {
             this.grade.alpha = k;
             this.grade.scale.set(1 + 0.4 * (1 - easeOutQuint((t - LEGACY_T_GRADE) / 500)));
         }
+        if (this.pp) this.pp.alpha = clamp01((t - LEGACY_T_GRADE - 300) / 300);
         if (t >= LEGACY_T_GRADE && !this.gradeShown) {
             this.gradeShown = true;
             this.onGradeShown?.();
