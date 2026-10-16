@@ -5,6 +5,7 @@
  * difficulty info is LRU-cached per provider (listing cards ask for the
  * same sets repeatedly as the user scrolls and switches tabs).
  */
+import { rankSearchResults } from './searchRank';
 import {
     isStandardSet,
     type ListKind,
@@ -38,6 +39,9 @@ export interface ListResult {
 
 /** Highest SayoBot offset used for "random" listings. */
 const RANDOM_OFFSET_RANGE = 20000;
+
+/** Pages fetched (and ranked) per search request. */
+const SEARCH_BATCH_PAGES = 5;
 
 export class LruCache<K, V> {
     private readonly map = new Map<K, V>();
@@ -94,11 +98,14 @@ export function standardDifficulties(diffs: readonly OnlineDifficulty[]): Online
 export class BeatmapApi {
     private readonly setCache = new LruCache<string, OnlineSet>(300);
     private readonly diffCache = new LruCache<string, OnlineDifficulty[]>(300);
+    /** Ranked search batches by request URL, so paging through one costs no requests. */
+    private readonly searchCache = new LruCache<string, { sets: OnlineSet[]; full: boolean }>(20);
     private readonly inflight = new Map<string, Shared<unknown>>();
 
     constructor(private readonly getProviders: ProviderSource, private readonly fetchImpl: FetchFn = (i, init) => fetch(i, init)) {}
 
     async list(kind: ListKind, opts: ListOptions = {}): Promise<ListResult> {
+        if (kind === 'search') return this.search(opts);
         const browse = this.getProviders().browse;
         const limit = Math.max(1, opts.limit ?? 20);
         let offset = Math.max(0, opts.offset ?? 0);
@@ -126,6 +133,40 @@ export class BeatmapApi {
         }
         if (opts.standardOnly) sets = sets.filter(isStandardSet);
         return { sets, end: browse.rawCount(json) < fetchSize, nextOffset: offset + limit };
+    }
+
+    /**
+     * Search, re-ranked: the mirrors' own order buries popular sets, so
+     * results come in batches of SEARCH_BATCH_PAGES pages that are sorted
+     * by relevance and popularity (searchRank) and paged through locally.
+     */
+    private async search(opts: ListOptions): Promise<ListResult> {
+        const browse = this.getProviders().browse;
+        const limit = Math.max(1, opts.limit ?? 20);
+        const offset = Math.max(0, opts.offset ?? 0);
+        const keyword = opts.keyword ?? '';
+        const batchSize = limit * SEARCH_BATCH_PAGES;
+        const batchStart = Math.floor(offset / batchSize) * batchSize;
+        const req: ListRequest = { kind: 'search', offset: batchStart, limit: batchSize, keyword, genre: opts.genre ?? null, lang: opts.lang ?? null };
+        const { url, fetchSize } = browse.listUrl(req);
+        let batch = this.searchCache.get(url);
+        if (!batch) {
+            const json = await this.shared(`list:${url}`, s => this.fetchJson(url, s), opts.signal);
+            const sets = browse.normalizeList(json, { ...req, fetchSize });
+            for (const s of sets) {
+                if (s.difficulties) {
+                    this.diffCache.set(`${browse.id}:${s.sid}`, s.difficulties);
+                    this.setCache.set(`${browse.id}:${s.sid}`, s);
+                }
+            }
+            batch = { sets: rankSearchResults(sets, keyword), full: browse.rawCount(json) >= fetchSize };
+            this.searchCache.set(url, batch);
+        }
+        const from = offset - batchStart;
+        let sets = batch.sets.slice(from, from + limit);
+        const end = !batch.full && from + limit >= batch.sets.length;
+        if (opts.standardOnly) sets = sets.filter(isStandardSet);
+        return { sets, end, nextOffset: offset + limit };
     }
 
     /** Set metadata with difficulties; null when the mirror doesn't know it. */
@@ -158,6 +199,7 @@ export class BeatmapApi {
     clearCache(): void {
         this.setCache.clear();
         this.diffCache.clear();
+        this.searchCache.clear();
     }
 
     private async fetchJson(url: string, signal?: AbortSignal): Promise<unknown> {
