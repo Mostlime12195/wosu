@@ -1,7 +1,9 @@
-import { Texture } from 'pixi.js';
+import { BufferImageSource, Texture } from 'pixi.js';
 import { STABLE_UI_SAMPLE_NAMES } from '../audio/stableUISounds';
 import { MOD_ICON_IMAGE_NAMES } from './modIcons';
 import { parseSkinIni, type SkinConfig } from './SkinIni';
+import type { WosuSkinExtras } from './wosu/elements';
+import type { PackedImage } from './wosu/generate';
 
 /**
  * An osu!-format skin (lazer's LegacySkin): images, sounds and a skin.ini
@@ -87,6 +89,8 @@ const NUMBERED_SAMPLES_RE = /^(comboburst-\d+|nightcore-(kick|clap|hat|finish)|a
 
 export class LegacySkin {
     readonly config: SkinConfig;
+    /** wosu!'s generated default skin: how it draws what skin.ini can't say (null for osu! skins). */
+    extras: WosuSkinExtras | null = null;
     private readonly textures = new Map<string, SkinTexture>();
     /** Decoded samples by lower-case name; null = deliberately silent (blank file). */
     private readonly samples = new Map<string, AudioBuffer | null>();
@@ -174,6 +178,25 @@ export class LegacySkin {
             }
         }
         await Promise.all(jobs);
+        return skin;
+    }
+
+    /**
+     * wosu!'s generated skin (src/skin/wosu): images drawn in code rather
+     * than read from files, already premultiplied, uploaded as they are.
+     */
+    static fromImages(config: SkinConfig, images: readonly PackedImage[], extras: WosuSkinExtras | null = null): LegacySkin {
+        const skin = new LegacySkin(config);
+        skin.extras = extras;
+        for (const i of images) {
+            const texture = new Texture({
+                // RGBA bytes: Pixi's default BGRA format would swap channels on WebGPU.
+                source: new BufferImageSource({
+                    resource: i.data, width: i.width, height: i.height, alphaMode: 'premultiplied-alpha', format: 'rgba8unorm',
+                }),
+            });
+            skin.textures.set(i.name.toLowerCase(), { texture, scale: i.scale });
+        }
         return skin;
     }
 

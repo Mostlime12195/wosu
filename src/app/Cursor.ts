@@ -78,12 +78,18 @@ export class Cursor extends Container {
     private windowActive = typeof document === 'undefined' ? true : document.hasFocus();
     private lastInputWasMouse = true;
     private lastInteraction = performance.now();
+    /** Mouse / pen samples arrive as pointerrawupdate (Chrome), so pointermove's would repeat them. */
+    private rawSamples = false;
     /** Primary-pointer samples (logical px) since the last frame, for a smooth trail. */
     private readonly samples: number[] = [];
     /** The player's skin chain while a play is up. */
     private playerChain: SkinChain | null = null;
-    /** The pointer is locked (high precision mouse): pointer events carry a frozen position. */
-    pointerLocked: () => boolean = () => false;
+    /**
+     * The virtual cursor (logical px) while the pointer is locked (high
+     * precision mouse / confine), else null: locked mouse events carry a
+     * frozen position, so the lock feeds positions through `addSample`.
+     */
+    virtualPointer: () => { readonly x: number; readonly y: number } | null = () => null;
 
     static async loadTextures(): Promise<CursorTextures> {
         const load = (name: string) =>
@@ -108,6 +114,11 @@ export class Cursor extends Container {
         skins.current.bind(() => {
             // A running play keeps its skin (like its playfield); the switch shows from the next play.
             if (!this.playerChain) this.applySkin();
+        });
+        // The default skin was redrawn (wosu! skin options): menus show it at once.
+        skins.defaultChanged.add(() => {
+            if (!this.playerChain) this.applySkin();
+            this.applyMenuSkin();
         });
         this.applySkin();
         menuSkin.bind(() => this.applyMenuSkin(), true);
@@ -189,9 +200,11 @@ export class Cursor extends Container {
         g.moveTo(x, y);
     }
 
-    /** A virtual-cursor sample (pointer lock) for the trail, in logical px. */
+    /** A virtual-cursor sample (pointer lock) for the trails and the menu cursor's drag rotation, in logical px. */
     addSample(x: number, y: number): void {
         if (this._external && this.samples.length < 512) this.samples.push(x, y);
+        this.menu.pointerMove(x, y);
+        if (this.menuSkinShown && this.menuSamples.length < 512) this.menuSamples.push(x, y);
     }
 
     /** Gameplay buttons held (keys + mouse); each new press expands the cursor. */
@@ -202,7 +215,8 @@ export class Cursor extends Container {
     update(dt: number, pointerX: number, pointerY: number): void {
         const now = performance.now();
         const idle = this.idleAllowed && now - this.lastInteraction > IDLE_MS;
-        let shown = this.menuStateVisible && this.pointerInside;
+        // A locked pointer never leaves the page (the browser may still report it leaving as the lock engages).
+        let shown = this.menuStateVisible && (this.pointerInside || this.virtualPointer() !== null);
         // lazer only applies idle / keyboard hiding while the game has focus.
         if (shown && this.windowActive) shown = !(this.hideMenuOnNonMouseInput && !this.lastInputWasMouse) && !idle;
         this.menu.stateVisible = this.menuStateVisible;
@@ -239,6 +253,22 @@ export class Cursor extends Container {
         this.menuSamples.length = 0;
     }
 
+    /** Trail and drag-rotation samples from one pointer event (its coalesced samples). */
+    private sample(e: PointerEvent): void {
+        if (!e.isPrimary) return;
+        // Locked: the virtual cursor feeds the trails through addSample.
+        if (e.pointerType === 'mouse' && this.virtualPointer()) return;
+        const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+        for (const ev of events.length ? events : [e]) {
+            const p = this.toLogical(ev.clientX, ev.clientY);
+            if (this._external && this.samples.length < 512) this.samples.push(p.x, p.y);
+            if (e.pointerType !== 'touch') {
+                this.menu.pointerMove(p.x, p.y);
+                if (this.menuSkinShown && this.menuSamples.length < 512) this.menuSamples.push(p.x, p.y);
+            }
+        }
+    }
+
     private listen(): void {
         if (typeof window === 'undefined') return;
         const opts = { passive: true } as const;
@@ -249,24 +279,21 @@ export class Cursor extends Container {
             this.pointerInside = true;
             if (e.pointerType !== 'touch') this.lastInputWasMouse = true;
             interact();
-            if (!e.isPrimary) return;
-            // Locked: the virtual cursor feeds the trail through addSample.
-            if (e.pointerType === 'mouse' && this.pointerLocked()) return;
-            const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
-            for (const ev of events.length ? events : [e]) {
-                const p = this.toLogical(ev.clientX, ev.clientY);
-                if (this._external && this.samples.length < 512) this.samples.push(p.x, p.y);
-                if (e.pointerType !== 'touch') {
-                    this.menu.pointerMove(p.x, p.y);
-                    if (this.menuSkinShown && this.menuSamples.length < 512) this.menuSamples.push(p.x, p.y);
-                }
-            }
+            // Samples come from pointerrawupdate where the browser has it (one source, no repeats).
+            if (!this.rawSamples || e.pointerType === 'touch') this.sample(e);
+        }, opts);
+        // Chrome: every sample as it arrives rather than once per displayed frame.
+        window.addEventListener('pointerrawupdate', e => {
+            const pe = e as PointerEvent;
+            if (pe.pointerType === 'touch') return;
+            this.rawSamples = true;
+            this.sample(pe);
         }, opts);
         // Mouse events fire for every button (pointer events only for the first one held).
         window.addEventListener('mousedown', e => {
             this.lastInputWasMouse = true;
             interact();
-            const p = this.toLogical(e.clientX, e.clientY);
+            const p = this.virtualPointer() ?? this.toLogical(e.clientX, e.clientY);
             this.menu.pointerDown(p.x, p.y);
             if (this.menu.stateVisible) this.menuSkinned.setDownCount(heldButtons(e.buttons));
         }, opts);

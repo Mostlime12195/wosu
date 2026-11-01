@@ -1,6 +1,7 @@
 import type { Texture } from 'pixi.js';
 import { Bindable } from '../core/Bindable';
 import { textureFromBlob } from '../graphics/textures';
+import { openFileDialog } from '../input/PointerLock';
 import type { GameSettings } from '../settings/Settings';
 import { openAppDatabase, type AppDatabase } from '../storage/idb';
 import {
@@ -105,7 +106,7 @@ export function pickImageFile(): Promise<File | null> {
         el.accept = 'image/png,image/jpeg,image/webp,image/gif,image/bmp';
         el.onchange = () => resolve(el.files?.[0] ?? null);
         el.oncancel = () => resolve(null);
-        el.click();
+        openFileDialog(el);
     });
 }
 

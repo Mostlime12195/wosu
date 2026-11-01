@@ -258,6 +258,9 @@ export class SkinEditorScreen extends Screen {
             this.offs.push(b.changed.add(() => queueMicrotask(() => this.recaptureBuiltIn())));
         }
         this.offs.push(g.skins.current.changed.add(() => this.rebuild()));
+        // The preview's dim follows Background dim live (settings can be opened over the editor).
+        this.offs.push(s.backgroundDim.changed.add(() => this.relayout()));
+        this.offs.push(g.skins.defaultChanged.add(() => this.rebuild()));
         const shiftKeys = (e: KeyboardEvent) => (this.shift = e.shiftKey);
         window.addEventListener('keydown', shiftKeys);
         window.addEventListener('keyup', shiftKeys);

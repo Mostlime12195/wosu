@@ -86,7 +86,9 @@ const MAX_FRAME = 250;
 
 /**
  * Plays the beat as song time advances: call `update` every frame while
- * the song runs (not while paused) and it fires each new half-beat once.
+ * the song runs (not while paused) and it fires each new half-beat once,
+ * with the beat's own time so the caller can start it exactly there
+ * (update may run ahead of the clock for look-ahead scheduling).
  */
 export class NightcoreBeats {
     private readonly lines: TimingPoint[];
@@ -94,7 +96,11 @@ export class NightcoreBeats {
     private lastIndex = Number.NaN;
     private lastTime = Number.NaN;
 
-    constructor(points: readonly TimingPoint[], private readonly playHats: boolean, private readonly play: (sample: NightcoreSample) => void) {
+    constructor(
+        points: readonly TimingPoint[],
+        private readonly playHats: boolean,
+        private readonly play: (sample: NightcoreSample, time: number) => void,
+    ) {
         this.lines = redLines(points);
     }
 
@@ -108,7 +114,7 @@ export class NightcoreBeats {
         const allowance = frame >= 0 && frame <= MAX_FRAME ? Math.max(LATE_ALLOWANCE, frame) : LATE_ALLOWANCE;
         if (beat.since > allowance) return;
         const tp = this.lines[beat.line];
-        for (const s of nightcoreSamples(beat.index, tp.meter, tp.omitFirstBarLine, this.playHats)) this.play(s);
+        for (const s of nightcoreSamples(beat.index, tp.meter, tp.omitFirstBarLine, this.playHats)) this.play(s, time - beat.since);
     }
 
     /** Forget the last beat (after a seek or pause). */

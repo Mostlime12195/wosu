@@ -25,6 +25,8 @@ import { DEFAULT_MECHANICS } from '../gameplay/scoring/mechanics';
 import { textureFromBlob, TextureCache, textureFromUrl } from '../graphics/textures';
 import { InputManager, KeyPriority } from '../input/InputManager';
 import { resolveBindings, type Action } from '../input/bindings';
+import { openFileDialog } from '../input/PointerLock';
+import { pointerLockWanted } from '../input/pointerLockPolicy';
 import { TextInputProxy } from '../input/TextInputProxy';
 import { BeatmapApi } from '../online/BeatmapApi';
 import { DownloadManager, type DownloadTask } from '../online/Downloader';
@@ -131,6 +133,7 @@ export class Game {
             preference: settings.renderer.value,
             resolutionScale: settings.resolutionScale.value,
             antialias: settings.antialias.value,
+            lowLatency: settings.lowLatency.value,
         });
         const loading = showBootSpinner(app);
         const skin = new Skin();
@@ -178,9 +181,9 @@ export class Game {
         // The gameplay cursor and trail come from the osu! skins (selected → default).
         this.cursor = new Cursor(cursorTextures, skins, (x, y) => app.toLogical(x, y));
         const lock = this.input.pointerLock;
-        this.cursor.pointerLocked = () => lock.locked;
+        this.cursor.virtualPointer = () => (lock.virtual ? lock.pointer : null);
         lock.moved.add((x, y) => this.cursor.addSample(x, y));
-        this.fps = new FpsCounter();
+        this.fps = new FpsCounter(app.loop.stats);
 
         installUIContext({
             popupLayer: app.popupLayer,
@@ -467,7 +470,8 @@ export class Game {
         s.uiSounds.bind(v => (this.uiSounds.enabled = v), true);
         s.uiScale.bind(v => this.app.setUiScale(v), true);
         s.resolutionScale.bind(v => this.app.setResolutionScale(v));
-        s.frameLimit.bind(v => this.app.setMaxFps(v), true);
+        s.frameLimit.bind(v => this.app.setFrameLimit(v), true);
+        s.uncappedInMenus.bind(v => this.app.loop.setUncappedInMenus(v), true);
         s.showFps.bind(v => (this.fps.visible = v), true);
         s.parallax.bind(v => (this.background.parallaxEnabled = v), true);
         s.menuCursorSize.bind(v => {
@@ -482,11 +486,15 @@ export class Game {
         s.cursorRotation.bind(v => (this.cursor.menu.rotationEnabled = v), true);
         s.hardwareCursor.bind(() => this.updateCursorVisibility(), true);
         s.gameplayCursorDuringTouch.bind(() => this.updateCursorVisibility());
-        s.menuMusic.bind(v => (this.music.enabled = v), true);
-        s.renderer.bind(v => {
-            this.settings.restartRequired.value = v !== this.app.bootPreference;
-        });
-        s.antialias.bind(() => (this.settings.restartRequired.value = true));
+        s.menuMusic.bind(v => {
+            this.music.enabled = v;
+            // Turned on in the main menu with nothing playing: start now, not on the next visit.
+            if (v && !this.music.isPlaying && this.screens.current instanceof MainMenuScreen) void this.music.playRandom();
+        }, true);
+        // Renderer, antialiasing and low latency apply to a new renderer: say so only while they differ.
+        for (const b of [s.renderer, s.antialias, s.lowLatency] as const) {
+            b.bind(() => (this.settings.restartRequired.value = this.needsRestart()));
+        }
         this.mods.value = sanitizeMods(s.selectedMods.value, s.modSettings.value);
         this.mods.bind(m => {
             s.selectedMods.value = sortedMods(m);
@@ -505,6 +513,12 @@ export class Game {
         });
     }
 
+    /** Settings that only apply to a new renderer differ from what this one was created with. */
+    private needsRestart(): boolean {
+        const s = this.settings, a = this.app;
+        return s.renderer.value !== a.bootPreference || s.lowLatency.value !== a.bootLowLatency || s.antialias.value !== a.bootAntialias;
+    }
+
     /**
      * Decide which cursor the current state provides (lazer's
      * GlobalCursorDisplay) and whether the OS cursor shows. Runs every
@@ -518,17 +532,47 @@ export class Game {
         const touch = this.input.lastPointerKind.value === 'touch';
         // lazer hides cursors until a mouse source exists, and for touch.
         const validInput = this.input.pointerSeen && !touch;
-        // Gameplay provides the cursor unless its pause/fail menu is up or a replay (autoplay) drives it.
-        const menuProvided = c.external ? !c.gameplayActive || c.replayLoaded : (screen?.showMenuCursor ?? true);
-        const hardware = s.hardwareCursor.value;
+        // Gameplay provides the cursor unless its pause/fail menu or an overlay (settings while paused) is up,
+        // or a replay (autoplay) drives it.
+        const overlayOver = c.external && this.overlays.anyOpen;
+        const menuProvided = c.external ? !c.gameplayActive || c.replayLoaded || overlayOver : (screen?.showMenuCursor ?? true);
+        // "Use system cursor in menus": the OS cursor stands in for the menu cursor, except while the
+        // pointer is locked (the browser hides it then, so the game keeps drawing its own).
+        const hardware = s.hardwareCursor.value && !this.input.pointerLock.virtual;
         c.menuStateVisible = validInput && menuProvided && !hardware;
         // Autoplay / a replay drive the gameplay cursor, but never over the pause or fail menu.
-        c.gameplayShown = c.gameplayActive &&
+        c.gameplayShown = c.gameplayActive && !overlayOver &&
             (c.replayLoaded || (this.input.pointerSeen && (!touch || s.gameplayCursorDuringTouch.value)));
         c.hideMenuOnNonMouseInput = screen?.hideMenuCursorOnNonMouseInput ?? false;
         c.idleAllowed = !this.textInput.focused;
         // The OS cursor only ever stands in for the menu cursor.
         setOsCursorVisible(hardware && menuProvided && !touch);
+    }
+
+    /**
+     * lazer's relative mouse mode and cursor confinement, through pointer
+     * lock: high precision mouse (and confine "Always") everywhere, menus
+     * included; confine "During gameplay" while the player aims. Runs every
+     * frame, so settings, screens and phases apply at once.
+     */
+    private syncPointerLock(): void {
+        const s = this.settings;
+        const lock = this.input.pointerLock;
+        const screen = this.screens.current;
+        const gameplay = screen?.showMenuCursor === false;
+        const aiming = screen?.localUserPlaying ?? false;
+        lock.raw = s.highPrecisionMouse.value;
+        lock.sensitivity = s.cursorSensitivity.value;
+        // Menus (pause menu included) only take the pointer on a click: typing in a search box or Ctrl+O
+        // shouldn't, and the Esc after it should close what opened. While aiming, Z/X take it too.
+        lock.keyGestures = aiming && !this.overlays.anyOpen;
+        lock.wanted = pointerLockWanted({
+            highPrecision: s.highPrecisionMouse.value,
+            confine: s.confineMouse.value,
+            systemCursorInMenus: s.hardwareCursor.value,
+            gameplay,
+            aiming,
+        });
     }
 
     private onLibraryChanged(): void {
@@ -559,6 +603,8 @@ export class Game {
         });
         this.screens.changed.add(() => {
             const cur = this.screens.current;
+            // Frame rates above the display's apply during gameplay (see FrameLoop).
+            this.app.loop.setGameplay(cur?.showMenuCursor === false);
             this.toolbarVisible.value = !!cur && !cur.hideToolbar;
             if (cur && !cur.allowOverlays) this.overlays.hideAll();
             this.updateCursorVisibility();
@@ -675,6 +721,7 @@ export class Game {
         this.overlays.update(dt);
         this.toolbar.update(dt);
         this.tooltips.update(dt);
+        this.syncPointerLock();
         this.updateCursorVisibility();
         this.cursor.update(dt, p.x, p.y);
         this.fps.update(dt);
@@ -727,7 +774,7 @@ export class Game {
             const files = Array.from(el.files ?? []);
             if (files.length) void this.importFiles(files);
         };
-        el.click();
+        openFileDialog(el);
     }
 
     /**
@@ -871,6 +918,8 @@ export class Game {
     }
 
     toggleFullscreen(): void {
+        // A locked pointer stays locked across the switch (Chrome; fullscreen also uses up the click's
+        // activation, so a lock let go of here couldn't come back without another click).
         try {
             if (document.fullscreenElement) void document.exitFullscreen();
             else void document.documentElement.requestFullscreen({ navigationUI: 'hide' });

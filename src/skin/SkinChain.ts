@@ -1,5 +1,6 @@
 import { SKIN_DEFAULTS, type SkinConfig } from './SkinIni';
 import type { LegacySkin, SkinTexture } from './LegacySkin';
+import type { WosuSkinExtras } from './wosu/elements';
 
 /** One source in a chain, with what it may provide (lazer's beatmap skin toggles). */
 export interface SkinLayer {
@@ -67,6 +68,20 @@ export class SkinChain {
             if (v !== undefined && !(Array.isArray(v) && v.length === 0)) return v as Resolved[K];
         }
         return SKIN_DEFAULTS[key];
+    }
+
+    /**
+     * The extras of wosu!'s generated skin (slider body profile, trail)
+     * when it is the skin in effect: no imported skin above it. Beatmap
+     * skins (layers that bring their own config) don't count.
+     */
+    wosuExtras(): WosuSkinExtras | null {
+        for (const l of this.layers) {
+            if (!l.skin) continue;
+            if (l.skin.extras) return l.skin.extras;
+            if (l.config === undefined) return null;
+        }
+        return null;
     }
 
     /** The skin's name of a font glyph ("score" + "3" → score-3, "." → score-dot). */

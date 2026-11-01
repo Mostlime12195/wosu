@@ -12,6 +12,7 @@ export function inputSection(game: Game): SectionDef {
     const s = game.settings;
     const sensitivityRow = sliderRow('Cursor sensitivity', s.cursorSensitivity, sensitivity, {
         keywords: 'speed velocity mouse raw',
+        description: 'Applies everywhere, menus included, while High precision mouse is on (a browser can only scale the cursor while it holds the pointer). At 1x one mouse count moves the cursor one screen pixel, like lazer and stable raw input.',
     });
     // lazer disables sensitivity unless high precision (relative) mode is on.
     s.highPrecisionMouse.bind(on => ((sensitivityRow.control as Slider).enabled = on), true);
@@ -33,15 +34,17 @@ export function inputSection(game: Game): SectionDef {
                 rows: [
                     checkboxRow('High precision mouse', s.highPrecisionMouse, {
                         keywords: 'raw input relative cursor sensitivity speed velocity pointer lock',
-                        description: 'Attempts to bypass any operating system mouse acceleration. During gameplay the pointer is locked to the game; Esc pauses and frees it. Tablets and touch keep absolute positioning.',
+                        description: 'Bypasses operating system mouse acceleration (raw input where the browser has it) and enables Cursor sensitivity. The game takes the pointer on your next click, in menus too, and draws its own cursor. Esc frees it (and pauses gameplay); click to take it back. Tablets and touch keep absolute positioning.',
+                        tooltip: 'Uses the browser\'s pointer lock, like lazer\'s relative mouse mode. In fullscreen, hold Esc to leave.',
                     }),
                     sensitivityRow,
                     dropdownRow<ConfineMouseMode>('Confine mouse cursor to window', [
                         { value: 'never', label: 'Never' },
                         { value: 'duringGameplay', label: 'During Gameplay' },
+                        { value: 'always', label: 'Always' },
                     ], s.confineMouse, {
                         keywords: 'pointer lock capture monitor',
-                        description: 'Keeps the cursor inside the game while playing (pointer lock). High precision mouse always does.',
+                        description: 'Keeps the cursor inside the game (pointer lock), moving exactly like your system cursor. High precision mouse always confines it.',
                     }),
                     checkboxRow('Mouse buttons in gameplay', s.mouseButtons, { keywords: 'click m1 m2', description: 'Turn off to only hit with the keyboard.' }),
                     checkboxRow('Mouse wheel changes volume in gameplay', s.wheelVolumeInGameplay, { keywords: 'scroll' }),

@@ -28,6 +28,11 @@ export abstract class Screen extends UIComponent {
     /** Overlays (settings, listing) may be opened over this screen. */
     readonly allowOverlays: boolean = true;
 
+    /** lazer's LocalUserPlaying: the player is aiming (what confining the mouse "during gameplay" means). */
+    get localUserPlaying(): boolean {
+        return false;
+    }
+
     private keyOff: (() => void) | null = null;
 
     get isCurrent(): boolean {

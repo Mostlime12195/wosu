@@ -28,9 +28,11 @@ export interface DrawableContext {
     readonly hidden: boolean;
     /** Hidden hides approach circles (lazer's IHidesApproachCircles), also with "Only fade approach circles". */
     readonly hideApproachCircles: boolean;
-    readonly hideNumbers: boolean;
-    readonly snakingIn: boolean;
-    readonly snakingOut: boolean;
+    /** Live: objects created from then on follow it. */
+    hideNumbers: boolean;
+    /** Live (Playfield.setHitObjectOptions). */
+    snakingIn: boolean;
+    snakingOut: boolean;
     /** Device pixels per osu! pixel (slider coverage texture resolution). */
     pixelsPerUnit: number;
     /** "Kiai flashes on hit objects" (off by default; stable has no such effect). */
@@ -39,7 +41,29 @@ export interface DrawableContext {
     kiaiFlash(time: number): number;
     /** Opacity (0..LEGACY_KIAI_FLASH_OPACITY) of osu!stable's kiai flash on skinned circles at `time` (see makeLegacyKiaiFlash). */
     legacyKiaiFlash(time: number): number;
+    /** "Instant fade hit circles" (live): see hitAnimationShown. */
+    instafadeCircles: boolean;
+    /** "Instant fade sliders" (live): see sliderShown. */
+    instafadeSliders: boolean;
 }
+
+/**
+ * Instafade, as neosu (McOsu's successor) has it: its `instafade` cvar
+ * ("don't draw hitcircle fadeout animations") drops the hit animation of
+ * hit circles and of slider head, repeat and tail circles; its
+ * `instafade_sliders` ("don't draw slider fadeout animations") drops the
+ * slider's fade-out once it ends. osu!stable players fake the first with
+ * skins whose hitcircle images are blank and whose combo numbers carry
+ * the circle (numbers vanish within 60 ms of a hit). Judgements, hit
+ * lighting and misses are untouched: a missed object still fades out, so
+ * the miss stays readable.
+ *
+ * Whether a circle piece hit at `hitAt` still draws its hit animation at `time`.
+ */
+export const hitAnimationShown = (time: number, hitAt: number, instafade: boolean): boolean => !instafade || time < hitAt;
+
+/** Whether a slider ending at `endTime` is still drawn at `time` (with instafade sliders, nothing of it once it ends). */
+export const sliderShown = (time: number, endTime: number, instafade: boolean): boolean => !instafade || time <= endTime;
 
 /** lazer's KiaiFlash: flash_opacity, fade_length (and EarlyActivationMilliseconds). */
 export const KIAI_FLASH_OPACITY = 0.25;
@@ -264,7 +288,7 @@ export function comboNumber(chain: SkinChain, n: number, radius: number): Contai
 /** lazer's LegacyMainCirclePiece maximum size for circle sprites: two circle diameters. */
 const CIRCLE_MAX = OBJECT_SIZE * 2;
 /** LegacyMainCirclePiece's legacy_fade_duration. */
-const CIRCLE_HIT_FADE = 240;
+export const CIRCLE_HIT_FADE = 240;
 
 /**
  * LegacyMainCirclePiece's lookup (see CirclePiece). `blank`: the body is a

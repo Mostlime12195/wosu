@@ -101,9 +101,9 @@ describe('MusicTrack', () => {
         vi.restoreAllMocks();
     });
 
-    it('decodes with the ogg start offset and reports duration', async () => {
+    it('decodes Ogg with no start offset and reports duration', async () => {
         const { track } = await makeTrack({ duration: 120 });
-        expect(track.startOffsetMs).toBe(19);
+        expect(track.startOffsetMs).toBe(0);
         expect(track.duration).toBe(120000);
         expect(track.isPlaying).toBe(false);
     });
@@ -191,16 +191,61 @@ describe('MusicTrack', () => {
         const before = track.currentTime;
         await track.setRate(1.5, false);
         expect(track.isPlaying).toBe(true);
-        // the latency term changes with rate; buffer position must not jump
-        expect(track.currentTime + track.posoffsetMs).toBeCloseTo(before + 19, 6);
+        expect(track.currentTime).toBeCloseTo(before, 6);
         track.stop();
     });
 
-    it('output latency joins the offset, scaled to song time by the rate', async () => {
-        const { track } = await makeTrack({ outputLatency: 0.02, baseLatency: 0.005 });
-        expect(track.posoffsetMs).toBeCloseTo(19 + 25, 6);
+    it('is the rendered position: output latency is not subtracted (hitsounds share it)', async () => {
+        const { ctx, track } = await makeTrack({ outputLatency: 0.02, baseLatency: 0.005 });
+        expect(track.posoffsetMs).toBe(0);
+        track.play();
+        ctx.currentTime += 1;
+        expect(track.currentTime).toBeCloseTo(1000, 6);
         await track.setRate(1.5, true);
-        expect(track.posoffsetMs).toBeCloseTo(19 + 25 * 1.5, 6);
+        expect(track.posoffsetMs).toBe(0);
+        track.stop();
+    });
+
+    it('maps song time to the context time the music renders it, ignoring user offsets', async () => {
+        const { ctx, track } = await makeTrack();
+        expect(track.contextTimeAt(0)).toBeNaN();
+        track.play(2000); // lead-in: song time 0 starts 2 s from now
+        expect(track.contextTimeAt(0)).toBeCloseTo(102, 9);
+        expect(track.contextTimeAt(500)).toBeCloseTo(102.5, 9);
+        track.userOffsetMs = -70; // moves judgement, not the music's own sounds
+        expect(track.contextTimeAt(500)).toBeCloseTo(102.5, 9);
+        track.userOffsetMs = 0;
+        ctx.currentTime += 3;
+        expect(track.contextTimeAt(track.currentTime)).toBeCloseTo(ctx.currentTime, 9);
+        await track.setRate(1.5, false);
+        const now = ctx.currentTime;
+        const at = track.currentTime;
+        expect(track.contextTimeAt(at + 1500)).toBeCloseTo(now + 1, 9);
+        track.stop();
+    });
+
+    it('changes its timeline id whenever the song-to-context mapping does', async () => {
+        const { ctx, track } = await makeTrack();
+        const ids = [track.timelineId];
+        track.play();
+        ids.push(track.timelineId);
+        ctx.currentTime += 1;
+        expect(track.timelineId).toBe(ids[1]);
+        track.pause();
+        ids.push(track.timelineId);
+        track.play();
+        ids.push(track.timelineId);
+        track.seek(5000);
+        ids.push(track.timelineId);
+        expect(new Set(ids).size).toBe(ids.length);
+        track.stop();
+    });
+
+    it('applies the MP3 start offset for this browser\'s decoder', async () => {
+        const { track } = await makeTrack({ filename: 'song.mp3' });
+        // The stub decodes silence, so the decoder probe falls back to 529 samples:
+        // an untagged stream then needs no offset.
+        expect(track.startOffsetMs).toBe(0);
     });
 
     it('positive user offset delays song time', async () => {

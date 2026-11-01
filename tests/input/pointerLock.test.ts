@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PointerLockController, type PointerLockDocument, type PointerLockTarget } from '../../src/input/PointerLock';
+import { movementScale, PointerLockController, setVirtualPointerSource, virtualCanvasPoint, type PointerLockDocument, type PointerLockTarget } from '../../src/input/PointerLock';
 import { isMovementSpike, movementSteps, RelativePointer, SENSITIVITY_MAX, SENSITIVITY_MIN } from '../../src/input/RelativePointer';
 
 describe('RelativePointer (lazer relative mode)', () => {
@@ -127,7 +127,7 @@ class FakeTarget implements PointerLockTarget {
     }
 }
 
-function setup(opts: { activation?: boolean; uiScale?: number } = {}) {
+function setup(opts: { activation?: boolean; uiScale?: number; dpr?: number } = {}) {
     const doc = new FakeDoc();
     const win = new EventTarget();
     const target = new FakeTarget(doc);
@@ -140,7 +140,7 @@ function setup(opts: { activation?: boolean; uiScale?: number } = {}) {
         userActivation: activation,
         now: () => now,
         toLogical: (x, y) => ({ x: x / uiScale, y: y / uiScale }),
-        view: () => ({ width: 1000, height: 800, uiScale }),
+        view: () => ({ width: 1000, height: 800, uiScale, dpr: opts.dpr ?? 1 }),
     });
     const pointer = (type: string, o: Record<string, unknown> = {}) =>
         win.dispatchEvent(Object.assign(new Event(type), { pointerType: 'mouse', isPrimary: true, clientX: 0, clientY: 0, movementX: 0, movementY: 0, ...o }));
@@ -338,5 +338,193 @@ describe('PointerLockController where locking never works', () => {
         await vi.advanceTimersByTimeAsync(10);
         expect(t.target.calls.length).toBe(9);
         vi.useRealTimers();
+    });
+});
+
+describe('movement scale', () => {
+    it('moves one device pixel per raw count at 1x (lazer / stable raw input)', () => {
+        expect(movementScale({ raw: true, rawActive: true, sensitivity: 1, uiScale: 1, dpr: 2 })).toBe(0.5);
+        expect(movementScale({ raw: true, rawActive: true, sensitivity: 3, uiScale: 1.5, dpr: 2 })).toBe(1);
+    });
+
+    it('scales the OS cursor motion (CSS px) by the sensitivity without raw input', () => {
+        expect(movementScale({ raw: true, rawActive: false, sensitivity: 2, uiScale: 1, dpr: 2 })).toBe(2);
+        expect(movementScale({ raw: true, rawActive: false, sensitivity: 2, uiScale: 2, dpr: 1 })).toBe(1);
+    });
+
+    it('follows the OS cursor 1:1 when only confining', () => {
+        expect(movementScale({ raw: false, rawActive: false, sensitivity: 5, uiScale: 2, dpr: 2 })).toBe(0.5);
+        expect(movementScale({ raw: false, rawActive: false, sensitivity: 5, uiScale: 0, dpr: 0 })).toBe(1);
+    });
+});
+
+describe('PointerLockController everywhere (menus included)', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        setVirtualPointerSource(null);
+    });
+
+    it('applies the sensitivity per device pixel with raw input', async () => {
+        const t = setup({ dpr: 2 });
+        t.pointer('pointermove', { clientX: 500, clientY: 400 });
+        t.lock.raw = true;
+        t.lock.sensitivity = 2;
+        t.lock.wanted = true;
+        await t.flush();
+        t.pointer('pointermove', { movementX: 10, movementY: -4 });
+        expect(t.lock.pointer.x).toBe(510);
+        expect(t.lock.pointer.y).toBe(396);
+    });
+
+    it('exposes the virtual cursor in canvas CSS px for Pixi and DOM listeners', async () => {
+        const t = setup({ uiScale: 2 });
+        setVirtualPointerSource(t.lock);
+        t.pointer('pointermove', { clientX: 300, clientY: 200 });
+        expect(t.lock.virtualClient()).toBeNull();
+        t.lock.wanted = true;
+        await t.flush();
+        expect(t.lock.virtual).toBe(true);
+        t.pointer('pointermove', { movementX: 20, movementY: 0 });
+        // Logical (150 + 10, 100) × UI scale 2.
+        expect(t.lock.virtualClient()).toEqual({ x: 320, y: 200 });
+        expect(virtualCanvasPoint({ pointerType: 'mouse' })).toEqual({ x: 320, y: 200 });
+        expect(virtualCanvasPoint({ pointerType: 'pen' })).toBeNull();
+        // A pen takes over: positions are absolute again at once, before the lock is even gone.
+        t.pointer('pointerdown', { pointerType: 'pen' });
+        expect(t.lock.virtual).toBe(false);
+        expect(virtualCanvasPoint({ pointerType: 'mouse' })).toBeNull();
+    });
+
+    it('lets go while suspended and comes back without a new gesture', async () => {
+        const t = setup();
+        const lost = vi.fn();
+        t.lock.lost.add(lost);
+        t.lock.wanted = true;
+        await t.flush();
+        expect(t.lock.locked).toBe(true);
+        t.pointer('pointermove', { movementX: 25, movementY: 0 });
+        const resume = t.lock.suspend();
+        await t.flush();
+        expect(t.lock.locked).toBe(false);
+        expect(lost).not.toHaveBeenCalled();
+        // The file dialog's click is long gone.
+        t.activation.isActive = false;
+        resume();
+        resume(); // idempotent
+        await t.flush();
+        expect(t.lock.locked).toBe(true);
+        expect(t.target.calls.length).toBe(2);
+        // Carries on from the virtual cursor, not the frozen OS position.
+        expect(t.lock.pointer.x).toBe(525);
+    });
+
+    it('tries the gesture-less relock only once, then waits for a click', async () => {
+        vi.useFakeTimers();
+        const t = setup();
+        t.lock.wanted = true;
+        await vi.advanceTimersByTimeAsync(10);
+        const resume = t.lock.suspend();
+        await vi.advanceTimersByTimeAsync(10);
+        t.activation.isActive = false;
+        // Chrome refuses it.
+        t.target.behaviour = ['refuse'];
+        resume();
+        await vi.advanceTimersByTimeAsync(5000);
+        t.win.dispatchEvent(new Event('focus'));
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(t.target.calls.length).toBe(2);
+        expect(t.lock.locked).toBe(false);
+        t.activation.isActive = true;
+        t.pointer('pointerdown');
+        await vi.advanceTimersByTimeAsync(10);
+        expect(t.lock.locked).toBe(true);
+    });
+
+    it("drops Chrome's jump on the first locked sample only", async () => {
+        const t = setup();
+        t.pointer('pointermove', { clientX: 500, clientY: 400 });
+        t.lock.wanted = true;
+        await t.flush();
+        t.pointer('pointermove', { movementX: 282, movementY: 312 });
+        expect(t.lock.pointer.x).toBe(500);
+        t.pointer('pointermove', { movementX: 100, movementY: 0 });
+        expect(t.lock.pointer.x).toBe(600);
+    });
+
+    it('takes locked movement from pointerrawupdate alone once it arrives (never twice)', async () => {
+        const t = setup();
+        t.pointer('pointermove', { clientX: 500, clientY: 400 });
+        t.lock.wanted = true;
+        await t.flush();
+        // No rawupdate yet: pointermove moves it.
+        t.pointer('pointermove', { movementX: 10, movementY: 0 });
+        expect(t.lock.pointer.x).toBe(510);
+        t.pointer('pointerrawupdate', { movementX: 4, movementY: 0 });
+        t.pointer('pointerrawupdate', { movementX: 6, movementY: 0 });
+        // The frame's pointermove reports the same motion again.
+        t.pointer('pointermove', { movementX: 10, movementY: 0 });
+        expect(t.lock.pointer.x).toBe(520);
+        // Unlocked rawupdates move nothing.
+        t.lock.wanted = false;
+        await t.flush();
+        t.pointer('pointerrawupdate', { movementX: 50, movementY: 0 });
+        expect(t.lock.pointer.x).toBe(520);
+    });
+
+    it('needs a new click after the user leaves with Esc', async () => {
+        const t = setup();
+        t.lock.wanted = true;
+        await t.flush();
+        t.activation.isActive = false;
+        t.doc.setLock(null);
+        await t.flush();
+        t.win.dispatchEvent(new Event('focus'));
+        await t.flush();
+        expect(t.lock.locked).toBe(false);
+        expect(t.target.calls.length).toBe(1);
+        t.activation.isActive = true;
+        t.pointer('pointerdown', { clientX: 10, clientY: 20 });
+        await t.flush();
+        expect(t.lock.locked).toBe(true);
+    });
+
+    it('only takes the pointer on a click in menus (keyGestures off)', async () => {
+        const t = setup({ activation: false });
+        t.lock.keyGestures = false;
+        t.lock.wanted = true;
+        t.activation.isActive = true;
+        t.key('KeyA');
+        await t.flush();
+        expect(t.target.calls).toEqual([]);
+        t.pointer('pointerdown');
+        await t.flush();
+        expect(t.lock.locked).toBe(true);
+    });
+
+    it('relocks in the new mode when high precision is toggled while locked', async () => {
+        const t = setup();
+        t.lock.wanted = true;
+        await t.flush();
+        expect(t.target.calls).toEqual([undefined]);
+        t.activation.isActive = false;
+        t.lock.raw = true;
+        await t.flush();
+        await t.flush();
+        expect(t.target.calls).toEqual([undefined, true]);
+        expect(t.lock.locked).toBe(true);
+        expect(t.lock.rawActive).toBe(true);
+    });
+
+    it('waits for focus before asking', async () => {
+        const t = setup();
+        let focused = false;
+        t.doc.hasFocus = () => focused;
+        t.lock.wanted = true;
+        await t.flush();
+        expect(t.target.calls).toEqual([]);
+        focused = true;
+        t.win.dispatchEvent(new Event('focus'));
+        await t.flush();
+        expect(t.lock.locked).toBe(true);
     });
 });

@@ -78,7 +78,7 @@ describe('SampleBank', () => {
         await bank.load('/h/');
         const played: string[] = [];
         const orig = bank.play.bind(bank);
-        bank.play = (name, volume, opts) => { played.push(name); orig(name, volume, opts); };
+        bank.play = (name, volume, opts) => { played.push(name); return orig(name, volume, opts); };
         bank.playHit(2 | 8, 2, 3, 0.7, 0.2);
         expect(played).toEqual(['soft-hitnormal', 'drum-hitwhistle', 'drum-hitclap']);
         // hitsounds are never rate-shifted

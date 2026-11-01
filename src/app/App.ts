@@ -2,6 +2,7 @@ import { Application, Container, type Renderer } from 'pixi.js';
 import { Signal } from '../core/Signal';
 import { tweener } from '../core/Tweener';
 import { frame, frameStats, scene } from '../core/frame';
+import { FrameLoop } from './FrameLoop';
 
 export type RendererPreference = 'auto' | 'webgl' | 'webgpu';
 export type RendererKind = 'webgl' | 'webgpu';
@@ -12,6 +13,8 @@ export interface AppOptions {
     /** Fraction of device pixel ratio to render at (1 = native). */
     resolutionScale: number;
     antialias: boolean;
+    /** Ask for a desynchronized (low latency) WebGL canvas. */
+    lowLatency: boolean;
 }
 
 /**
@@ -48,6 +51,16 @@ export class App {
     fellBackFrom: RendererKind | null = null;
     /** The renderer setting this session started with. */
     bootPreference: RendererPreference = 'auto';
+    /** The low latency setting this session started with. */
+    bootLowLatency = false;
+    /** Antialiasing the renderer was created with (changing it needs a restart). */
+    bootAntialias = true;
+    /** The canvas is desynchronized: frames reach the screen without waiting for the compositor. */
+    lowLatency = false;
+    /** Low latency was asked for, but this browser / OS can't desynchronize a WebGL canvas. */
+    lowLatencyUnsupported = false;
+    /** Runs update and draw (requestAnimationFrame, or faster for the frame limiter). */
+    loop!: FrameLoop;
 
     get renderer(): Renderer {
         return this.pixi.renderer;
@@ -63,7 +76,12 @@ export class App {
         // Windows, where WebGL is translated to Direct3D) WebGL blocks the main thread
         // enough to delay input and hitsounds. It falls back to WebGL quietly.
         this.bootPreference = opts.preference;
-        const order: RendererKind[] = opts.preference === 'webgl' ? ['webgl'] : ['webgpu', 'webgl'];
+        this.bootAntialias = opts.antialias;
+        this.bootLowLatency = opts.lowLatency;
+        // Low latency needs WebGL: WebGPU canvases have no desynchronized mode.
+        const desync = opts.lowLatency ? createLowLatencyContext(opts.antialias) : null;
+        this.lowLatencyUnsupported = opts.lowLatency && !desync;
+        const order: RendererKind[] = desync || opts.preference === 'webgl' ? ['webgl'] : ['webgpu', 'webgl'];
         const explicit = opts.preference === 'webgpu';
         let lastError: unknown = null;
         for (const kind of order) {
@@ -85,8 +103,11 @@ export class App {
                     preserveDrawingBuffer: false,
                     // Pixi's own resize plugin is bypassed; we resize in
                     // `applyResize` so UI scaling and DPR changes stay in sync.
-                    autoStart: true,
+                    // Its ticker is too: the FrameLoop drives update and render.
+                    autoStart: false,
+                    ...(desync && kind === 'webgl' ? { canvas: desync.canvas, context: desync.context } : {}),
                 });
+                this.lowLatency = !!desync && this.pixi.renderer.name === 'webgl';
                 this.rendererKind = this.pixi.renderer.name === 'webgpu' ? 'webgpu' : 'webgl';
                 if (explicit && kind === 'webgpu' && this.rendererKind !== 'webgpu') this.fellBackFrom = 'webgpu';
                 lastError = null;
@@ -124,7 +145,10 @@ export class App {
         this.screenLayer.isRenderGroup = true;
         this.overlayLayer.isRenderGroup = true;
 
-        this.pixi.ticker.add(t => this.tick(t.deltaMS));
+        this.pixi.ticker.stop();
+        this.loop = new FrameLoop({ update: dt => this.tick(dt), draw: () => this.draw(), ready: () => this.gpuCaughtUp() });
+        this.loop.setLowLatency(this.lowLatency);
+        this.loop.start();
 
         const queue = () => this.queueResize();
         window.addEventListener('resize', queue);
@@ -144,8 +168,9 @@ export class App {
         this.queueResize();
     }
 
-    setMaxFps(fps: number): void {
-        this.pixi.ticker.maxFPS = fps > 0 ? fps : 0;
+    /** Settings.frameLimit (VSync, a multiple of the refresh rate, unlimited or a fixed rate). */
+    setFrameLimit(limit: number): void {
+        this.loop.setLimit(limit);
     }
 
     private targetResolution(): number {
@@ -193,6 +218,40 @@ export class App {
         }
     }
 
+    private draw(): void {
+        this.pixi.render();
+        this.trackGpuWork();
+    }
+
+    // Above the refresh rate the loop draws as fast as it's allowed, and nothing in the browser
+    // stops it queueing frames faster than the GPU finishes them (latency would pile up), so it
+    // only draws once the GPU has caught up with the last frame.
+    private gpuFence: WebGLSync | null = null;
+    private gpuFrames = 0;
+
+    private trackGpuWork(): void {
+        if (this.loop.currentPlan.driver !== 'timer') return;
+        const r = this.renderer as Renderer & { gl?: WebGL2RenderingContext; gpu?: { device: { queue: { onSubmittedWorkDone(): Promise<void> } } } };
+        if (r.gpu) {
+            this.gpuFrames++;
+            r.gpu.device.queue.onSubmittedWorkDone().then(() => this.gpuFrames--, () => this.gpuFrames--);
+        } else if (r.gl && typeof r.gl.fenceSync === 'function') {
+            if (this.gpuFence) r.gl.deleteSync(this.gpuFence);
+            this.gpuFence = r.gl.fenceSync(r.gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+            r.gl.flush();
+        }
+    }
+
+    private gpuCaughtUp(): boolean {
+        if (this.gpuFrames >= 1) return false;
+        const gl = (this.renderer as Renderer & { gl?: WebGL2RenderingContext }).gl;
+        if (!this.gpuFence || !gl) return true;
+        if (gl.getSyncParameter(this.gpuFence, gl.SYNC_STATUS) !== gl.SIGNALED) return false;
+        gl.deleteSync(this.gpuFence);
+        this.gpuFence = null;
+        return true;
+    }
+
     private tick(dt: number): void {
         // Clamp huge gaps (tab switch, breakpoint) so animations don't jump.
         const step = Math.min(dt, 100);
@@ -207,6 +266,36 @@ export class App {
     toLogical(clientX: number, clientY: number): { x: number; y: number } {
         const rect = this.pixi.canvas.getBoundingClientRect();
         return { x: (clientX - rect.left) / this.uiScale, y: (clientY - rect.top) / this.uiScale };
+    }
+}
+
+/**
+ * A WebGL2 context with the `desynchronized` hint, or null where the
+ * browser ignores it. Chrome / Edge honour it on Windows, ChromeOS and
+ * Android: the canvas then skips the compositor and frames show as soon
+ * as they're drawn (front-buffer or overlay presentation, which can tear).
+ */
+function createLowLatencyContext(antialias: boolean): { canvas: HTMLCanvasElement; context: WebGL2RenderingContext } | null {
+    try {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('webgl2', {
+            // What Pixi would ask for itself (opaque background, stencil for masks).
+            alpha: false,
+            premultipliedAlpha: true,
+            antialias,
+            stencil: true,
+            preserveDrawingBuffer: false,
+            powerPreference: 'high-performance',
+            desynchronized: true,
+        });
+        if (!context) return null;
+        if (!context.getContextAttributes()?.desynchronized) {
+            context.getExtension('WEBGL_lose_context')?.loseContext();
+            return null;
+        }
+        return { canvas, context };
+    } catch {
+        return null;
     }
 }
 

@@ -209,7 +209,9 @@ describe('UISounds', () => {
     });
 
     it('loads the menus\' sounds first and the rest later, each once', async () => {
-        const { engine } = makeEngine();
+        const { engine, ctx } = makeEngine();
+        // UISounds decodes with the promise form.
+        (ctx as unknown as { decodeAudioData: () => Promise<unknown> }).decodeAudioData = async () => ({});
         const fetched: string[] = [];
         const ui = new UISounds(engine, async url => {
             fetched.push(url);

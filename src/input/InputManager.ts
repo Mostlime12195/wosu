@@ -2,7 +2,7 @@ import { Bindable } from '../core/Bindable';
 import { Signal } from '../core/Signal';
 import type { App } from '../app/App';
 import { actionFor, bindingFromEvent, DEFAULT_BINDINGS, type Action, type Bindings } from './bindings';
-import { PointerLockController, type PointerLockTarget } from './PointerLock';
+import { PointerLockController, setVirtualPointerSource, type PointerLockTarget } from './PointerLock';
 import type { TextInputProxy } from './TextInputProxy';
 
 export type KeyHandler = (e: KeyboardEvent, action: Action | null) => boolean;
@@ -45,8 +45,12 @@ export class InputManager {
     pointerSeen = false;
     /** Effective global action bindings (Game keeps them in sync with the settings). */
     bindings: Bindings = DEFAULT_BINDINGS;
-    /** Gameplay pointer lock (high precision mouse / confine); while locked, mouse positions are its virtual cursor. */
+    /** Pointer lock (high precision mouse / confine); while `virtual`, mouse positions are its virtual cursor. */
     readonly pointerLock: PointerLockController;
+    /** Fullscreen with Esc held by the Keyboard Lock API: Esc reaches the game and no longer drops the pointer lock. */
+    private escapeHeld = false;
+    /** When an Esc was last taken as "free the pointer". */
+    private escapeFreedAt = -Infinity;
 
     private entries: Entry[] = [];
     private order = 0;
@@ -59,10 +63,33 @@ export class InputManager {
             userActivation: (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation ?? null,
             now: () => performance.now(),
             toLogical: (x, y) => app.toLogical(x, y),
-            view: () => ({ width: app.width, height: app.height, uiScale: app.uiScale }),
+            view: () => ({ width: app.width, height: app.height, uiScale: app.uiScale, dpr: window.devicePixelRatio || 1 }),
         });
+        const lock = this.pointerLock;
+        setVirtualPointerSource(lock);
+        // Pixi hit-tests (hover, click, drag, wheel) at the virtual cursor while the pointer is locked:
+        // a locked pointer's client position stays frozen where the lock began.
+        const events = app.renderer.events;
+        const mapPosition = events.mapPositionToPoint.bind(events);
+        events.mapPositionToPoint = (point, x, y) => {
+            const v = lock.virtualClient();
+            if (!v) return mapPosition(point, x, y);
+            point.x = v.x;
+            point.y = v.y;
+        };
+        // lazer's Esc never leaves the game's fullscreen: hold Esc instead (Chromium's Keyboard Lock).
+        document.addEventListener('fullscreenchange', () => this.holdEscapeInFullscreen());
         const opts = { passive: true } as const;
         window.addEventListener('pointermove', e => this.onPointer(e), opts);
+        // Chrome: every mouse sample as it arrives, so frames drawn above the refresh rate (low latency
+        // mode) put the cursor at a fresh position. Absolute positions: nothing is counted twice.
+        window.addEventListener('pointerrawupdate', e => {
+            const pe = e as PointerEvent;
+            if (!pe.isPrimary || pe.pointerType !== this.pointer.kind) return;
+            const p = lock.virtual && pe.pointerType === 'mouse' ? lock.pointer : app.toLogical(pe.clientX, pe.clientY);
+            this.pointer.x = p.x;
+            this.pointer.y = p.y;
+        }, opts);
         window.addEventListener('pointerdown', e => {
             this.onPointer(e);
             this.pointer.down = true;
@@ -97,6 +124,16 @@ export class InputManager {
             const i = this.entries.indexOf(entry);
             if (i !== -1) this.entries.splice(i, 1);
         };
+    }
+
+    /** Run `fn` (opening a link in a new tab…) with the pointer let go; it comes back when the game has focus again. */
+    withPointerReleased(fn: () => void): void {
+        const resume = this.pointerLock.suspend();
+        try {
+            fn();
+        } finally {
+            resume();
+        }
     }
 
     isKeyDown(code: string): boolean {
@@ -144,7 +181,7 @@ export class InputManager {
         this.pointerSeen = true;
         const lock = this.pointerLock;
         // A locked pointer's client position is frozen; the virtual cursor stands in.
-        const p = lock.locked && e.pointerType === 'mouse' ? lock.pointer : this.app.toLogical(e.clientX, e.clientY);
+        const p = lock.virtual && e.pointerType === 'mouse' ? lock.pointer : this.app.toLogical(e.clientX, e.clientY);
         this.pointer.x = p.x;
         this.pointer.y = p.y;
         this.pointer.clientX = e.clientX;
@@ -156,6 +193,12 @@ export class InputManager {
     }
 
     private onKeyDown(e: KeyboardEvent): void {
+        // The Esc that frees a locked pointer (what the browser's banner asks for) only does that:
+        // it mustn't also go back a screen or press a menu's button.
+        if (e.code === 'Escape' && this.escapeFreesPointer()) {
+            e.preventDefault();
+            return;
+        }
         if (this.textInput.focused && isTextEditingKey(e)) {
             this.keysDown.add(e.code);
             return;
@@ -168,6 +211,28 @@ export class InputManager {
         }
         // Keep focus inside the canvas; Tab would otherwise escape it.
         if (e.code === 'Tab') e.preventDefault();
+    }
+
+    /**
+     * Whether this Esc is the one that frees (or just freed) a locked
+     * pointer: one press per lock lost, whichever of the key and the
+     * browser's unlock comes first.
+     */
+    private escapeFreesPointer(): boolean {
+        const lock = this.pointerLock;
+        const now = performance.now();
+        const held = this.escapeHeld && !!document.fullscreenElement;
+        const free = (lock.locked && !held) || (lock.lostWithin(ESCAPE_UNLOCK_MS) && this.escapeFreedAt < lock.lostAt - ESCAPE_UNLOCK_MS);
+        if (free) this.escapeFreedAt = now;
+        return free;
+    }
+
+    private holdEscapeInFullscreen(): void {
+        const keyboard = (navigator as Navigator & { keyboard?: { lock?(codes?: string[]): Promise<void> } }).keyboard;
+        this.escapeHeld = false;
+        if (!document.fullscreenElement || typeof keyboard?.lock !== 'function') return;
+        // Leaving fullscreen releases the keyboard lock by itself.
+        keyboard.lock(['Escape']).then(() => (this.escapeHeld = !!document.fullscreenElement), () => {});
     }
 
     /** Offer a key press to the handler stack; true when one took it. */
@@ -186,6 +251,9 @@ export class InputManager {
         for (const entry of this.entries.slice()) entry.keyUp?.(e);
     }
 }
+
+/** How long after the browser drops the lock its Esc may still arrive as a key press. */
+const ESCAPE_UNLOCK_MS = 500;
 
 /** Pointer buttons that bind like keys. */
 const MOUSE_CODES: Record<number, string> = { 1: 'MouseMiddle', 3: 'MouseBack', 4: 'MouseForward' };

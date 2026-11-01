@@ -1,8 +1,9 @@
 /**
- * Asset packs: folders of small static files (the default skin's images,
- * its hitsounds, the UI sounds) zipped into one file each, so a first
- * visit downloads three files instead of ~170. The host bills every
- * request, so this is most of what a visit costs.
+ * Asset packs: folders of small static files (the default skin's
+ * hitsounds, the UI sounds) zipped into one file each, so a first visit
+ * downloads a few files instead of ~170. The host bills every request,
+ * so this is most of what a visit costs. (The default skin's images
+ * aren't files at all: the game draws them, see src/skin/wosu.)
  *
  * Pack file names carry a hash of their contents, so they're cached for a
  * year (vercel.json) and a changed pack gets a new name. The individual
@@ -22,7 +23,6 @@ interface PackSpec {
     readonly include: (rel: string, all: ReadonlySet<string>) => boolean;
 }
 
-const AUDIO = /\.(wav|ogg|mp3)$/i;
 /** UI sounds no menu plays (same rule as src/audio/UISounds.ts). */
 const LATER_UI_SAMPLES = /^(Results|Gameplay)\//;
 /** Already compressed: stored as-is (deflating them only costs time). */
@@ -38,8 +38,6 @@ export const PACK_ALIASES = '.aliases.json';
 const MTIME = new Date('2026-01-01T00:00:00Z');
 
 export const PACKS: readonly PackSpec[] = [
-    // Images and skin.ini; hitsounds come separately (SampleBank loads them).
-    { name: 'default-skin', dir: 'public/assets/skins/default', include: rel => !AUDIO.test(rel) && rel !== 'manifest.json' },
     // Every Vorbis hitsound, plus the ones that only exist as WAV (spinner sounds).
     {
         name: 'default-hitsounds',

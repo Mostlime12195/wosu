@@ -5,6 +5,7 @@ import {
     type Storyboard, type StoryboardCommand, type StoryboardLayer, type StoryboardSprite,
 } from '../beatmap/storyboard';
 import type { AudioEngine } from '../audio/AudioEngine';
+import type { CancellableSound, TimedSounds } from './TimedSounds';
 
 /** osu!'s storyboard space. */
 const SB_W = 640;
@@ -47,6 +48,8 @@ export class StoryboardView {
     private readonly entries: Entry[];
     private readonly active: Entry[] = [];
     private next = 0;
+    /** Keys for scheduled samples (TimedSounds). */
+    private sampleSerial = 0;
     private nextSample = 0;
     private readonly images = new Map<string, LoadedImage | null>();
     private readonly sounds = new Map<string, AudioBuffer | null>();
@@ -202,7 +205,12 @@ export class StoryboardView {
      * Advance to song time `time`. Samples fire only while `playing` and
      * only when their time is crossed (a seek or retry doesn't replay them).
      */
-    update(time: number, playing: boolean, engine: AudioEngine | null): void {
+    /**
+     * `sounds`: look-ahead scheduling for the samples (they then start at
+     * the music's exact moment, up to song time `until`); without it they
+     * start when the frame passes them.
+     */
+    update(time: number, playing: boolean, engine: AudioEngine | null, sounds?: { timed: TimedSounds; until: number }): void {
         if (this.disposed) return;
         if (time < this.lastTime) this.rewind(time);
         this.lastTime = time;
@@ -224,7 +232,7 @@ export class StoryboardView {
             }
             this.apply(e, time);
         }
-        this.playSamples(time, playing, engine);
+        this.playSamples(time, playing, engine, sounds);
     }
 
     destroy(): void {
@@ -319,29 +327,41 @@ export class StoryboardView {
         return e.frames[i];
     }
 
-    private playSamples(time: number, playing: boolean, engine: AudioEngine | null): void {
+    private playSamples(time: number, playing: boolean, engine: AudioEngine | null, sounds?: { timed: TimedSounds; until: number }): void {
         const samples = this.storyboard.samples;
-        while (this.nextSample < samples.length && samples[this.nextSample].time <= time) {
+        const until = sounds && playing ? Math.max(time, sounds.until) : time;
+        while (this.nextSample < samples.length && samples[this.nextSample].time <= until) {
             const smp = samples[this.nextSample++];
             // Late by more than a moment (a skip or a seek): don't blast it now.
             if (!playing || !engine || time - smp.time > 150) continue;
             if (smp.layer === 'Fail' ? !this.failed : smp.layer === 'Pass' ? this.failed : false) continue;
             const buf = this.sounds.get(normalizeStoryboardPath(smp.path));
             if (!buf || engine.context.state !== 'running') continue;
-            try {
-                const src = engine.context.createBufferSource();
-                src.buffer = buf;
-                const gain = engine.context.createGain();
-                gain.gain.value = smp.volume;
-                src.connect(gain);
-                gain.connect(engine.effectsBus);
-                src.onended = () => {
-                    try { gain.disconnect(); } catch { /* ignore */ }
-                };
-                src.start();
-            } catch {
-                /* a missing sample is decoration */
-            }
+            const start = (when: number): CancellableSound | null => {
+                try {
+                    const ctx = engine.context;
+                    const src = ctx.createBufferSource();
+                    src.buffer = buf;
+                    const gain = ctx.createGain();
+                    gain.gain.value = smp.volume;
+                    src.connect(gain);
+                    gain.connect(engine.effectsBus);
+                    src.onended = () => {
+                        try { gain.disconnect(); } catch { /* ignore */ }
+                    };
+                    src.start(when);
+                    return {
+                        cancel: () => {
+                            if (!(ctx.currentTime < when)) return;
+                            try { src.stop(); } catch { /* ignore */ }
+                        },
+                    };
+                } catch {
+                    return null; /* a missing sample is decoration */
+                }
+            };
+            if (sounds) sounds.timed.play(`sb:${this.sampleSerial++}`, smp.time, start);
+            else start(0);
         }
     }
 

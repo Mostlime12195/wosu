@@ -1,24 +1,26 @@
 import { Container, Graphics, type BitmapText } from 'pixi.js';
 import { counterText } from '../ui/text';
 import { Colors } from '../ui/theme';
+import type { FrameStats } from './FrameLoop';
 
 /**
- * lazer-style FPS display (bottom-right): smoothed frame rate plus frame
- * time, coloured by how close the frame time is to the 60 Hz budget.
- * Bitmap text, so updating it every frame costs nothing.
+ * lazer-style FPS display (bottom-right): frames drawn per second, then
+ * updates per second (lazer's update rate; wosu! updates once per drawn
+ * frame), how many frames reached the screen when fewer did, the CPU time
+ * of an update + draw and the longest gap between frames. The rate is
+ * coloured by how close it is to the limiter's target. Bitmap text, so
+ * updating it costs nothing.
  */
 export class FpsCounter extends Container {
     private readonly bg = new Graphics();
     private readonly fpsText: BitmapText;
     private readonly msText: BitmapText;
-    private avgDt = 16.7;
     private accum = 0;
-    private worst = 0;
 
-    constructor() {
+    constructor(private readonly stats: Readonly<FrameStats>) {
         super();
-        this.fpsText = counterText('60', { size: 15 });
-        this.msText = counterText('16.7ms', { size: 11, light: true, color: Colors.grayC });
+        this.fpsText = counterText('60fps', { size: 15 });
+        this.msText = counterText('60ups', { size: 11, light: true, color: Colors.grayC });
         this.fpsText.anchor.set(1, 1);
         this.msText.anchor.set(1, 1);
         this.addChild(this.bg, this.fpsText, this.msText);
@@ -28,16 +30,18 @@ export class FpsCounter extends Container {
 
     update(dt: number): void {
         if (!this.visible) return;
-        this.avgDt += (dt - this.avgDt) * 0.1;
-        this.worst = Math.max(this.worst, dt);
         this.accum += dt;
         if (this.accum < 250) return;
         this.accum = 0;
-        const fps = Math.round(1000 / Math.max(1, this.avgDt));
-        this.fpsText.text = `${fps}fps`;
-        this.msText.text = `${this.avgDt.toFixed(1)}ms · ${this.worst.toFixed(0)}`;
-        this.worst = 0;
-        const color = this.avgDt < 18 ? Colors.lime : this.avgDt < 34 ? Colors.yellow : Colors.red;
+        const s = this.stats;
+        const draw = Math.round(s.drawHz);
+        this.fpsText.text = `${draw}fps`;
+        // Frames drawn outside rAF can be dropped before they're shown (browser flags with a cap).
+        const shown = s.presentedHz < s.drawHz * 0.9 ? ` · ${Math.round(s.presentedHz)} shown` : '';
+        this.msText.text = `${Math.round(s.updateHz)}ups${shown} · ${s.workMs.toFixed(1)}ms · ${s.worstGapMs.toFixed(0)}`;
+        // Green while the loop keeps up with what the limiter asks for.
+        const ratio = s.drawHz / Math.max(1, s.targetHz);
+        const color = ratio > 0.9 ? Colors.lime : ratio > 0.45 ? Colors.yellow : Colors.red;
         this.fpsText.tint = color;
         this.msText.position.set(0, 0);
         this.fpsText.position.set(-this.msText.width - 8, 0);

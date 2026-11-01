@@ -5,6 +5,7 @@ import { Colors } from '../../ui/theme';
 import { buttonRow, checkboxRow, dropdownRow, mult, sliderRow, textRow, type SettingsRow } from './rows';
 import type { MenuBackgroundSource } from '../../settings/Settings';
 import type { SectionDef } from './types';
+import { wosuSkinSubsection } from './WosuSkinSection';
 
 /** Dropdown entry that picks a random skin (lazer's "<Random skin>"). */
 const RANDOM = '\u0000random';
@@ -46,7 +47,10 @@ export function skinSection(game: Game): SectionDef {
             s.skin.value = v;
         }
     });
-    const current = dropdownRow('Current skin', skinItems(game), choice, { keywords: 'skin osk select theme' });
+    const current = dropdownRow('Current skin', skinItems(game), choice, {
+        keywords: 'skin osk select theme',
+        description: 'Menus and the cursor switch at once; a play in progress keeps its skin until it ends.',
+    });
     const dropdown = dropdownIn(current);
 
     const about = textRow('', { color: Colors.grayA, size: 12, keywords: 'skin author' });
@@ -111,6 +115,9 @@ export function skinSection(game: Game): SectionDef {
     skins.loading.bind(sync);
     sync();
 
+    const defaultSelected = new Bindable(s.skin.value === '');
+    s.skin.bind(v => (defaultSelected.value = v === ''));
+
     return {
         id: 'skin',
         title: 'Skin',
@@ -120,6 +127,9 @@ export function skinSection(game: Game): SectionDef {
                 title: 'Current skin',
                 rows: [current, about.row, layoutEditor, importSkin, exportSkin, deleteSkin],
             },
+            // Only while wosu!'s own skin is selected. (Other skins still get its images for parts they
+            // leave out, but never its colours.)
+            wosuSkinSubsection(game, defaultSelected),
             {
                 title: 'Results',
                 rows: [
@@ -146,11 +156,11 @@ export function skinSection(game: Game): SectionDef {
                 title: 'Beatmap',
                 rows: [
                     checkboxRow('Beatmap skins', s.beatmapSkin, {
-                        description: "Use the hit circles, numbers, slider and judgement images that a beatmap ships with. Its own hitsounds are under Audio → Beatmap hitsounds.",
+                        description: "Use the hit circles, numbers, slider and judgement images that a beatmap ships with. Its own hitsounds are under Audio → Beatmap hitsounds. Applies from the next play.",
                         keywords: 'skin custom elements images',
                     }),
                     checkboxRow('Beatmap colours', s.beatmapColours, {
-                        description: 'Use the combo and slider colours that a beatmap defines instead of the skin\'s.',
+                        description: 'Use the combo and slider colours that a beatmap defines instead of the skin\'s. Applies from the next play.',
                         keywords: 'skin custom colours colors combo',
                     }),
                 ],
@@ -166,7 +176,11 @@ export function skinSection(game: Game): SectionDef {
                     checkboxRow('Expand cursor when pressed', s.cursorExpand, { keywords: 'cursor pulse click' }),
                     checkboxRow('Rotate cursor when dragging', s.cursorRotation, { keywords: 'cursor rotation drag' }),
                     checkboxRow('Show gameplay cursor during touch input', s.gameplayCursorDuringTouch, { keywords: 'cursor touchscreen mobile' }),
-                    checkboxRow('Use hardware cursor in menus', s.hardwareCursor, { keywords: 'cursor system mouse pointer' }),
+                    checkboxRow('Use system cursor in menus', s.hardwareCursor, {
+                        keywords: 'cursor system hardware os mouse pointer latency lag',
+                        description: 'Menus show your operating system\'s cursor instead of the game\'s drawn one. Gameplay always draws the skin\'s cursor. With High precision mouse or confine "Always", menus then stay unlocked.',
+                        tooltip: 'The system ("hardware") cursor is drawn by the OS, so it never lags a frame behind the mouse, but it ignores the skin, Menu cursor size and Cursor sensitivity.',
+                    }),
                 ],
             },
         ],

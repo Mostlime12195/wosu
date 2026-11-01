@@ -136,9 +136,10 @@ export class AudioEngine {
     }
 
     /**
-     * Heard audio lags the context clock by the output pipeline; this is
-     * the wall-clock compensation in ms (clamped to something plausible so
-     * a bogus browser report can't wreck sync).
+     * Heard audio lags the context clock by the output pipeline (ms,
+     * clamped to something plausible). The gameplay clock deliberately
+     * doesn't subtract it (see MusicTrack); the one-time offset migration
+     * uses it to keep an old offset's feel.
      */
     get outputLatencyMs(): number {
         const ctx = this.context as AudioContext & { outputLatency?: number };

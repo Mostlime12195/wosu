@@ -15,14 +15,6 @@ function contents(name: string): string[] {
 }
 
 describe('asset packs', () => {
-    it('packs the default skin images without its sounds', () => {
-        const files = contents('default-skin');
-        expect(files).toContain('skin.ini');
-        expect(files).toContain('hitcircle@2x.png');
-        expect(files.some(f => /\.(wav|ogg|mp3)$/.test(f))).toBe(false);
-        expect(files).not.toContain('manifest.json');
-    });
-
     it('packs each hitsound once, as Vorbis when there is one', () => {
         const files = contents('default-hitsounds');
         expect(files).toContain('soft-hitclap.ogg');

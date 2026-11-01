@@ -5,7 +5,7 @@ import type { SkinTexture } from '../../skin/LegacySkin';
 import { sliderBallPosition, sliderProgress, sliderSpan, type SliderState } from '../GameplayRules';
 import {
     ApproachCircle, CirclePiece, OBJECT_SIZE, SIXTY_FRAME_TIME, approachAlpha, capped, cappedFrames, clamp01, comboColor, ease,
-    frameAt, fromDefaultSkin, legacyScale, legacyVersion, resolveCircle, sprite, type DrawableContext,
+    frameAt, fromDefaultSkin, hitAnimationShown, legacyScale, legacyVersion, resolveCircle, sliderShown, sprite, type DrawableContext,
 } from './context';
 import { shakeOffset, type Drawable } from './DrawableHitCircle';
 
@@ -208,6 +208,13 @@ export class DrawableSlider extends Container implements Drawable {
     updateAt(time: number): boolean {
         const ctx = this.ctx, h = this.h, s = this.state;
         const ended = time > h.endTime;
+        if (!sliderShown(time, h.endTime, ctx.instafadeSliders)) {
+            // Instafade sliders: nothing of the slider stays once it ends.
+            this.visible = false;
+            this.approach.visible = false;
+            return s.headHit === null;
+        }
+        this.visible = true;
         if (ended && time > h.endTime + BODY_FADE_OUT + 50 && s.headHit !== null && this.headDone(time, s)) return false;
 
         // Body opacity: fade in with the approach, hidden mode fades it over the whole slider.
@@ -240,7 +247,7 @@ export class DrawableSlider extends Container implements Drawable {
     }
 
     private headDone(time: number, s: SliderState): boolean {
-        if (s.headHit === true) return time - s.headAt >= 800;
+        if (s.headHit === true) return !hitAnimationShown(time, s.headAt, this.ctx.instafadeCircles) || time - s.headAt >= 800;
         return true;
     }
 
@@ -316,10 +323,14 @@ export class DrawableSlider extends Container implements Drawable {
             else whole = 1 - clamp01(dt / anim);
             whole *= fade;
 
+            // Instafade: a hit repeat or tail goes at once, arrow and all.
+            const gone = hit && !hitAnimationShown(time, e.event.time, ctx.instafadeCircles);
             const p = e.piece;
             if (p) {
                 p.position.set(at.x, at.y);
-                if (hit) {
+                if (gone) {
+                    p.visible = false;
+                } else if (hit) {
                     p.showHit(dt, time);
                     p.alpha = whole * hiddenFade;
                 } else {
@@ -333,7 +344,7 @@ export class DrawableSlider extends Container implements Drawable {
             const r = e.arrow;
             if (!r || !this.legacyArrow) continue;
             const arrowFade = e.repeatIndex === 0 ? 150 : Math.min(h.spanDuration, 150);
-            const a = shown ? clamp01((time - start) / arrowFade) * whole : 0;
+            const a = shown && !gone ? clamp01((time - start) / arrowFade) * whole : 0;
             r.visible = a > 0.001;
             if (!r.visible) continue;
             r.alpha = a;
@@ -407,6 +418,7 @@ export class DrawableSlider extends Container implements Drawable {
         this.approach.visible = false;
         if (s.headHit) {
             if (time < s.headAt) this.head.showIdle(this.headAlpha, time);
+            else if (!hitAnimationShown(time, s.headAt, ctx.instafadeCircles)) this.head.visible = false;
             else this.head.showHit(time - s.headAt, time);
         } else {
             this.head.showMiss(time - (h.time + w50), this.headAlpha);

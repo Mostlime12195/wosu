@@ -59,7 +59,7 @@ export class CursorTrail extends ParticleContainer {
             dynamicProperties: { position: true, vertex: true, rotation: skin.rotate, uvs: false, color: true },
         });
         const legacy = skin.legacy;
-        this.fadeDuration = !legacy ? 300 : skin.disjoint ? 150 : 500;
+        this.fadeDuration = !legacy ? skin.fade || 300 : skin.disjoint ? 150 : 500;
         this.fadeExponent = legacy ? 1 : 1.7;
         this.displayWidth = (skin.texture.texture.width * skin.texture.scale) / STABLE_MAGIC_SCALE;
         this.anchor0 = skin.disjoint && !skin.centre ? 0 : 0.5;

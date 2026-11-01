@@ -21,7 +21,7 @@ export function audioSection(game: Game): SectionDef {
                 title: 'Offset',
                 rows: [
                     sliderRow('Audio offset', s.audioOffset, ms, {
-                        description: 'Positive values delay hit timing to compensate for audio latency. If every map feels early, increase it; if late, decrease it.',
+                        description: 'Positive values delay hit timing (hit objects appear later). 0 ms suits most setups; if every map feels early, increase it; if late, decrease it. The music\'s own sounds (slider ticks and ends) stay on the music.',
                         keywords: 'latency sync delay',
                     }),
                 ],

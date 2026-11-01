@@ -6,7 +6,8 @@
  * the `rate` option exists for special effects only.
  */
 import type { AudioEngine } from './AudioEngine';
-import { resolveAssetUrl, setParam } from './base';
+import { rampParam, resolveAssetUrl, setParam } from './base';
+import { SILENT_SOUND, playOneShot, type SoundHandle } from './SoundHandle';
 
 export type SampleSetName = 'normal' | 'soft' | 'drum';
 export type HitsoundName =
@@ -47,13 +48,22 @@ export interface PlayOptions {
     /** -1 (left) .. 1 (right) */
     pan?: number;
     rate?: number;
+    /** Audio-context time (s) to start at (look-ahead scheduling); now when absent or past. */
+    when?: number;
+}
+
+/** A sample started (or scheduled) by the bank. */
+export interface ScheduledSample {
+    /** Call it off if it hasn't started yet (one already sounding plays out). */
+    cancel(): void;
 }
 
 export interface LoopHandle {
     setVolume(volume: number): void;
     /** Playback rate (pitch and speed together, like osu!'s sample frequency). */
     setRate(rate: number): void;
-    stop(): void;
+    /** Stop, fading out over `fadeMs` first (default: at once). */
+    stop(fadeMs?: number): void;
 }
 
 type Fetcher = (url: string) => Promise<{ ok: boolean; arrayBuffer(): Promise<ArrayBuffer> }>;
@@ -99,14 +109,14 @@ export class SampleBank {
         return this.loading;
     }
 
-    play(name: SampleName, volume: number, opts: PlayOptions = {}): void {
+    play(name: SampleName, volume: number, opts: PlayOptions = {}): ScheduledSample | null {
         const buffer = this.buffers.get(name);
-        if (buffer) this.playBuffer(buffer, volume, opts);
+        return buffer ? this.playBuffer(buffer, volume, opts) : null;
     }
 
     /** Play any decoded buffer (e.g. a beatmap's own hitsound) like a bank sample. */
-    playBuffer(buffer: AudioBuffer, volume: number, opts: PlayOptions = {}): void {
-        if (!(volume > 0)) return;
+    playBuffer(buffer: AudioBuffer, volume: number, opts: PlayOptions = {}): ScheduledSample | null {
+        if (!(volume > 0)) return null;
         const ctx = this.engine.context;
         try {
             const src = ctx.createBufferSource();
@@ -117,14 +127,33 @@ export class SampleBank {
             src.connect(gain);
             const out = this.panned(gain, opts.pan);
             out.connect(this.engine.effectsBus);
-            src.onended = () => {
+            const release = (): void => {
                 try { out.disconnect(); } catch { /* ignore */ }
                 if (out !== gain) try { gain.disconnect(); } catch { /* ignore */ }
             };
-            src.start();
+            src.onended = release;
+            const when = opts.when !== undefined && Number.isFinite(opts.when) ? Math.max(0, opts.when) : 0;
+            src.start(when);
+            return {
+                cancel: () => {
+                    if (!(ctx.currentTime < when)) return;
+                    try { src.onended = null; src.stop(); } catch { /* ignore */ }
+                    release();
+                },
+            };
         } catch (e) {
             console.warn('sample playback failed', e);
+            return null;
         }
+    }
+
+    /**
+     * Play a decoded buffer once like playBuffer, keeping a handle to stop
+     * it: for a skin's failsound or applause, which may be a whole song.
+     */
+    playStoppable(buffer: AudioBuffer, volume: number): SoundHandle {
+        if (!(volume > 0)) return SILENT_SOUND;
+        return playOneShot(this.engine.context, buffer, Math.min(1, volume), this.engine.effectsBus) ?? SILENT_SOUND;
     }
 
     /**
@@ -175,12 +204,22 @@ export class SampleBank {
                 rate = r;
                 setParam(src.playbackRate, r, ctx.currentTime, 0.01);
             },
-            stop: () => {
+            stop: (fadeMs = 0) => {
                 if (stopped) return;
                 stopped = true;
+                const disconnect = () => {
+                    try { out.disconnect(); } catch { /* ignore */ }
+                    if (out !== gain) try { gain.disconnect(); } catch { /* ignore */ }
+                };
+                if (fadeMs > 0) {
+                    const now = ctx.currentTime;
+                    rampParam(gain.gain, 0, now, fadeMs / 1000);
+                    src.onended = disconnect;
+                    try { src.stop(now + fadeMs / 1000); } catch { disconnect(); }
+                    return;
+                }
                 try { src.stop(); } catch { /* ignore */ }
-                try { out.disconnect(); } catch { /* ignore */ }
-                if (out !== gain) try { gain.disconnect(); } catch { /* ignore */ }
+                disconnect();
             },
         };
     }

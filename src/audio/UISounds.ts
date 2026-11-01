@@ -6,6 +6,7 @@
  */
 import type { AudioEngine } from './AudioEngine';
 import { resolveAssetUrl } from './base';
+import { playOneShot, type SoundHandle } from './SoundHandle';
 import { resolveSkinSound, STABLE_UI_SOUNDS } from './stableUISounds';
 
 /** Every sample, by its lazer path (folder/name, no extension). */
@@ -118,11 +119,16 @@ export class UISounds {
      * loaded, throttled) or the skin silences it.
      */
     play(name: UISampleName, opts: UIPlayOptions = {}): boolean {
-        if (!this.canPlay) return false;
+        return this.playStoppable(name, opts) !== null;
+    }
+
+    /** Like play, with a handle to stop the sound early (the results applause, the failsound); null when nothing played. */
+    playStoppable(name: UISampleName, opts: UIPlayOptions = {}): SoundHandle | null {
+        if (!this.canPlay) return null;
         const skinned = this.skinSamples ? resolveSkinSound(opts.skin ?? STABLE_UI_SOUNDS[name] ?? [], this.skinSamples) : undefined;
         const buffer = skinned ? skinned.buffer : this.buffers.get(name);
-        if (!buffer) return false;
-        if (opts.throttle && !this.throttled(name, opts.throttle)) return false;
+        if (!buffer) return null;
+        if (opts.throttle && !this.throttled(name, opts.throttle)) return null;
         return this.playBuffer(buffer, opts);
     }
 
@@ -132,7 +138,7 @@ export class UISounds {
         const buffer = resolveSkinSound(names, this.skinSamples)?.buffer;
         if (!buffer) return false;
         if (opts.throttle && !this.throttled(`skin:${names[0]}`, opts.throttle)) return false;
-        return this.playBuffer(buffer, opts);
+        return this.playBuffer(buffer, opts) !== null;
     }
 
     private get canPlay(): boolean {
@@ -147,24 +153,8 @@ export class UISounds {
         return true;
     }
 
-    private playBuffer(buffer: AudioBuffer, opts: UIPlayOptions): boolean {
-        const ctx = this.engine.context;
-        try {
-            const src = ctx.createBufferSource();
-            src.buffer = buffer;
-            if (opts.rate && opts.rate !== 1) src.playbackRate.value = opts.rate;
-            const gain = ctx.createGain();
-            gain.gain.value = Math.min(2, (opts.volume ?? 1) * this.volume);
-            src.connect(gain);
-            gain.connect(this.engine.effectsBus);
-            src.onended = () => {
-                try { gain.disconnect(); } catch { /* ignore */ }
-            };
-            src.start();
-            return true;
-        } catch {
-            return false;
-        }
+    private playBuffer(buffer: AudioBuffer, opts: UIPlayOptions): SoundHandle | null {
+        return playOneShot(this.engine.context, buffer, Math.min(2, (opts.volume ?? 1) * this.volume), this.engine.effectsBus, { rate: opts.rate });
     }
 
     // Generic interactions (lazer's HoverSampleSet.Default and friends).

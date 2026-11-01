@@ -38,6 +38,8 @@ export interface RowOptions {
     description?: string;
     /** Row only exists while this is true (e.g. "restart required"). */
     visibleWhen?: Bindable<boolean>;
+    /** Hover text on the control (lazer's settings TooltipText). */
+    tooltip?: string;
 }
 
 /**
@@ -62,6 +64,7 @@ export class SettingsRow extends UIComponent {
         this.keywords = `${keywords} ${opts.keywords ?? ''} ${opts.description ?? ''}`.toLowerCase();
         this.desc = opts.description ? label(opts.description, { size: 12, weight: '500', color: Colors.grayA, wrap: 300, lineHeight: 16 }) : null;
         this.visibleWhen = opts.visibleWhen ?? null;
+        if (opts.tooltip) control.tooltip = opts.tooltip;
         this.restore.alpha = 0;
         this.restore.eventMode = 'none';
         this.restore.cursor = 'pointer';

@@ -23,6 +23,14 @@ export function gameplaySection(game: Game): SectionDef {
                 rows: [
                     checkboxRow('Snaking sliders in', s.snakingIn, { keywords: 'slider snake' }),
                     checkboxRow('Snaking sliders out', s.snakingOut, { keywords: 'slider snake' }),
+                    checkboxRow('Instant fade hit circles', s.instafadeCircles, {
+                        description: 'Hit circles and slider head, repeat and tail circles disappear the moment they are hit, with no expand-and-fade (instafade). Judgements and hit lighting still show unless turned off here.',
+                        keywords: 'instafade instant fade hitcircle explode animation',
+                    }),
+                    checkboxRow('Instant fade sliders', s.instafadeSliders, {
+                        description: 'The whole slider disappears the moment it ends instead of fading out.',
+                        keywords: 'instafade instant fade slider body animation',
+                    }),
                     checkboxRow('Hit lighting', s.hitLighting, { keywords: 'glow flash' }),
                     checkboxRow('Hide combo numbers', s.hideNumbers),
                     checkboxRow('Hide "Great" judgements', s.hideGreat, { keywords: '300' }),

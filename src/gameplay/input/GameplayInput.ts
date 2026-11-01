@@ -61,10 +61,10 @@ export class GameplayInput {
     /** Pointer presses on on-screen controls (hold-for-menu, skip) aren't gameplay input. */
     ignorePointer: ((x: number, y: number) => boolean) | null = null;
     /**
-     * Pointer lock (high precision mouse): while `locked`, mouse positions
+     * Pointer lock (high precision mouse): while `virtual`, mouse positions
      * come from its virtual cursor (a locked pointer's client position is frozen).
      */
-    relative: { readonly locked: boolean; readonly pointer: { readonly x: number; readonly y: number } } | null = null;
+    relative: { readonly virtual: boolean; readonly pointer: { readonly x: number; readonly y: number } } | null = null;
     private readonly touches = new Map<number, GameplayButton>();
     private readonly listeners: [string, EventListener][] = [];
 
@@ -77,6 +77,9 @@ export class GameplayInput {
         this.x = start.x;
         this.y = start.y;
         this.listen('pointermove', e => this.onMove(e as PointerEvent));
+        // Chrome: every sample as it arrives (frames above the refresh rate see fresh positions);
+        // positions are absolute, so taking them from both events never double-counts.
+        this.listen('pointerrawupdate', e => this.track(e as PointerEvent));
         this.listen('pointerdown', e => this.onDown(e as PointerEvent));
         this.listen('pointerup', e => this.onUp(e as PointerEvent));
         this.listen('pointercancel', e => this.onUp(e as PointerEvent));
@@ -116,12 +119,18 @@ export class GameplayInput {
     }
 
     private onMove(e: PointerEvent): void {
+        if (!this.track(e)) return;
+        if (e.pointerType === 'mouse') this.chord(e);
+    }
+
+    /** Follow a pointer's position; false for one that doesn't steer. */
+    private track(e: PointerEvent): boolean {
         // Only the primary pointer steers (a second finger shouldn't teleport mid-slider).
-        if (e.pointerType === 'touch' && this.touches.size > 0 && !this.touches.has(e.pointerId)) return;
+        if (e.pointerType === 'touch' && this.touches.size > 0 && !this.touches.has(e.pointerId)) return false;
         const p = this.position(e);
         this.x = p.x;
         this.y = p.y;
-        if (e.pointerType === 'mouse') this.chord(e);
+        return true;
     }
 
     /**
@@ -147,7 +156,7 @@ export class GameplayInput {
     /** Logical position of a pointer event (the virtual cursor for a locked mouse). */
     private position(e: PointerEvent): { x: number; y: number } {
         const r = this.relative;
-        if (r?.locked && e.pointerType === 'mouse') return { x: r.pointer.x, y: r.pointer.y };
+        if (r?.virtual && e.pointerType === 'mouse') return { x: r.pointer.x, y: r.pointer.y };
         return this.app.toLogical(e.clientX, e.clientY);
     }
 

@@ -7,7 +7,7 @@ import {
     COMPOSITE_GLSL_FRAGMENT, COMPOSITE_GLSL_VERTEX, COMPOSITE_WGSL,
     PREPASS_GLSL_FRAGMENT, PREPASS_GLSL_VERTEX, PREPASS_WGSL,
 } from './shaders';
-import { boundsOf, capsuleQuads, partialPoints, sliderLutData, type Bounds, type CapsuleQuads } from './sliderGeometry';
+import { boundsOf, capsuleQuads, partialPoints, sliderLutData, type Bounds, type CapsuleQuads, type SliderProfile } from './sliderGeometry';
 
 /** Coverage textures never exceed this size (huge sliders on 4K screens). */
 const MAX_RT_DIM = 2048;
@@ -25,8 +25,8 @@ export class SliderResources {
     readonly lut: Texture;
     readonly rows: number;
 
-    constructor(readonly renderer: Renderer, colors: readonly number[], trackOverride: number | null, border: number | null) {
-        const d = sliderLutData(colors, trackOverride, border);
+    constructor(readonly renderer: Renderer, colors: readonly number[], trackOverride: number | null, border: number | null, profile?: SliderProfile) {
+        const d = sliderLutData(colors, trackOverride, border, profile);
         this.rows = d.height;
         // The buffer is already premultiplied; declaring it avoids a second
         // premultiply on upload (which darkened every slider). Pixi's default

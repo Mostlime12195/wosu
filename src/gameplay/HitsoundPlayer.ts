@@ -1,7 +1,8 @@
-import type { HitsoundName, LoopHandle, SampleBank, SampleName } from '../audio/SampleBank';
+import type { HitsoundName, LoopHandle, SampleBank, SampleName, ScheduledSample } from '../audio/SampleBank';
 import { sampleSetName } from '../audio/SampleBank';
-import type { PlayableBeatmap, PlayableHitObject, PlayableSlider, SampleSet } from '../beatmap/types';
+import type { PlayableBeatmap, PlayableHitObject, PlayableSlider, SampleSet, SliderEvent } from '../beatmap/types';
 import type { LegacySkin } from '../skin/LegacySkin';
+import type { CancellableSound, TimedSounds } from './TimedSounds';
 
 /** Stereo spread by horizontal position (lazer's balance adjust). */
 const PAN_AMOUNT = 0.8;
@@ -16,6 +17,19 @@ const PAN_AMOUNT = 0.8;
 export function spinnerSpinRate(progress: number, modulate: boolean): number {
     if (!modulate) return 1;
     return Math.min(100_000, 20_000 + Math.max(0, progress) * 40_000) / 44_100;
+}
+
+/**
+ * When a slider's nested sound belongs: its tick or repeat time, and the
+ * slider's true end for the tail (whose judgement comes earlier: stable's
+ * legacy last tick and lazer's tail leniency are both 36 ms before it).
+ */
+export function nestedSoundTime(h: PlayableSlider, ev: SliderEvent): number {
+    return ev.kind === 'tail' ? h.endTime : ev.time;
+}
+
+function group(sounds: (ScheduledSample | null)[]): CancellableSound {
+    return { cancel: () => { for (const s of sounds) s?.cancel(); } };
 }
 
 /**
@@ -36,6 +50,8 @@ export class HitsoundPlayer {
     useBeatmapSamples = true;
     /** skin.ini SpinnerFrequencyModulate (on unless the skin turns it off). */
     spinnerFrequencyModulate = true;
+    /** Look-ahead scheduled sounds, called off with everything else in stopAll. */
+    scheduled: TimedSounds | null = null;
 
     constructor(
         private readonly samples: SampleBank,
@@ -63,10 +79,11 @@ export class HitsoundPlayer {
         return name === 'spinnerspin' || name === 'spinnerbonus' ? this.userSkin?.sample(name) : undefined;
     }
 
-    private playOne(set: number, name: HitsoundName, index: number, volume: number, pan: number): void {
+    /** `when`: audio-context time to start at (0: now). */
+    private playOne(set: number, name: HitsoundName, index: number, volume: number, pan: number, when = 0): ScheduledSample | null {
         const o = this.override(set, name, index);
-        if (o === undefined) this.samples.play(`${sampleSetName(set)}-${name}` as SampleName, volume, { pan });
-        else if (o) this.samples.playBuffer(o, volume, { pan });
+        if (o === undefined) return this.samples.play(`${sampleSetName(set)}-${name}` as SampleName, volume, { pan, when });
+        return o ? this.samples.playBuffer(o, volume, { pan, when }) : null;
     }
 
     private loop(set: number, name: HitsoundName, index: number, volume: number): LoopHandle {
@@ -80,18 +97,16 @@ export class HitsoundPlayer {
      * whistle/finish/clap from the addition set. A hit object that names
      * its own sample file plays just that file instead.
      */
-    private playHit(bits: number, normal: number, addition: number, index: number, volume: number, pan: number, filename = ''): void {
+    private playHit(bits: number, normal: number, addition: number, index: number, volume: number, pan: number, filename = '', when = 0): CancellableSound {
         if (filename && this.custom && this.useBeatmapSamples) {
             const f = this.custom.file(filename);
-            if (f !== undefined) {
-                if (f) this.samples.playBuffer(f, volume, { pan });
-                return;
-            }
+            if (f !== undefined) return group([f ? this.samples.playBuffer(f, volume, { pan, when }) : null]);
         }
-        this.playOne(normal, 'hitnormal', index, volume, pan);
-        if (bits & 2) this.playOne(addition, 'hitwhistle', index, volume, pan);
-        if (bits & 4) this.playOne(addition, 'hitfinish', index, volume, pan);
-        if (bits & 8) this.playOne(addition, 'hitclap', index, volume, pan);
+        const out = [this.playOne(normal, 'hitnormal', index, volume, pan, when)];
+        if (bits & 2) out.push(this.playOne(addition, 'hitwhistle', index, volume, pan, when));
+        if (bits & 4) out.push(this.playOne(addition, 'hitfinish', index, volume, pan, when));
+        if (bits & 8) out.push(this.playOne(addition, 'hitclap', index, volume, pan, when));
+        return group(out);
     }
 
     private pan(x: number): number {
@@ -110,24 +125,36 @@ export class HitsoundPlayer {
     }
 
     /** Circle hit or spinner completion. */
-    hit(h: PlayableHitObject): void {
+    hit(h: PlayableHitObject, when = 0): CancellableSound {
         const time = h.kind === 'spinner' ? h.endTime : h.time;
         const s = this.sets(time, h.hitSample.normalSet, h.hitSample.additionSet);
-        this.playHit(h.hitSound, s.normal, s.addition, this.indexAt(time, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(h.x), h.hitSample.filename);
+        return this.playHit(h.hitSound, s.normal, s.addition, this.indexAt(time, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(h.x), h.hitSample.filename, when);
     }
 
-    /** Slider head (edge 0), repeats and tail. */
-    sliderEdge(h: PlayableSlider, edge: number, x: number): void {
+    /** Slider head (edge 0), repeats and tail; `when` as in nested. */
+    sliderEdge(h: PlayableSlider, edge: number, x: number, when = 0): CancellableSound {
         const time = h.time + edge * h.spanDuration;
         const sets = h.edgeSets[edge] ?? { normalSet: 0 as SampleSet, additionSet: 0 as SampleSet };
         const s = this.sets(time, sets.normalSet || h.hitSample.normalSet, sets.additionSet || h.hitSample.additionSet);
         const bits = h.edgeSounds[edge] ?? h.hitSound;
-        this.playHit(bits, s.normal, s.addition, this.indexAt(time, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(x));
+        return this.playHit(bits, s.normal, s.addition, this.indexAt(time, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(x), '', when);
     }
 
-    tick(h: PlayableSlider, time: number, x: number): void {
+    tick(h: PlayableSlider, time: number, x: number, when = 0): CancellableSound {
         const s = this.sets(time, h.hitSample.normalSet, h.hitSample.additionSet);
-        this.playOne(s.normal, 'slidertick', this.indexAt(time, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(x));
+        return group([this.playOne(s.normal, 'slidertick', this.indexAt(time, h.hitSample.index), this.volumeFor(h, s.volume), this.pan(x), when)]);
+    }
+
+    /**
+     * A slider tick, repeat or tail sound (the head is the player's hit),
+     * started at audio-context time `when` (0: now) so a look-ahead
+     * schedule lands on the music (see TimedSounds).
+     */
+    nested(h: PlayableSlider, ev: SliderEvent, when = 0): CancellableSound {
+        if (ev.kind === 'tick') return this.tick(h, ev.time, ev.x, when);
+        if (ev.kind === 'repeat') return this.sliderEdge(h, ev.spanIndex + 1, ev.x, when);
+        if (ev.kind === 'tail') return this.sliderEdge(h, h.slides, ev.x, when);
+        return this.sliderEdge(h, 0, h.x, when);
     }
 
     /** Slider slide loop (and whistle loop when the slider whistles) while tracking. */
@@ -188,8 +215,9 @@ export class HitsoundPlayer {
         this.spinIndex = -1;
     }
 
-    /** Silence every loop (pause, fail, exit). */
+    /** Silence every loop and call off scheduled sounds (pause, fail, exit). */
     stopAll(): void {
+        this.scheduled?.cancelPending();
         for (const loops of this.slides.values()) for (const l of loops) l.stop();
         this.slides.clear();
         this.stopSpin();

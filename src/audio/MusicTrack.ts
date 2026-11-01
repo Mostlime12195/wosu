@@ -2,22 +2,40 @@
  * A decoded song: menu music, song-select previews from the library and
  * the gameplay clock.
  *
- * Position model (unchanged from the original OsuAudio so timing feels
- * identical): `position` is the buffer offset in seconds at context time
- * `started`; while playing it advances at `rate`. A negative position is
- * a lead-in: the source is scheduled to start that far in the future.
+ * Position model (from the original OsuAudio): `position` is the buffer
+ * offset in seconds at context time `started`; while playing it advances
+ * at `rate`. A negative position is a lead-in: the source is scheduled to
+ * start that far in the future.
  *
  * Song time (what gameplay uses) = buffer time − posoffset, where
- * posoffset = decoder start offset + output latency (scaled to song time
- * by the rate) + the user's global offset.
+ * posoffset = decoder start offset (where osu!'s time 0 sits in the
+ * decoded audio, see mp3Info) + the user's offsets (song-time ms).
+ *
+ * The clock is the song position the audio graph is rendering, not the
+ * one coming out of the speakers: it deliberately does not subtract the
+ * output latency. Everything the player hears from the game (the music,
+ * their own hitsounds, the scheduled slider sounds) goes through that same
+ * output, so a hitsound started at song time t is heard exactly with the
+ * music at t, and a press judged on time sounds on the beat. Subtracting
+ * the output latency (as before) judged every press early by the latency
+ * (~30-50 ms in browsers) and made 0 ms offset unplayable. The display
+ * lags the frame by a similar amount, so visuals still line up with the
+ * heard music. osu!lazer's default Windows output does the same (its
+ * clock is the WASAPI mix position, with only fixed empirical offsets on
+ * top), and no osu! client subtracts a measured device latency.
  *
  * The raw clock only moves when the audio thread renders a quantum, so
  * `currentTime` interpolates with performance.now between ticks and pulls
  * gently toward the raw clock; large disagreements (seek, stall) snap.
+ *
+ * The time-stretch worklet (rate changes with pitch kept) needs no
+ * correction: its time map already absorbs its 120 ms block latency
+ * (measured within 0-2.5 ms of a plain buffer source at 0.75x, 1x, 1.5x).
  */
 import { Signal } from '../core/Signal';
 import type { AudioEngine } from './AudioEngine';
 import { rampParam, resolveAssetUrl } from './base';
+import { measureMp3DecoderDelay } from './decoderDelay';
 import { analyzeAudio } from './mp3Info';
 
 /** AudioWorkletNode extended with Signalsmith Stretch's remote methods. */
@@ -152,9 +170,9 @@ export class MusicTrack {
 
     readonly ended = new Signal<[]>();
     readonly filename: string;
-    /** Decoder start offset predicted from the file header (ms). */
+    /** Decoded audio before osu!'s song time 0 (ms), from the file header and this browser's decoder. */
     readonly startOffsetMs: number;
-    /** User global offset (ms); positive delays judgement like the old setting. */
+    /** The user's offsets in song-time ms (offsetCalibration.trackOffset); positive delays judgement. */
     userOffsetMs = 0;
     loop = false;
     /** Interpolate the coarse audio clock (disable for deterministic tests). */
@@ -192,7 +210,8 @@ export class MusicTrack {
     private disposed = false;
 
     static async decode(engine: AudioEngine, bytes: ArrayBuffer, filename: string): Promise<MusicTrack> {
-        const analysis = analyzeAudio(filename, bytes);
+        const mp3 = filename.toLowerCase().endsWith('mp3');
+        const analysis = analyzeAudio(filename, bytes, mp3 ? await measureMp3DecoderDelay(engine.context) : undefined);
         const buffer = await decodeWithResync(engine.context, analysis.buffer);
         return new MusicTrack(engine, buffer, filename, analysis.startOffsetMs);
     }
@@ -235,7 +254,28 @@ export class MusicTrack {
 
     /** Total ms subtracted from buffer time to get song time. */
     get posoffsetMs(): number {
-        return this.startOffsetMs + this.engine.outputLatencyMs * this.rate + (Number(this.userOffsetMs) || 0);
+        return this.startOffsetMs + (Number(this.userOffsetMs) || 0);
+    }
+
+    /**
+     * Changes whenever the song-time → context-time mapping does (play,
+     * pause, seek, rate change, end): sounds scheduled against the old
+     * mapping must be cancelled.
+     */
+    get timelineId(): number {
+        return this.generation;
+    }
+
+    /**
+     * Audio-context time (s) at which the music reaches song time `ms`
+     * without the user's offsets (sounds that belong to the music stay
+     * locked to it, like osu!'s offsets only moving judgement), or NaN
+     * when the track isn't playing.
+     */
+    contextTimeAt(ms: number): number {
+        if (!this.playing) return Number.NaN;
+        const sec = (ms + this.startOffsetMs) / 1000;
+        return this.started + (sec - this.position) / this.rate;
     }
 
     /** Song time in ms. Never NaN. */

@@ -1,8 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { analyzeAudio, parseFrameHeader, predictMp3Offset, readMp3Tags } from '../../src/audio/mp3Info';
+import { analyzeAudio, MP3_DECODER_DELAY, osuStartTrim, parseFrameHeader, predictMp3Offset, readMp3Tags } from '../../src/audio/mp3Info';
 
 const ROOT = resolve(__dirname, '../..');
 const FIXTURE = resolve(ROOT, 'tests/fixtures/map1/audio.mp3');
@@ -11,39 +10,13 @@ function toArrayBuffer(buf: Buffer): ArrayBuffer {
     return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
 }
 
-/**
- * The original pipeline: the old site's vendored mp3-parser (kept as a test
- * oracle in tests/fixtures/legacy) + preprocAudio/offset_predict_mp3 from
- * its osu-audio.js, replicated verbatim (offset part only).
- */
-function oldStartOffset(filename: string, buffer: ArrayBuffer): number {
-    if (filename.substr(-3) !== 'mp3') return 19;
-    const sandbox: Record<string, unknown> = {};
-    sandbox.window = sandbox;
-    vm.createContext(sandbox);
-    vm.runInContext(readFileSync(resolve(ROOT, 'tests/fixtures/legacy/mp3parse.min.js'), 'utf8'), sandbox);
-    const mp3Parser = sandbox.mp3Parser as { readTags(v: DataView): any[] };
-    const tags = mp3Parser.readTags(new DataView(buffer));
-    const defaultOffset = 22;
-    if (!tags || !tags.length) return defaultOffset;
-    const frametag = tags[tags.length - 1];
-    if (frametag._section.sampleLength != 1152) return defaultOffset;
-    let vbr: any = null;
-    for (let i = 0; i < tags.length; ++i) if (tags[i]._section.type == 'Xing') vbr = tags[i];
-    if (!vbr) return defaultOffset;
-    if (!vbr.identifier) return defaultOffset;
-    if (vbr.vbrinfo.ENC_DELAY != 576) return defaultOffset;
-    const sampleRate = vbr.header.samplingRate;
-    if (sampleRate == 32000) return 89 - 1152000 / sampleRate;
-    if (sampleRate == 44100) return 68 - 1152000 / sampleRate;
-    if (sampleRate == 48000) return 68 - 1152000 / sampleRate;
-    return defaultOffset;
-}
-
 interface SynthOptions {
     id3?: boolean;
     tag?: 'Xing' | 'Info' | null;
     encDelay?: number;
+    encPadding?: number;
+    /** LAME tag encoder name ('' = first byte 0, as some encoders write). */
+    encoder?: string;
     /** 0 = 44100, 1 = 48000, 2 = 32000 (MPEG1) */
     srIndex?: number;
     frames?: number;
@@ -67,9 +40,9 @@ function synthMp3(o: SynthOptions = {}): ArrayBuffer {
         for (let i = 0; i < 4; i++) f[id + i] = o.tag.charCodeAt(i);
         f[id + 7] = 0x0f; // flags: frames | bytes | toc | quality
         const lame = id + 8 + 4 + 4 + 100 + 4;
-        'LAME3.100'.split('').forEach((c, i) => (f[lame + i] = c.charCodeAt(0)));
+        (o.encoder ?? 'LAME3.100').split('').forEach((c, i) => (f[lame + i] = c.charCodeAt(0)));
         const delay = o.encDelay ?? 576;
-        const padding = 1000;
+        const padding = o.encPadding ?? 1000;
         f[lame + 21] = (delay >> 4) & 0xff;
         f[lame + 22] = ((delay & 15) << 4) | ((padding >> 8) & 15);
         f[lame + 23] = padding & 0xff;
@@ -85,13 +58,11 @@ function synthMp3(o: SynthOptions = {}): ArrayBuffer {
 }
 
 describe('mp3Info', () => {
-    it('matches the original offset prediction on the fixture', () => {
+    it('puts song time 0 where osu! (BASS with OLDGAPS) has it on the fixture', () => {
         const ab = toArrayBuffer(readFileSync(FIXTURE));
-        const expected = oldStartOffset('audio.mp3', ab);
-        const result = analyzeAudio('audio.mp3', ab);
-        expect(result.startOffsetMs).toBeCloseTo(expected, 9);
-        // The fixture carries a LAME "Info" header at 44.1 kHz: 68 - 1152000/44100.
-        expect(result.startOffsetMs).toBeCloseTo(68 - 1152000 / 44100, 9);
+        // LAME "Info" header at 44.1 kHz, encoder delay 576: osu! drops 576 + 529 samples,
+        // and a browser decoding the stripped stream keeps all 1105 (25.06 ms).
+        expect(analyzeAudio('audio.mp3', ab).startOffsetMs).toBeCloseTo((1105 / 44100) * 1000, 9);
     });
 
     it('scans the same sections as the original parser on the fixture', () => {
@@ -124,38 +95,37 @@ describe('mp3Info', () => {
         expect(readMp3Tags(new DataView(buffer)).some(t => t.type === 'Xing')).toBe(false);
     });
 
-    it('uses the fixed ogg offset for non-mp3 names', () => {
+    it('decodes other formats sample-exact (offset 0)', () => {
         const ab = new ArrayBuffer(16);
         const r = analyzeAudio('song.ogg', ab);
-        expect(r.startOffsetMs).toBe(19);
+        expect(r.startOffsetMs).toBe(0);
         expect(r.buffer).toBe(ab);
-        expect(oldStartOffset('song.ogg', ab)).toBe(19);
     });
 
-    it('agrees with the original on synthetic headers', () => {
-        const cases: [string, SynthOptions][] = [
-            ['xing with id3', { id3: true, tag: 'Xing' }],
-            ['xing without id3', { tag: 'Xing' }],
-            ['info tag', { id3: true, tag: 'Info' }],
-            ['bad enc delay', { id3: true, tag: 'Xing', encDelay: 1105 }],
-            ['no tag', { id3: true, tag: null }],
-            ['48k', { tag: 'Xing', srIndex: 1 }],
-            ['32k', { tag: 'Xing', srIndex: 2 }],
+    it('trims like BASS: encoder delay + 529 with a named LAME tag, nothing without one', () => {
+        const ms = (samples: number, rate = 44100) => (samples / rate) * 1000;
+        const cases: [string, SynthOptions, number][] = [
+            ['xing with id3', { id3: true, tag: 'Xing' }, ms(1105)],
+            ['xing without id3', { tag: 'Xing' }, ms(1105)],
+            ['info tag', { id3: true, tag: 'Info' }, ms(1105)],
+            ['other delay', { id3: true, tag: 'Xing', encDelay: 1105 }, ms(1105 + 529)],
+            ['no tag', { id3: true, tag: null }, 0],
+            ['zero delay and padding', { tag: 'Xing', encDelay: 0, encPadding: 0 }, 0],
+            ['unnamed encoder', { tag: 'Xing', encoder: '' }, 0],
+            ['48k', { tag: 'Xing', srIndex: 1 }, ms(1105, 48000)],
+            ['32k', { tag: 'Xing', srIndex: 2 }, ms(1105, 32000)],
         ];
-        for (const [name, opts] of cases) {
-            const ab = synthMp3(opts);
-            const mine = analyzeAudio('x.mp3', ab.slice(0)).startOffsetMs;
-            const old = oldStartOffset('x.mp3', ab.slice(0));
-            expect(mine, name).toBeCloseTo(old, 9);
+        for (const [name, opts, expected] of cases) {
+            expect(analyzeAudio('x.mp3', synthMp3(opts)).startOffsetMs, name).toBeCloseTo(expected, 9);
         }
+        expect(predictMp3Offset([])).toBe(0);
+        expect(osuStartTrim(readMp3Tags(new DataView(synthMp3({ tag: 'Xing', encDelay: 576 }))))).toBe(576 + MP3_DECODER_DELAY);
     });
 
-    it('predicts the documented offsets', () => {
-        expect(analyzeAudio('x.mp3', synthMp3({ tag: null })).startOffsetMs).toBe(22);
-        expect(analyzeAudio('x.mp3', synthMp3({ tag: 'Xing', encDelay: 100 })).startOffsetMs).toBe(22);
-        expect(analyzeAudio('x.mp3', synthMp3({ tag: 'Xing', srIndex: 1 })).startOffsetMs).toBeCloseTo(68 - 24, 9);
-        expect(analyzeAudio('x.mp3', synthMp3({ tag: 'Xing', srIndex: 2 })).startOffsetMs).toBeCloseTo(89 - 36, 9);
-        expect(predictMp3Offset([])).toBe(22);
+    it('compensates a decoder that drops its own delay (Safari-like)', () => {
+        // The stripped stream then lacks the 529 samples osu!'s decoder plays.
+        expect(analyzeAudio('x.mp3', synthMp3({ tag: 'Xing' }), 0).startOffsetMs).toBeCloseTo((576 / 44100) * 1000, 9);
+        expect(analyzeAudio('x.mp3', synthMp3({ tag: null }), 0).startOffsetMs).toBeCloseTo((-529 / 44100) * 1000, 9);
     });
 
     it('removes the Xing frame even without an ID3 tag', () => {
@@ -171,6 +141,6 @@ describe('mp3Info', () => {
         for (let i = 0; i < junk.length; i++) junk[i] = (i * 7919) & 0xff;
         const r = analyzeAudio('junk.mp3', junk.buffer);
         expect(Number.isFinite(r.startOffsetMs)).toBe(true);
-        expect(analyzeAudio('empty.mp3', new ArrayBuffer(0)).startOffsetMs).toBe(22);
+        expect(analyzeAudio('empty.mp3', new ArrayBuffer(0)).startOffsetMs).toBe(0);
     });
 });

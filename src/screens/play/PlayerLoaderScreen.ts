@@ -23,6 +23,7 @@ import type { OszArchive } from '../../beatmap/archive';
 import { PlayerScreen, type ReplayViewState } from './PlayerScreen';
 import { BeatmapOffsetControl } from './BeatmapOffsetControl';
 import { trackOffset } from '../../gameplay/offsetCalibration';
+import { migrateAudioOffsetSetting } from '../../audio/offsetMigration';
 import { beatmapOffsets, offsetKeyFor } from '../../storage/BeatmapOffsets';
 
 /** The loader shows at least this long so the metadata can be read (lazer: PlayerPushDelay). */
@@ -123,6 +124,16 @@ export class PlayerLoaderScreen extends Screen {
             this.drawThumb();
         });
         void this.prepare();
+        // Changing the background dim or blur here previews the real values (lazer shows the user's
+        // settings while its visual settings are hovered); gameplay applies them as they are.
+        const preview = () => {
+            if (this.isCurrent) {
+                g.background.setDim(g.settings.backgroundDim.value, 200);
+                g.background.setBlur(g.settings.backgroundBlur.value, 200);
+            }
+        };
+        this.disposer.add(g.settings.backgroundDim.bind(preview));
+        this.disposer.add(g.settings.backgroundBlur.bind(preview));
         // Beatmap skins change how the Player is built: rebuild one that was prepared but not started.
         this.disposer.add(g.settings.beatmapSkin.bind(() => {
             if (this.player && !this.pushed) {
@@ -195,6 +206,12 @@ export class PlayerLoaderScreen extends Screen {
             track.pause();
             await track.setRate(playbackRate(this.mods), preservesPitch(this.mods), audioPitch(this.mods));
             if (this.cancelled) return this.handBackTrack();
+            // An offset set against the clock before the 2026-11 sync fix keeps its feel (once).
+            const migrated = migrateAudioOffsetSetting(g.settings, g.audio.outputLatencyMs);
+            if (migrated) {
+                const ms = (v: number) => `${v > 0 ? '+' : ''}${v} ms`;
+                g.notifications.info(`Audio sync was fixed: 0 ms offset now suits most setups. Your audio offset moved from ${ms(migrated.from)} to ${ms(migrated.to)} so your timing feels the same; set it to 0 ms if you only changed it because hits felt off.`);
+            }
             // The global audio offset plus this difficulty's (lazer's user + beatmap offset clocks).
             const applyOffset = () => {
                 if (this.track) this.track.userOffsetMs = trackOffset(g.settings.audioOffset.value, beatmapOffsets().get(this.offsetKey), playbackRate(this.mods));

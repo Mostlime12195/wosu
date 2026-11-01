@@ -21,6 +21,8 @@ export interface TrailSkin {
     centre: boolean;
     /** CursorTrailRotate: parts follow the cursor's spin. */
     rotate: boolean;
+    /** Fade time (ms) of lazer's default trail, when wosu!'s skin sets one (its trail length option). */
+    fade?: number;
 }
 
 /** Everything the gameplay cursor reads from the skins in effect. */
@@ -74,6 +76,7 @@ export function resolveCursorSkin(chain: SkinChain, builtin: LegacySkin | null):
             disjoint: legacy && !cs?.texture('cursormiddle'),
             centre: ts.config.cursorCentre ?? true,
             rotate: legacy && (ts.config.cursorTrailRotate ?? true),
+            fade: legacy ? undefined : ts.extras?.trailFade,
         };
     }
     return {

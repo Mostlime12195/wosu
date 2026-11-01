@@ -1,35 +1,34 @@
-import { resolveAssetUrl } from '../audio/base';
 import { OszArchive } from '../beatmap/archive';
 import { Bindable } from '../core/Bindable';
-import { loadPack } from '../core/assetPacks';
+import { Signal } from '../core/Signal';
 import type { NotificationManager } from '../overlays/notifications/Notifications';
 import { SkinStore, type StoredSkin } from '../storage/SkinStore';
-import { LegacySkin, type SkinFiles } from './LegacySkin';
+import { LegacySkin } from './LegacySkin';
 import { SkinChain, type SkinLayer } from './SkinChain';
+import type { SkinConfig } from './SkinIni';
 import { classifyArchive, exportFilename, isSkinFilename, readSkinArchive, skinId } from './SkinImport';
+import { WosuSkinGenerator } from './wosu/generate';
+import { DEFAULT_WOSU_SKIN, sanitizeWosuSkin, type WosuSkinOptions } from './wosu/options';
 
-/** wosu!'s default skin: an ordinary osu!-format skin served from public/assets/skins/default. */
+/** Where the default skin's hitsounds are (its images are drawn in code: src/skin/wosu). */
 export const DEFAULT_SKIN_URL = 'assets/skins/default/';
 
-/** Files fetched from a folder that has a manifest.json listing them. */
-export async function fetchedSkinFiles(baseUrl: string): Promise<SkinFiles> {
-    const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
-    const res = await fetch(`${base}manifest.json`);
-    if (!res.ok) throw new Error(`skin manifest missing at ${base}`);
-    const { files } = (await res.json()) as { files: string[] };
-    return {
-        files,
-        async readBytes(path: string) {
-            const r = await fetch(`${base}${encodeURI(path)}`);
-            if (!r.ok) throw new Error(`skin file ${path}: ${r.status}`);
-            return new Uint8Array(await r.arrayBuffer());
-        },
-    };
-}
+/**
+ * The colours an imported skin falls back to when its skin.ini has none:
+ * what wosu!'s default skin.ini always had, so the wosu! skin options
+ * (palette, slider border) never leak into other skins.
+ */
+const FALLBACK_COLOURS: SkinConfig = {
+    comboColours: [0x609f9f, 0xc0c0c0, 0x80ffff, 0x8bbfde],
+    sliderBorder: 0xffffff,
+    sliderTrackOverride: undefined,
+};
+/** ms to wait for more option changes (a dragged slider) before redrawing the skin. */
+const REGENERATE_DELAY = 120;
 
 /** What the skin manager needs from the game (Game satisfies it). */
 export interface SkinHost {
-    readonly settings: { readonly skin: Bindable<string> };
+    readonly settings: { readonly skin: Bindable<string>; readonly wosuSkin?: Bindable<Readonly<WosuSkinOptions>> };
     readonly notifications: Pick<NotificationManager, 'progress' | 'error'>;
     readonly audio: { readonly context: BaseAudioContext };
     readonly screens: {
@@ -71,9 +70,19 @@ export class SkinManager {
     readonly currentInfo = new Bindable<StoredSkin | null>(null);
     /** A selected skin is being read and decoded. */
     readonly loading = new Bindable(false);
+    /**
+     * The default skin was redrawn (its options changed): a new instance
+     * replaced `default`. Running plays keep the one they started with.
+     */
+    readonly defaultChanged = new Signal<[]>();
 
     private host: SkinHost | null = null;
     private loadToken = 0;
+    private readonly generator = new WosuSkinGenerator();
+    /** Options the default skin is drawn with (set by attach from settings). */
+    private defaultOptions: WosuSkinOptions = DEFAULT_WOSU_SKIN;
+    private regenerateTimer: ReturnType<typeof setTimeout> | null = null;
+    private generation = 0;
     /** Skins no longer selected, waiting until nothing draws them. */
     private readonly retired = new Set<LegacySkin>();
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -95,13 +104,12 @@ export class SkinManager {
     }
 
     /**
-     * Load the default skin (one pack download; file by file if that
-     * fails). Its hitsounds stay with the SampleBank (same files), so
-     * only images and skin.ini are read here. Idempotent; a failed load
-     * can be retried.
+     * Draw the default skin from its options (wosu!'s skin is generated,
+     * not downloaded: src/skin/wosu). Its hitsounds are files the
+     * SampleBank loads. Idempotent; a failed load can be retried.
      */
     loadDefault(): Promise<void> {
-        this.defaultLoad ??= this.readDefault().then(skin => {
+        this.defaultLoad ??= this.readDefault(this.defaultOptions).then(skin => {
             this.defaultSkin = skin;
             this.resolveReady();
         }, e => {
@@ -111,19 +119,45 @@ export class SkinManager {
         return this.defaultLoad;
     }
 
-    private async readDefault(): Promise<LegacySkin> {
-        const pack = await loadPack('default-skin');
-        const files: SkinFiles = pack
-            ? {
-                files: pack.files,
-                async readBytes(path: string) {
-                    const bytes = pack.get(path);
-                    if (!bytes) throw new Error(`skin file ${path} is not in the pack`);
-                    return bytes;
-                },
-            }
-            : await fetchedSkinFiles(resolveAssetUrl(DEFAULT_SKIN_URL));
-        return LegacySkin.load(files, null, { samples: false });
+    private async readDefault(options: WosuSkinOptions): Promise<LegacySkin> {
+        const t0 = performance.now();
+        const packed = await this.generator.generate(options);
+        const skin = LegacySkin.fromImages(packed.config, packed.images, packed.extras);
+        if (import.meta.env.DEV) console.debug(`[skins] wosu! skin drawn in ${Math.round(performance.now() - t0)}ms`);
+        return skin;
+    }
+
+    /** The options changed: redraw the default skin (after a short pause, so dragging a slider doesn't queue redraws). */
+    private scheduleRegenerate(): void {
+        if (this.regenerateTimer) clearTimeout(this.regenerateTimer);
+        this.regenerateTimer = setTimeout(() => {
+            this.regenerateTimer = null;
+            void this.regenerate();
+        }, REGENERATE_DELAY);
+    }
+
+    private async regenerate(): Promise<void> {
+        // Before the first load it simply loads with the new options.
+        if (!this.defaultSkin) return;
+        const token = ++this.generation;
+        let skin: LegacySkin;
+        try {
+            skin = await this.readDefault(this.defaultOptions);
+        } catch (e) {
+            console.warn('[skins] redrawing the default skin failed', e);
+            return;
+        }
+        if (token !== this.generation) {
+            skin.destroy();
+            return;
+        }
+        const previous = this.defaultSkin;
+        this.defaultSkin = skin;
+        if (previous && previous !== skin) {
+            this.retired.add(previous);
+            this.scheduleFlush();
+        }
+        this.defaultChanged.emit();
     }
 
     /** The chain for gameplay (and the cursor/HUD): [beatmap?] → selected → default. */
@@ -132,7 +166,10 @@ export class SkinManager {
         if (beatmap) layers.push(beatmap);
         const user = this.current.value;
         if (user) layers.push({ skin: user });
-        layers.push({ skin: this.default, samples: false });
+        // Under an imported skin, the default only fills in missing images: its colours stay the
+        // ones every osu! skin fell back to before, whatever the wosu! skin options say.
+        const base = this.default;
+        layers.push(user ? { skin: base, samples: false, config: { ...base.config, ...FALLBACK_COLOURS } } : { skin: base, samples: false });
         return new SkinChain(layers);
     }
 
@@ -146,6 +183,15 @@ export class SkinManager {
      */
     async attach(host: SkinHost): Promise<void> {
         this.host = host;
+        // The wosu! skin options: read before the default skin is first drawn, then followed live.
+        const options = host.settings.wosuSkin;
+        if (options) {
+            this.defaultOptions = sanitizeWosuSkin(options.value);
+            options.changed.add(v => {
+                this.defaultOptions = sanitizeWosuSkin(v);
+                this.scheduleRegenerate();
+            });
+        }
         try {
             await this.store.init();
         } catch (e) {
@@ -189,7 +235,11 @@ export class SkinManager {
         const info = this.store.get(id);
         if (!info) {
             console.warn(`[skins] selected skin ${id} is not stored; using the default`);
-            host.settings.skin.value = '';
+            // After this change has reached every listener: resetting it from inside the
+            // notification let later listeners see the stale id and bounce it back (a loop).
+            queueMicrotask(() => {
+                if (host.settings.skin.value === id) host.settings.skin.value = '';
+            });
             return;
         }
         this.loading.value = true;
@@ -249,7 +299,7 @@ export class SkinManager {
         if (this.gameplayActive) return;
         for (const skin of [...this.retired]) {
             this.retired.delete(skin);
-            if (skin !== this.current.value) skin.destroy();
+            if (skin !== this.current.value && skin !== this.defaultSkin) skin.destroy();
         }
     }
 

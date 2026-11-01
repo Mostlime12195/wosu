@@ -67,9 +67,14 @@ export function formatBeatmapOffset(v: number): string {
     return `${v > 0 ? '+' : ''}${v.toFixed(1)} ms`;
 }
 
-/** Song-time offset applied to the track: the global audio offset plus the beatmap's at this rate. */
+/**
+ * Song-time offset applied to the track: the global audio offset plus the
+ * beatmap's, both real milliseconds, so scaled by the rate (lazer's
+ * OffsetCorrectionClock applies "the same real-time offset" at any rate;
+ * the global offset used to be applied unscaled).
+ */
 export function trackOffset(globalOffset: number, beatmapOffset: number, rate: number): number {
-    return globalOffset + beatmapOffset * (rate > 0 ? rate : 1);
+    return (globalOffset + beatmapOffset) * (rate > 0 ? rate : 1);
 }
 
 /**

@@ -116,24 +116,43 @@ export function boundsOf(pos: Float32Array): Bounds {
     return { x0, y0, x1, y1 };
 }
 
+/** A slider body's profile across its width (wosu!'s generated skin can change it; osu! skins can't). */
+export interface SliderProfile {
+    /** Border width as a fraction of the radius. */
+    borderWidth: number;
+    edgeOpacity: number;
+    centreOpacity: number;
+    /** Mix the track colour this far towards black. */
+    shade: number;
+    /** Border in each row's combo colour instead of `border`. */
+    comboBorder: boolean;
+}
+
+/** osu!'s own profile (what every osu! skin gets). */
+export const LEGACY_SLIDER_PROFILE: SliderProfile = { borderWidth: 0.128, edgeOpacity: 0.8, centreOpacity: 0.3, shade: 0, comboBorder: false };
+
 /**
  * Gradient LUT rows (one per combo colour), premultiplied RGBA, sampled
  * by (1 − coverage). Ported from the tuned legacy profile: white border
  * (12.8%), inner track fading 0.8 → 0.3 opacity toward the centre, tiny
- * blur bands at the rim and the border/track boundary.
+ * blur bands at the rim and the border/track boundary. `profile` changes
+ * the widths and opacities (wosu!'s skin options).
  */
-export function sliderLutData(colors: readonly number[], trackOverride: number | null, border: number | null): { data: Uint8Array; width: number; height: number } {
-    const borderwidth = 0.128;
+export function sliderLutData(colors: readonly number[], trackOverride: number | null, border: number | null,
+    profile: SliderProfile = LEGACY_SLIDER_PROFILE): { data: Uint8Array; width: number; height: number } {
+    const borderwidth = profile.borderWidth;
     const innerPortion = 1 - borderwidth;
-    const edgeOpacity = 0.8;
-    const centerOpacity = 0.3;
+    const edgeOpacity = profile.edgeOpacity;
+    const centerOpacity = profile.centreOpacity;
     const blurrate = 0.015;
     const width = 200;
     const rows = Math.max(1, colors.length);
     const buff = new Uint8Array(rows * width * 4);
     for (let k = 0; k < rows; k++) {
-        const tint = trackOverride ?? colors[k] ?? 0xffffff;
-        const bordertint = border ?? 0xffffff;
+        const base = trackOverride ?? colors[k] ?? 0xffffff;
+        const keep = 1 - profile.shade;
+        const tint = (Math.round(((base >> 16) & 255) * keep) << 16) | (Math.round(((base >> 8) & 255) * keep) << 8) | Math.round((base & 255) * keep);
+        const bordertint = profile.comboBorder ? colors[k] ?? 0xffffff : border ?? 0xffffff;
         const borderR = ((bordertint >> 16) & 255) / 255;
         const borderG = ((bordertint >> 8) & 255) / 255;
         const borderB = (bordertint & 255) / 255;

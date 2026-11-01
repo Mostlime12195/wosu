@@ -26,6 +26,9 @@ export interface PlayfieldOptions {
     snakingOut: boolean;
     /** Initial "Kiai flashes on hit objects" value (live via `kiaiFlashes`). */
     kiaiFlashes?: boolean;
+    /** Initial "Instant fade hit circles" / "Instant fade sliders" values (live via `instafade`). */
+    instafadeCircles?: boolean;
+    instafadeSliders?: boolean;
 }
 
 /** osu!'s playfield size in osu! pixels. */
@@ -63,7 +66,8 @@ export class Playfield extends Container {
         this.eventMode = 'none';
         const b = o.beatmap;
         const d = b.difficulty;
-        this.sliderResources = new SliderResources(o.renderer, b.comboColors, b.data.sliderTrackOverride, b.data.sliderBorder);
+        // wosu!'s own skin can change the body's profile (its skin options).
+        this.sliderResources = new SliderResources(o.renderer, b.comboColors, b.data.sliderTrackOverride, b.data.sliderBorder, o.skin.wosuExtras()?.slider);
         this.ctx = {
             skin: o.skin,
             beatmap: b,
@@ -82,6 +86,8 @@ export class Playfield extends Container {
             kiaiFlashes: o.kiaiFlashes ?? false,
             kiaiFlash: () => 0,
             legacyKiaiFlash: makeLegacyKiaiFlash(b),
+            instafadeCircles: o.instafadeCircles ?? false,
+            instafadeSliders: o.instafadeSliders ?? false,
         };
         const ctx = this.ctx;
         ctx.kiaiFlash = makeKiaiFlash(b, () => ctx.kiaiFlashes);
@@ -89,7 +95,8 @@ export class Playfield extends Container {
         // cropped to a circle diameter by a radius.
         const fpFrames = cappedFrames(o.skin.frames('followpoint'), OBJECT_SIZE, OBJECT_SIZE / 2);
         const fp = fpFrames[0] ?? null;
-        this.followPoints = o.hideFollowPoints || !fp ? null
+        // Built even when hidden: "Hide follow points" applies live.
+        this.followPoints = !fp ? null
             : new FollowPoints(b, fpFrames, o.skin.frameDuration(fpFrames.length), d.preempt, d.fadeIn, d.circleRadius,
                 legacyScale(d.circleRadius, fp), fromDefaultSkin(o.skin, 'followpoint', true));
         this.judgements = new Judgements(o.skin, d.circleRadius);
@@ -98,7 +105,10 @@ export class Playfield extends Container {
         this.spinnerFade.rect(-PLAYFIELD_W * 8, -PLAYFIELD_H * 8, PLAYFIELD_W * 17, PLAYFIELD_H * 17).fill(0x000000);
         this.spinnerFade.eventMode = 'none';
         this.spinnerFade.visible = false;
-        if (this.followPoints) this.addChild(this.followPoints);
+        if (this.followPoints) {
+            this.followPoints.visible = !o.hideFollowPoints;
+            this.addChild(this.followPoints);
+        }
         // New-style skin judgements (and their particles) sit under the objects, like lazer's.
         this.addChild(this.judgements.below, this.objectLayer, this.approachLayer, this.judgements);
         // Slider heads, ticks and repeats show slider point judgements when the skin has them.
@@ -121,6 +131,20 @@ export class Playfield extends Container {
     /** "Kiai flashes on hit objects", applied live. */
     set kiaiFlashes(v: boolean) {
         this.ctx.kiaiFlashes = v;
+    }
+
+    /** Snaking sliders, combo numbers (objects created from now on) and follow points, applied live. */
+    setHitObjectOptions(o: { snakingIn: boolean; snakingOut: boolean; hideNumbers: boolean; hideFollowPoints: boolean }): void {
+        this.ctx.snakingIn = o.snakingIn;
+        this.ctx.snakingOut = o.snakingOut;
+        this.ctx.hideNumbers = o.hideNumbers;
+        if (this.followPoints) this.followPoints.visible = !o.hideFollowPoints;
+    }
+
+    /** "Instant fade hit circles" and "Instant fade sliders", applied live. */
+    setInstafade(circles: boolean, sliders: boolean): void {
+        this.ctx.instafadeCircles = circles;
+        this.ctx.instafadeSliders = sliders;
     }
 
     /**
@@ -170,7 +194,7 @@ export class Playfield extends Container {
         }
         this.spinnerFade.visible = this.fadeForSpinners && spinnerFade > 0.001;
         this.spinnerFade.alpha = spinnerFade;
-        this.followPoints?.update(time);
+        if (this.followPoints?.visible) this.followPoints.update(time);
         this.judgements.update(time);
     }
 

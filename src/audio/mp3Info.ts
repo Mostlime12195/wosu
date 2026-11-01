@@ -1,14 +1,24 @@
 /**
  * Minimal MP3 header inspection, replacing the vendored mp3-parser.
  *
- * Why this exists: browsers disagree about MP3 encoder delay. Decoders
- * that understand the Xing/LAME header trim the encoder delay (gapless),
- * others play it as leading silence, so the same song started at the same
- * time is heard ~25-50 ms apart. We remove the Xing frame so every decoder
- * behaves the same (no trimming), then compensate with a start offset
- * predicted from the LAME header. The offset values below are the ones the
- * game has always used (tuned empirically); keep them in sync with
- * `tests/audio/mp3Info.test.ts`.
+ * Why this exists: beatmaps are timed against osu!'s decoder (BASS, with
+ * the BASS_CONFIG_MP3_OLDGAPS flag osu-framework sets), and browsers'
+ * decoders disagree with it and with each other at the start of an MP3:
+ *
+ * - BASS drops the LAME tag's encoder delay plus the 529-sample decoder
+ *   delay when the file has a LAME/Lavf/Lavc tag (gapless), and nothing at
+ *   all when it has none (the decoder delay is then part of the song).
+ * - Chrome and Firefox trim like BASS for most tagged files (not for some
+ *   edge cases); Safari's decoder reportedly always removes 529 samples.
+ *
+ * So we remove the Xing frame (no browser trims anything then), measure
+ * once what this browser's decoder adds in front of an untagged stream
+ * (decoderDelay.ts; 529 samples in Chrome), and compute the start offset
+ * that puts song time 0 where osu! has it. Measured in Chrome 2026-11:
+ * a stripped LAME file decodes 1105 samples (25.1 ms at 44.1 kHz) late,
+ * an untagged one 1105 samples too, Vorbis and Opus sample-exact. The old
+ * empirical table (41.9 ms for LAME 44.1 kHz, 22 ms untagged, 19 ms Ogg)
+ * put the clock 17-22 ms behind the music.
  */
 
 export interface FrameHeader {
@@ -186,22 +196,33 @@ export function readMp3Tags(view: DataView): Mp3Tag[] {
     return tags;
 }
 
-const DEFAULT_MP3_OFFSET = 22;
-const OGG_OFFSET = 19;
+/** Samples a Layer III decoder outputs before the first encoded sample (the synthesis filterbank delay). */
+export const MP3_DECODER_DELAY = 529;
 
-/** Predicted decoder start offset (ms) from the scanned tags. */
-export function predictMp3Offset(tags: readonly Mp3Tag[]): number {
-    if (!tags.length) return DEFAULT_MP3_OFFSET;
-    const last = tags[tags.length - 1];
-    if (last.type !== 'frame' || last.sampleLength !== 1152) return DEFAULT_MP3_OFFSET;
-    let xing: Extract<Mp3Tag, { type: 'Xing' }> | null = null;
-    for (const t of tags) if (t.type === 'Xing') xing = t;
-    if (!xing) return DEFAULT_MP3_OFFSET;
-    if (xing.encDelay !== 576) return DEFAULT_MP3_OFFSET;
-    const sr = xing.header.sampleRate;
-    if (sr === 32000) return 89 - 1152000 / sr;
-    if (sr === 44100 || sr === 48000) return 68 - 1152000 / sr;
-    return DEFAULT_MP3_OFFSET;
+/**
+ * Samples osu! drops from the start of the fully decoded stream: the LAME
+ * tag's encoder delay plus the decoder delay when the tag names an
+ * encoder and gives a delay or padding, else nothing (BASS with OLDGAPS:
+ * no iTunSMPB, no assumed 529 for untagged files).
+ */
+export function osuStartTrim(tags: readonly Mp3Tag[]): number {
+    const xing = tags.find((t): t is Extract<Mp3Tag, { type: 'Xing' }> => t.type === 'Xing');
+    if (!xing || !xing.lameVersion || xing.lameVersion.charCodeAt(0) === 0) return 0;
+    if (xing.encDelay < 0 || xing.encPadding < 0) return 0;
+    if (xing.encDelay === 0 && xing.encPadding === 0) return 0;
+    return xing.encDelay + MP3_DECODER_DELAY;
+}
+
+/**
+ * Start offset (ms of decoded audio before osu!'s song time 0) for an MP3
+ * decoded without its Xing frame by a browser whose decoder puts
+ * `decoderDelay` samples in front of the stream (see decoderDelay.ts).
+ */
+export function predictMp3Offset(tags: readonly Mp3Tag[], decoderDelay = MP3_DECODER_DELAY): number {
+    let sampleRate = 0;
+    for (const t of tags) if (t.type !== 'ID3v2') { sampleRate = t.header.sampleRate; break; }
+    if (!(sampleRate > 0)) return 0;
+    return ((decoderDelay - MP3_DECODER_DELAY + osuStartTrim(tags)) / sampleRate) * 1000;
 }
 
 export interface AudioAnalysis {
@@ -215,19 +236,21 @@ export interface AudioAnalysis {
 
 /**
  * Inspect an audio file before decoding. Non-MP3 files (by extension, like
- * the original code) get the fixed Ogg offset.
+ * the original code) decode sample-exact (Vorbis/Opus pre-skip is honoured
+ * everywhere), so their offset is 0. `decoderDelay`: this browser's MP3
+ * decoder delay in samples (measureMp3DecoderDelay).
  */
-export function analyzeAudio(filename: string, buffer: ArrayBuffer): AudioAnalysis {
+export function analyzeAudio(filename: string, buffer: ArrayBuffer, decoderDelay = MP3_DECODER_DELAY): AudioAnalysis {
     const name = filename.toLowerCase();
-    if (name.slice(-3) !== 'mp3') return { startOffsetMs: OGG_OFFSET, buffer, strippedXing: false };
+    if (name.slice(-3) !== 'mp3') return { startOffsetMs: 0, buffer, strippedXing: false };
 
     let tags: Mp3Tag[];
     try {
         tags = readMp3Tags(new DataView(buffer));
     } catch {
-        return { startOffsetMs: DEFAULT_MP3_OFFSET, buffer, strippedXing: false };
+        return { startOffsetMs: 0, buffer, strippedXing: false };
     }
-    const startOffsetMs = predictMp3Offset(tags);
+    const startOffsetMs = predictMp3Offset(tags, decoderDelay);
 
     const xi = tags.findIndex(t => t.type === 'Xing');
     const hasFrameAfter = xi !== -1 && tags.slice(xi + 1).some(t => t.type === 'frame');

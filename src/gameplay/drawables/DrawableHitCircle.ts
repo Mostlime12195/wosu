@@ -1,7 +1,7 @@
 import { Container } from 'pixi.js';
 import type { PlayableCircle } from '../../beatmap/types';
 import type { CircleState } from '../GameplayRules';
-import { ApproachCircle, CirclePiece, approachAlpha, comboColor, type DrawableContext } from './context';
+import { ApproachCircle, CirclePiece, approachAlpha, comboColor, hitAnimationShown, type DrawableContext } from './context';
 
 /** Shake on note lock / early clicks (lazer: 8 px, 3 swings over 80 ms). */
 export function shakeOffset(time: number, shakeAt: number): number {
@@ -47,6 +47,10 @@ export class DrawableHitCircle extends Container implements Drawable {
         const dt = time - s.judgedAt;
         this.approach.visible = false;
         if (s.result === 'miss') return this.piece.showMiss(dt, this.lastAlpha) || dt < 100;
+        if (!hitAnimationShown(time, s.judgedAt, ctx.instafadeCircles)) {
+            this.piece.visible = false;
+            return false;
+        }
         return this.piece.showHit(dt, time);
     }
 

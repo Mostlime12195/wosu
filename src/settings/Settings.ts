@@ -4,6 +4,7 @@ import { isModAcronym, sanitizeMods, sortedMods, type ModAcronym } from '../game
 import type { ProviderId } from '../online/providers';
 import { DEFAULT_MECHANICS, type GameplayMechanics } from '../gameplay/scoring/mechanics';
 import { SENSITIVITY_MAX, SENSITIVITY_MIN } from '../input/RelativePointer';
+import { DEFAULT_WOSU_SKIN, sanitizeWosuSkin, type WosuSkinOptions } from '../skin/wosu/options';
 
 export type SongSort = 'title' | 'artist' | 'creator' | 'difficulty' | 'length' | 'bpm' | 'dateAdded' | 'lastPlayed';
 /** lazer's HUDVisibilityMode. */
@@ -12,9 +13,9 @@ export type HudVisibility = 'always' | 'hideDuringGameplay' | 'never';
 export type KeyOverlayStyle = 'lazer' | 'stable';
 /**
  * lazer's OsuConfineMouseMode. A browser can only confine through pointer
- * lock, which needs gameplay to own the cursor, so there is no "Always".
+ * lock: the game then draws the cursor and steers its menus itself.
  */
-export type ConfineMouseMode = 'never' | 'duringGameplay';
+export type ConfineMouseMode = 'never' | 'duringGameplay' | 'always';
 /** lazer's BackgroundSource for the main menu (no storyboards in wosu!'s menus). */
 export type MenuBackgroundSource = 'skin' | 'beatmap';
 
@@ -23,7 +24,7 @@ const ENUM_VALUES: Record<string, readonly string[]> = {
     hudVisibility: ['always', 'hideDuringGameplay', 'never'],
     keyOverlayStyle: ['lazer', 'stable'],
     gameplayMechanics: ['lazer', 'stable'],
-    confineMouse: ['never', 'duringGameplay'],
+    confineMouse: ['never', 'duringGameplay', 'always'],
     menuBackgroundSource: ['skin', 'beatmap'],
 };
 
@@ -40,7 +41,12 @@ export class GameSettings {
     readonly renderer = new Bindable<RendererPreference>('auto');
     readonly resolutionScale = new BindableNumber(1, 0.5, 1, 0.05);
     readonly uiScale = new BindableNumber(1, 0.8, 1.6, 0.05);
+    /** 0 = VSync, > 0 a fixed fps, < 0 a mode (2× / 4× / 8× refresh, unlimited); see app/frameLimit. */
     readonly frameLimit = new Bindable<number>(0);
+    /** Let the frame limiter go above the refresh rate in menus too (else only during gameplay). */
+    readonly uncappedInMenus = new Bindable(false);
+    /** Desynchronized (low latency) WebGL canvas; needs a restart. */
+    readonly lowLatency = new Bindable(false);
     readonly showFps = new Bindable(false);
     readonly antialias = new Bindable(true);
     readonly parallax = new Bindable(true);
@@ -53,6 +59,10 @@ export class GameSettings {
     readonly snakingIn = new Bindable(true);
     readonly snakingOut = new Bindable(true);
     readonly kiaiFlash = new Bindable(false);
+    /** Hit circles and slider head / repeat / tail circles vanish the moment they're hit (neosu's instafade). */
+    readonly instafadeCircles = new Bindable(false);
+    /** Sliders vanish the moment they end, without fading out (neosu's instafade_sliders). */
+    readonly instafadeSliders = new Bindable(false);
     /** osu!stable's combo bursts at combo milestones (skins with comboburst images / sounds). */
     readonly comboBursts = new Bindable(true);
     /** Note lock, slider, spinner and health rules: osu!lazer's (default) or osu!stable's. */
@@ -93,6 +103,8 @@ export class GameSettings {
     readonly musicVolume = new BindableNumber(1, 0, 1, 0.01);
     readonly effectsVolume = new BindableNumber(1, 0, 1, 0.01);
     readonly audioOffset = new BindableNumber(0, -300, 300, 1);
+    /** The audio clock `audioOffset` was set against (audio/offsetMigration; 0 = before the 2026-11 sync fix). */
+    readonly audioClockVersion = new Bindable<number>(0);
     readonly uiSounds = new Bindable(true);
     readonly menuMusic = new Bindable(true);
     readonly beatmapHitsounds = new Bindable(true);
@@ -104,11 +116,11 @@ export class GameSettings {
     readonly keySmoke = new Bindable('KeyC');
     readonly mouseButtons = new Bindable(true);
     readonly wheelVolumeInGameplay = new Bindable(true);
-    /** lazer's "High precision mouse": pointer lock with raw (unaccelerated) movement during gameplay. */
+    /** lazer's "High precision mouse": pointer lock with raw (unaccelerated) movement, menus included. */
     readonly highPrecisionMouse = new Bindable(false);
     /** lazer's "Cursor sensitivity" (only applies with high precision mouse). */
     readonly cursorSensitivity = new BindableNumber(1, SENSITIVITY_MIN, SENSITIVITY_MAX, 0.01);
-    /** lazer's "Confine mouse cursor to window" (pointer lock during gameplay). */
+    /** lazer's "Confine mouse cursor to window" (pointer lock while playing, or always). */
     readonly confineMouse = new Bindable<ConfineMouseMode>('never');
     /** Changed global action bindings only (`{ action: ["Ctrl+KeyO", …] }`; see input/bindings resolveBindings). */
     readonly keyBindings = new Bindable<Readonly<Record<string, readonly string[]>>>({});
@@ -126,11 +138,18 @@ export class GameSettings {
     readonly cursorExpand = new Bindable(true);
     readonly cursorRotation = new Bindable(true);
     readonly gameplayCursorDuringTouch = new Bindable(false);
+    /**
+     * "Use system cursor in menus": the OS draws the menu cursor (a
+     * hardware cursor, no frame of lag) instead of the game. Old site key
+     * `showhwmouse`. Gameplay always draws the skin's cursor.
+     */
     readonly hardwareCursor = new Bindable(false);
     /** osu!stable-style: the selected skin's cursor, sounds, menu background, glow and mod icons in menus too. */
     readonly skinInMenus = new Bindable(true);
     /** lazer's MenuBackgroundSource (wosu! defaults to the playing beatmap's background). */
     readonly menuBackgroundSource = new Bindable<MenuBackgroundSource>('beatmap');
+    /** How wosu!'s own (generated) skin looks: Settings → Skin → wosu! skin. */
+    readonly wosuSkin = new Bindable<Readonly<WosuSkinOptions>>(DEFAULT_WOSU_SKIN);
 
     // Online
     readonly browseProvider = new Bindable<ProviderId>('sayobot');
@@ -193,7 +212,9 @@ export class GameSettings {
             if (!b || v === undefined || v === null) continue;
             const def = b.defaultValue;
             if (ENUM_VALUES[key] && !ENUM_VALUES[key].includes(v as string)) continue;
-            if (key === 'selectedMods') {
+            if (key === 'wosuSkin') {
+                b.value = sanitizeWosuSkin(v);
+            } else if (key === 'selectedMods') {
                 if (Array.isArray(v)) b.value = sortedMods(sanitizeMods(v.filter(isModAcronym)));
             } else if (typeof def === 'number') {
                 const n = Number(v);
@@ -212,7 +233,7 @@ export class GameSettings {
 
     resetAll(): void {
         for (const [k, b] of this.registry) {
-            if (k === 'selectedMods' || k === 'modSettings' || k === 'lastBeatmap' || k === 'playerName' || k === 'bundledBeatmapsFetched' || k === 'bundledSeen') continue;
+            if (k === 'selectedMods' || k === 'modSettings' || k === 'lastBeatmap' || k === 'playerName' || k === 'bundledBeatmapsFetched' || k === 'bundledSeen' || k === 'audioClockVersion') continue;
             b.setDefault();
         }
     }

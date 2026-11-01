@@ -1,6 +1,7 @@
 import { delay } from '../../core/Tweener';
 import { Container, Rectangle } from 'pixi.js';
 import { Screen } from '../../app/Screen';
+import { LEAVE_FADE_MS, type SoundHandle } from '../../audio/SoundHandle';
 import type { Selection } from '../../app/Game';
 import type { ReplayInfo } from '../../gameplay/replay/Replay';
 import type { ScoreResult } from '../../gameplay/ScoreResult';
@@ -91,6 +92,10 @@ export class ResultsScreen extends Screen {
     private panelScale = 1;
     private top = 0;
     private leaving = false;
+    /** The applause playing (a skin's can be a whole song), stopped when the screen is left. */
+    private applause: SoundHandle | null = null;
+    /** Left (or covered, or the skin switched): the applause never starts or restarts from then on. */
+    private quiet = false;
 
     constructor(readonly result: ScoreResult, readonly selection: Selection, readonly options: ResultsOptions = {}) {
         super();
@@ -103,6 +108,7 @@ export class ResultsScreen extends Screen {
 
     override load(): void {
         const g = this.game;
+        this.disposer.add(g.skins.current.changed.add(() => this.silence()));
         const chain = this.options.skin ?? g.skins.chain();
         const source = g.settings.skinResultsScreen.value ? legacyRankingSource(chain.layers, g.skins.default) : null;
         if (source) {
@@ -240,10 +246,17 @@ export class ResultsScreen extends Screen {
                         : grade === 'D' ? 'Results/applause-d' : null;
         const own = this.options.applause;
         if (own !== undefined) {
-            if (own && grade !== 'F') delay(200, () => { if (!this.destroyed) this.game.samples.playBuffer(own, 0.8); }, this);
+            if (own && grade !== 'F') delay(200, () => { if (!this.quiet && !this.destroyed) this.applause = this.game.samples.playStoppable(own, 0.8); }, this);
             return;
         }
-        if (applause) delay(200, () => { if (!this.destroyed) s.play(applause, { volume: 0.8 }); }, this);
+        if (applause) delay(200, () => { if (!this.quiet && !this.destroyed) this.applause = s.playStoppable(applause, { volume: 0.8 }); }, this);
+    }
+
+    /** Fade the applause out for good: leaving by any route, a screen pushed on top, or a skin switch. */
+    private silence(): void {
+        this.quiet = true;
+        this.applause?.stop(LEAVE_FADE_MS);
+        this.applause = null;
     }
 
     override onEntering(): void {
@@ -260,8 +273,19 @@ export class ResultsScreen extends Screen {
     }
 
     override onExiting(): number {
+        this.silence();
         this.fadeOut(250);
         return 250;
+    }
+
+    override onSuspending(next: Screen): void {
+        this.silence();
+        super.onSuspending(next);
+    }
+
+    override destroy(options?: Parameters<Screen['destroy']>[0]): void {
+        this.silence();
+        super.destroy(options);
     }
 
     override update(dt: number): void {

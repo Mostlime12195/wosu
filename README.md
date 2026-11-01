@@ -60,6 +60,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report bugs and send changes.
 | `src/beatmap` | `.osu` parsing, slider curves, mod processing (stacking, combos, slider events), `.osz` archives, the local library, star ratings |
 | `src/gameplay` | Rules and judgement (headless and unit tested), score/health processors, autoplay, input, hitsounds, playfield drawables and HUD |
 | `src/graphics` | GPU slider renderer (shaders for WebGL and WebGPU) and texture helpers |
+| `src/skin` | osu! skins (imported `.osk`, beatmap skins) and wosu!'s own skin, which is drawn in code from its options in Settings → Skin (`src/skin/wosu`; `node tools/default-skin/build.mjs` writes it out as an osu! skin folder) |
 | `src/screens` | Intro, main menu, song select, player loader, player, results |
 | `src/overlays` | Toolbar, settings, beatmap listing, mod select, notifications, now playing, volume, dialogs |
 | `src/ui` | The small UI framework every screen is built from (buttons, text boxes, sliders, dropdowns, scroll containers, tooltips, triangles) |

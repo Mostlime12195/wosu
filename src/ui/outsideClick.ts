@@ -1,4 +1,5 @@
 import type { Container } from 'pixi.js';
+import { virtualCanvasPoint } from '../input/PointerLock';
 
 /**
  * Call `fn` for every pointer press that lands outside all `targets`
@@ -13,9 +14,10 @@ export function onPointerDownOutside(
 ): () => void {
     const handler = (e: PointerEvent) => {
         const rect = canvas.getBoundingClientRect();
-        // Pixi's global space is CSS pixels relative to the canvas.
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        // Pixi's global space is CSS pixels relative to the canvas (a locked pointer's is the virtual cursor).
+        const v = virtualCanvasPoint(e);
+        const x = v ? v.x : e.clientX - rect.left;
+        const y = v ? v.y : e.clientY - rect.top;
         for (const t of targets()) {
             if (t && !t.destroyed && t.visible && t.getBounds().containsPoint(x, y)) return;
         }

@@ -24,11 +24,13 @@ import { buttonMask, encodeReplay, SMOKE_BIT, type ReplayInfo } from '../../game
 import { ReplayPlayback } from '../../gameplay/replay/ReplayPlayback';
 import { ReplayRecorder } from '../../gameplay/replay/ReplayRecorder';
 import { clampReplaySpeed, replayTrackRate } from '../../gameplay/replay/playbackSpeed';
-import { HitsoundPlayer } from '../../gameplay/HitsoundPlayer';
+import { HitsoundPlayer, nestedSoundTime } from '../../gameplay/HitsoundPlayer';
+import { lookaheadMs, TimedSounds } from '../../gameplay/TimedSounds';
 import { HUDOverlay } from '../../gameplay/hud/HUDOverlay';
 import { StablePlayOverlay } from '../../gameplay/hud/StablePlayOverlay';
 import { countdownSchedule } from '../../gameplay/legacyPlayEvents';
 import type { LoopHandle } from '../../audio/SampleBank';
+import { LEAVE_FADE_MS, type SoundHandle } from '../../audio/SoundHandle';
 import { ComboBursts, comboBurstSounds } from '../../gameplay/hud/ComboBursts';
 import { NightcoreBeats, nightcorePlaysHats } from '../../gameplay/NightcoreBeats';
 import { AutoPlayer } from '../../gameplay/input/AutoPlayer';
@@ -114,7 +116,10 @@ const HEALTH_SAMPLE_MS = 250;
 export class PlayerScreen extends Screen {
     override readonly hideToolbar = true;
     override readonly showMenuCursor = false;
-    /** Settings may be opened (Ctrl+O) while paused, and apply live. */
+    /**
+     * Settings may be opened (Ctrl+O) while paused, resuming or failed
+     * (lazer's OverlayActivation.UserTriggered while not playing); they apply live.
+     */
     override allowOverlays = false;
     outcome: PlayerOutcome = 'none';
 
@@ -125,6 +130,10 @@ export class PlayerScreen extends Screen {
     private clock!: GameplayClock;
     private input!: GameplayInput;
     private hitsounds!: HitsoundPlayer;
+    /** Look-ahead scheduled sounds locked to the music (slider ticks/ends, Nightcore, storyboard samples). */
+    private timed!: TimedSounds;
+    /** This frame's look-ahead: context time (s) and the music's song time (ms) it reaches. */
+    private horizon = { context: 0, song: 0 };
     private playfield!: Playfield;
     private hud!: HUDOverlay;
     /** osu!stable's combo bursts (skins with comboburst art), between the background and the playfield. */
@@ -171,6 +180,10 @@ export class PlayerScreen extends Screen {
     /** The skin's pause-loop while the pause menu is up, and its volume. */
     private pauseLoop: LoopHandle | null = null;
     private pauseLoopVolume = 0;
+    /** The failsound (a skin's can be a whole song): stopped when the player is left. */
+    private failSound: SoundHandle | null = null;
+    /** The skin was switched during this play: the pause-loop of the play's skin stays quiet from then on. */
+    private skinSoundsOff = false;
     private resume!: ResumeOverlay;
     private holdButton!: HoldForMenuButton;
 
@@ -310,26 +323,24 @@ export class PlayerScreen extends Screen {
         this.input.relative = g.input.pointerLock;
         // Presses are judged at their event timestamps (a busy frame doesn't make them late).
         this.input.timing = this.clock;
+        // Presses on these buttons are theirs (Pixi hit-tests a locked pointer at its virtual cursor too).
         this.input.ignorePointer = (x, y) => {
             const onHold = this.holdButton.containsPoint(x, y);
             const onSkip = this.skip.available && x >= this.skip.x && y >= this.skip.y && x <= this.skip.x + this.skip.w && y <= this.skip.y + this.skip.h;
-            // Pixi can't see a locked pointer (its client position is frozen): press these for it.
-            if (g.input.pointerLock.locked) {
-                if (onHold) this.holdButton.beginHold();
-                else if (onSkip) this.doSkip();
-            }
             return onHold || onSkip;
         };
         this.hitsounds = new HitsoundPlayer(g.samples, beatmap, o.beatmapSkin ?? null, g.skins.current.value);
+        this.timed = new TimedSounds(o.track, () => g.audio.context.currentTime);
+        this.hitsounds.scheduled = this.timed;
         this.hitsounds.useBeatmapSamples = g.settings.beatmapHitsounds.value;
         this.hitsounds.spinnerFrequencyModulate = chain.config('spinnerFrequencyModulate');
         // Nightcore's beat comes from the selected skin only, never a beatmap's (osu! wiki, Skinning/Sounds);
         // wosu!'s default skin has no nightcore samples, so it stays silent there.
         const userSkin = g.skins.current.value;
         if (mods.has('NC') && userSkin) {
-            this.nightcore = new NightcoreBeats(raw.timingPoints, nightcorePlaysHats(raw.difficulty.sliderTickRate), name => {
+            this.nightcore = new NightcoreBeats(raw.timingPoints, nightcorePlaysHats(raw.difficulty.sliderTickRate), (name, at) => {
                 const buf = userSkin.sample(name);
-                if (buf) g.samples.playBuffer(buf, 1);
+                if (buf) this.timed.play(`nc:${name}:${at}`, at, when => g.samples.playBuffer(buf, 1, { when }));
             });
         }
 
@@ -346,6 +357,8 @@ export class PlayerScreen extends Screen {
             snakingIn: g.settings.snakingIn.value,
             snakingOut: g.settings.snakingOut.value,
             kiaiFlashes: g.settings.kiaiFlash.value,
+            instafadeCircles: g.settings.instafadeCircles.value,
+            instafadeSliders: g.settings.instafadeSliders.value,
         });
         this.playfield.judgements.hideGreat = g.settings.hideGreat.value;
         this.playfield.judgements.hitLighting = g.settings.hitLighting.value;
@@ -504,18 +517,24 @@ export class PlayerScreen extends Screen {
             const h = objs[info.index];
             this.lastJudgementTime = Math.max(this.lastJudgementTime, info.time);
             this.playfield.judgements.add(info.result, info.x, info.y, info.time, comboColor(this.playfield.ctx, h), info.variant);
-            if (info.result === 'miss' || this.catchingUp) return;
-            if (h.kind === 'circle' || h.kind === 'spinner') this.hitsounds.hit(h);
+            const hit = info.result !== 'miss' && !this.catchingUp;
+            // Autoplay's circles were scheduled ahead (scheduleNested): kept on a hit, called off on a miss.
+            if (this.timed.settle(`${info.index}:c`, hit) || !hit) return;
+            // Autoplay's hits stay on the music (like the sounds below); the player's play at once.
+            if (h.kind === 'circle' && this.mode === 'autoplay') this.timed.play(`${info.index}:c`, h.time, when => this.hitsounds.hit(h, when));
+            else if (h.kind === 'circle' || h.kind === 'spinner') this.hitsounds.hit(h);
         });
         rules.nestedJudged.add((index, ev, hit) => {
             // lazer's slider end isn't an objectJudged (its judgement was the head's); its tail is the last.
             this.lastJudgementTime = Math.max(this.lastJudgementTime, ev.time);
-            if (!hit || this.catchingUp) return;
             const h = objs[index] as PlayableSlider;
-            if (ev.kind === 'tick') this.hitsounds.tick(h, ev.time, ev.x);
-            else if (ev.kind === 'head') this.hitsounds.sliderEdge(h, 0, h.x);
-            else if (ev.kind === 'repeat') this.hitsounds.sliderEdge(h, ev.spanIndex + 1, ev.x);
-            else this.hitsounds.sliderEdge(h, h.slides, ev.x);
+            const key = `${index}:${h.events.indexOf(ev)}`;
+            // A look-ahead sound (scheduleNested) stays on a hit and is called off on a miss.
+            if (this.timed.settle(key, hit && !this.catchingUp) || !hit || this.catchingUp) return;
+            // The head is the player's own hit: at once. The rest (and Autoplay's heads) at the
+            // music's moment for them (lazer's tail is judged up to 36 ms early), or at once if past.
+            if (ev.kind === 'head' && this.mode !== 'autoplay') this.hitsounds.sliderEdge(h, 0, h.x);
+            else this.timed.play(key, nestedSoundTime(h, ev), when => this.hitsounds.nested(h, ev, when));
         });
         rules.headHit.add((_i, _t, error) => this.hud.onHit(error));
         // lazer's HealthDisplay flashes on every successful judgement (ticks and spins too).
@@ -539,7 +558,8 @@ export class PlayerScreen extends Screen {
             this.driver.press(e.time, e.x, e.y);
         });
         this.input.anyPress.add((x, y) => {
-            if (this.phase === 'resuming' && this.resume.hits(x, y)) this.finishResume();
+            // Not a click on settings opened over the resume cursor.
+            if (this.phase === 'resuming' && this.resume.hits(x, y) && !this.game.overlays.anyOpen) this.finishResume();
         });
 
         const blur = () => {
@@ -559,8 +579,6 @@ export class PlayerScreen extends Screen {
         this.offs.push(this.game.input.pointerLock.lost.add(() => {
             if (this.phase === 'playing' || this.phase === 'resuming') this.pause();
         }));
-        // Locked, Pixi would hit-test at the frozen lock point; gameplay presses the controls itself.
-        this.offs.push(this.game.input.pointerLock.lockChanged.add(locked => (this.root.interactiveChildren = !locked)));
         window.addEventListener('blur', blur);
         document.addEventListener('visibilitychange', visibility);
         window.addEventListener('wheel', wheel, { passive: true });
@@ -573,6 +591,23 @@ export class PlayerScreen extends Screen {
         this.offs.push(s.backgroundDim.bind(() => this.applyBackground(400)));
         this.offs.push(s.backgroundBlur.bind(() => this.applyBackground(400)));
         this.offs.push(s.kiaiFlash.bind(v => (this.playfield.kiaiFlashes = v)));
+        const instafade = () => this.playfield.setInstafade(s.instafadeCircles.value, s.instafadeSliders.value);
+        this.offs.push(s.instafadeCircles.bind(instafade), s.instafadeSliders.bind(instafade));
+        const hitObjects = () => this.playfield.setHitObjectOptions({
+            snakingIn: s.snakingIn.value,
+            snakingOut: s.snakingOut.value,
+            hideNumbers: s.hideNumbers.value,
+            hideFollowPoints: s.hideFollowPoints.value,
+        });
+        this.offs.push(s.snakingIn.bind(hitObjects), s.snakingOut.bind(hitObjects), s.hideNumbers.bind(hitObjects), s.hideFollowPoints.bind(hitObjects));
+        this.offs.push(s.hitLighting.bind(v => (this.playfield.judgements.hitLighting = v)));
+        this.offs.push(s.hideGreat.bind(v => (this.playfield.judgements.hideGreat = v)));
+        // Switching skins silences the old skin's failsound and pause music (they'd otherwise play on).
+        this.offs.push(this.game.skins.current.bind(() => {
+            this.skinSoundsOff = true;
+            this.stopFailSound();
+            this.stopPauseLoop(LEAVE_FADE_MS);
+        }));
         this.offs.push(s.beatmapHitsounds.bind(v => (this.hitsounds.useBeatmapSamples = v)));
     }
 
@@ -674,11 +709,11 @@ export class PlayerScreen extends Screen {
     private releaseGameplay(): void {
         if (this.released) return;
         this.released = true;
-        this.game.input.pointerLock.wanted = false;
         this.root.interactiveChildren = true;
         this.input?.dispose();
         this.hitsounds?.stopAll();
-        this.stopPauseLoop();
+        this.stopPauseLoop(LEAVE_FADE_MS);
+        this.stopFailSound();
         for (const off of this.offs) off();
         this.offs.length = 0;
         this.game.background.releaseParallax(this);
@@ -705,15 +740,17 @@ export class PlayerScreen extends Screen {
         if (this.phase === 'loading' && this.sinceEnter > 400) this.begin();
         // Before the clock starts everything still draws, frozen at the start time.
         const time = this.phase === 'loading' ? this.clock.frameTime : this.clock.tick(dt);
-        this.updatePointerLock();
         const cursor = this.updateCursor(time, dt);
         this.updateCursorParticles(time, cursor.held);
+        this.timed.sync();
 
         if (this.phase === 'playing') {
+            this.updateHorizon(time, dt);
+            this.scheduleNested(time);
             this.feedRules(time, cursor);
             this.updateLoops(time);
             this.bursts.update(dt);
-            this.nightcore?.update(time);
+            this.nightcore?.update(this.horizon.song);
             this.sampleHealth(time);
             if (this.rules.finished && time >= this.lastJudgementTime + RESULTS_DELAY && time >= this.beatmap.endTime) this.complete();
         }
@@ -740,7 +777,7 @@ export class PlayerScreen extends Screen {
     private renderState(time: number, dt: number): void {
         this.playfield.update(this.phase === 'failed' ? this.failedAtTime : time);
         this.video?.sync(time, this.phase === 'playing' || this.phase === 'completed', this.clock.rate);
-        this.storyboard?.update(this.phase === 'failed' ? this.failedAtTime : time, this.phase === 'playing', this.game.audio);
+        this.storyboard?.update(this.phase === 'failed' ? this.failedAtTime : time, this.phase === 'playing', this.game.audio, { timed: this.timed, until: this.horizon.song });
         this.updateBreakDim(time);
         this.hud.update(dt, {
             time,
@@ -815,20 +852,14 @@ export class PlayerScreen extends Screen {
     }
 
     /**
-     * lazer's high precision mouse / confine during gameplay: the pointer is
-     * locked while the player aims (not paused, failed or finished, nor while
-     * autoplay or autopilot moves the cursor). The menus get the real pointer back.
+     * The player aims (lazer's LocalUserPlaying): not paused, failed or
+     * finished, nor while autoplay, autopilot or a replay moves the cursor.
+     * Confining the mouse "During gameplay" locks the pointer for this
+     * (Game.syncPointerLock); high precision mouse locks it everywhere.
      */
-    private updatePointerLock(): void {
-        const lock = this.game.input.pointerLock;
-        const s = this.game.settings;
-        const raw = s.highPrecisionMouse.value;
+    override get localUserPlaying(): boolean {
         const aiming = this.phase === 'loading' || this.phase === 'playing' || this.phase === 'resuming';
-        lock.raw = raw;
-        lock.sensitivity = s.cursorSensitivity.value;
-        lock.wanted = !this.released && aiming && this.mode !== 'autoplay' && this.mode !== 'autopilot' && !this.replay &&
-            (raw || s.confineMouse.value === 'duringGameplay');
-        this.root.interactiveChildren = !lock.locked;
+        return !this.released && aiming && this.mode !== 'autoplay' && this.mode !== 'autopilot' && !this.replay;
     }
 
     /** Cursor in playfield coordinates; also drives the on-screen cursor. */
@@ -944,6 +975,47 @@ export class PlayerScreen extends Screen {
             this.autoReleaseAt = Math.max(h.endTime, h.time + 60);
         }
         if (time > this.autoReleaseAt) this.autoDown.K1 = this.autoDown.K2 = false;
+    }
+
+    /**
+     * How far ahead this frame schedules music-locked sounds: a couple of
+     * frames past the audio clock (TimedSounds.lookaheadMs), as context
+     * time and as the music's song time (the clock plus the user's offset,
+     * which moves judgement but not the music's own sounds).
+     */
+    private updateHorizon(time: number, dt: number): void {
+        const ahead = lookaheadMs(dt);
+        this.horizon.context = this.game.audio.context.currentTime + ahead / 1000;
+        this.horizon.song = time + (Number(this.options.track.userOffsetMs) || 0) + ahead * this.clock.rate;
+    }
+
+    /**
+     * Look-ahead for slider tick, repeat and end sounds: while a slider is
+     * tracked, each sound due before the horizon starts at the music's exact
+     * moment for it (TimedSounds). Judgement keeps it on a hit and calls it
+     * off on a miss (a slider let go in the last few ms may still tick).
+     */
+    private scheduleNested(time: number): void {
+        const objs = this.beatmap.hitObjects;
+        const auto = this.mode === 'autoplay';
+        for (let i = this.loopStart; i < objs.length; i++) {
+            const h = objs[i];
+            if (h.time - 1000 > time) break;
+            const s = this.rules.states[i];
+            // Autoplay's own hits are certain, so they're scheduled too (its presses are frame-driven).
+            if (auto && s.result === null && h.time > time - 1000) {
+                if (h.kind === 'circle') this.timed.schedule(`${i}:c`, h.time, this.horizon.context, when => this.hitsounds.hit(h, when));
+                else if (h.kind === 'slider' && (s as SliderState).headHit === null) {
+                    this.timed.schedule(`${i}:0`, h.time, this.horizon.context, when => this.hitsounds.sliderEdge(h, 0, h.x, when));
+                }
+            }
+            if (h.kind !== 'slider' || s.kind !== 'slider' || !(s as SliderState).tracking || s.result !== null) continue;
+            for (let e = Math.max(1, (s as SliderState).nextEvent); e < h.events.length; e++) {
+                const ev = h.events[e];
+                if (ev.time > time + 1000) break;
+                this.timed.schedule(`${i}:${e}`, nestedSoundTime(h, ev), this.horizon.context, when => this.hitsounds.nested(h, ev, when));
+            }
+        }
     }
 
     /** Slider slide and spinner spin loops follow the tracking state. */
@@ -1161,8 +1233,6 @@ export class PlayerScreen extends Screen {
     pause(): void {
         if (this.phase !== 'playing' && this.phase !== 'resuming') return;
         this.phase = 'paused';
-        // The pause menu needs the real pointer at once.
-        this.updatePointerLock();
         this.clock.pause();
         this.hitsounds.stopAll();
         this.input.enabled = false;
@@ -1189,7 +1259,7 @@ export class PlayerScreen extends Screen {
      * wosu!'s default skin has none.
      */
     private updatePauseLoop(dt: number): void {
-        const want = this.phase === 'paused' && this.menu.shown && !this.released;
+        const want = this.phase === 'paused' && this.menu.shown && !this.released && !this.skinSoundsOff;
         if (want && !this.pauseLoop) {
             const buf = this.skinSample('pause-loop');
             if (!buf) return;
@@ -1203,9 +1273,14 @@ export class PlayerScreen extends Screen {
         if (!want && this.pauseLoopVolume <= 0) this.stopPauseLoop();
     }
 
-    private stopPauseLoop(): void {
-        this.pauseLoop?.stop();
+    private stopPauseLoop(fadeMs = 0): void {
+        this.pauseLoop?.stop(fadeMs);
         this.pauseLoop = null;
+    }
+
+    private stopFailSound(): void {
+        this.failSound?.stop(LEAVE_FADE_MS);
+        this.failSound = null;
     }
 
     /** A skin sound: the map's own (with beatmap hitsounds on), else the skins in the chain. */
@@ -1241,7 +1316,7 @@ export class PlayerScreen extends Screen {
     private continuePlay(): void {
         if (this.phase !== 'paused') return;
         this.menu.hide();
-        this.allowOverlays = false;
+        // Still paused until the cursor is clicked: overlays stay allowed until then.
         this.game.overlays.hideAll();
         const time = this.clock.frameTime;
         const first = this.beatmap.hitObjects[0];
@@ -1257,6 +1332,8 @@ export class PlayerScreen extends Screen {
     private finishResume(): void {
         this.resume.hide();
         this.phase = 'playing';
+        this.allowOverlays = false;
+        this.game.overlays.hideAll();
         this.replayPaused = false;
         // A replay's own pauses are among its events; pausing while watching changes nothing.
         if (this.recorder) this.driver.apply(this.recorder.resume(this.clock.frameTime));
@@ -1285,8 +1362,9 @@ export class PlayerScreen extends Screen {
         this.phase = 'failed';
         this.failedAtTime = this.clock.frameTime;
         this.failClock = 0;
-        this.allowOverlays = false;
         this.game.overlays.hideAll();
+        // Not playing any more: settings may be opened over the fail animation and menu.
+        this.allowOverlays = true;
         this.menu.hide();
         this.input.enabled = false;
         this.hitsounds.stopAll();
@@ -1296,8 +1374,8 @@ export class PlayerScreen extends Screen {
         // A skin (or the map, with beatmap hitsounds on) may bring its own failsound.
         const fromMap = this.game.settings.beatmapHitsounds.value ? this.options.beatmapSkin?.sample('failsound') : undefined;
         const own = fromMap !== undefined ? fromMap : this.skinChain.sample('failsound');
-        if (own) this.game.samples.playBuffer(own, 1);
-        else if (own === undefined) this.game.uiSounds.play('Gameplay/failsound');
+        if (own) this.failSound = this.game.samples.playStoppable(own, 1);
+        else if (own === undefined) this.failSound = this.game.uiSounds.playStoppable('Gameplay/failsound');
         this.menu.visible = false;
         // lazer: an additive red flash fading from full over 1s.
         this.failFlash.alpha = 0.6;
@@ -1540,8 +1618,6 @@ export class PlayerScreen extends Screen {
     // ------------------------------------------------------------------
 
     override onKey(e: KeyboardEvent, action: Action | null): boolean {
-        // The Esc that just broke the pointer lock already paused; it must not also press "Continue".
-        if (e.code === 'Escape' && this.game.input.pointerLock.lostWithin(500)) return true;
         if (this.menu.shown && this.menu.onKey(e, action)) return true;
         if (this.phase === 'resuming' || this.phase === 'playing') {
             if (this.input.keyDown(e)) return true;

@@ -56,10 +56,11 @@ describe('offset calibration', () => {
         expect(formatBeatmapOffset(0)).toBe('0 ms');
     });
 
-    it('applies the beatmap offset in real time on top of the global one', () => {
+    it('applies the global and beatmap offsets in real time (scaled to song time by the rate)', () => {
         expect(trackOffset(10, 5, 1)).toBe(15);
-        expect(trackOffset(10, 4, 1.5)).toBe(16);
-        expect(trackOffset(-3, 0, 0.75)).toBe(-3);
+        expect(trackOffset(10, 4, 1.5)).toBe(21);
+        expect(trackOffset(-4, 0, 0.75)).toBe(-3);
+        expect(trackOffset(10, 0, 0)).toBe(10);
     });
 
     it('bins errors for the timing graph', () => {
