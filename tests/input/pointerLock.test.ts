@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { movementScale, PointerLockController, setVirtualPointerSource, virtualCanvasPoint, type PointerLockDocument, type PointerLockTarget } from '../../src/input/PointerLock';
+import { movementScale, PointerLockController, rawCountsInDevicePixels, setVirtualPointerSource, virtualCanvasPoint, type PointerLockDocument, type PointerLockTarget } from '../../src/input/PointerLock';
 import { isMovementSpike, movementSteps, RelativePointer, SENSITIVITY_MAX, SENSITIVITY_MIN } from '../../src/input/RelativePointer';
 
 describe('RelativePointer (lazer relative mode)', () => {
@@ -158,6 +158,7 @@ describe('PointerLockController', () => {
         const t = setup({ uiScale: 2 });
         t.pointer('pointermove', { clientX: 400, clientY: 300 });
         t.lock.raw = true;
+        t.lock.relative = true;
         t.lock.sensitivity = 1.5;
         t.lock.wanted = true;
         await t.flush();
@@ -192,6 +193,7 @@ describe('PointerLockController', () => {
         const t = setup();
         t.target.behaviour = ['noRaw'];
         t.lock.raw = true;
+        t.lock.relative = true;
         t.lock.wanted = true;
         await t.flush();
         expect(t.target.calls).toEqual([true, undefined]);
@@ -343,18 +345,26 @@ describe('PointerLockController where locking never works', () => {
 
 describe('movement scale', () => {
     it('moves one device pixel per raw count at 1x (lazer / stable raw input)', () => {
-        expect(movementScale({ raw: true, rawActive: true, sensitivity: 1, uiScale: 1, dpr: 2 })).toBe(0.5);
-        expect(movementScale({ raw: true, rawActive: true, sensitivity: 3, uiScale: 1.5, dpr: 2 })).toBe(1);
+        expect(movementScale({ relative: true, rawActive: true, sensitivity: 1, uiScale: 1, dpr: 2, rawInDevicePixels: true })).toBe(0.5);
+        expect(movementScale({ relative: true, rawActive: true, sensitivity: 3, uiScale: 1.5, dpr: 2, rawInDevicePixels: true })).toBe(1);
     });
 
     it('scales the OS cursor motion (CSS px) by the sensitivity without raw input', () => {
-        expect(movementScale({ raw: true, rawActive: false, sensitivity: 2, uiScale: 1, dpr: 2 })).toBe(2);
-        expect(movementScale({ raw: true, rawActive: false, sensitivity: 2, uiScale: 2, dpr: 1 })).toBe(1);
+        expect(movementScale({ relative: true, rawActive: false, sensitivity: 2, uiScale: 1, dpr: 2, rawInDevicePixels: true })).toBe(2);
+        expect(movementScale({ relative: true, rawActive: false, sensitivity: 2, uiScale: 2, dpr: 1, rawInDevicePixels: true })).toBe(1);
+    });
+
+    it('moves one point per raw count on macOS (no Retina halving)', () => {
+        expect(rawCountsInDevicePixels('macOS')).toBe(false);
+        expect(rawCountsInDevicePixels('MacIntel')).toBe(false);
+        expect(rawCountsInDevicePixels('Windows')).toBe(true);
+        expect(rawCountsInDevicePixels('Linux x86_64')).toBe(true);
+        expect(movementScale({ relative: true, rawActive: true, sensitivity: 1, uiScale: 1, dpr: 2, rawInDevicePixels: false })).toBe(1);
     });
 
     it('follows the OS cursor 1:1 when only confining', () => {
-        expect(movementScale({ raw: false, rawActive: false, sensitivity: 5, uiScale: 2, dpr: 2 })).toBe(0.5);
-        expect(movementScale({ raw: false, rawActive: false, sensitivity: 5, uiScale: 0, dpr: 0 })).toBe(1);
+        expect(movementScale({ relative: false, rawActive: false, sensitivity: 5, uiScale: 2, dpr: 2, rawInDevicePixels: true })).toBe(0.5);
+        expect(movementScale({ relative: false, rawActive: false, sensitivity: 5, uiScale: 0, dpr: 0, rawInDevicePixels: true })).toBe(1);
     });
 });
 
@@ -366,8 +376,10 @@ describe('PointerLockController everywhere (menus included)', () => {
 
     it('applies the sensitivity per device pixel with raw input', async () => {
         const t = setup({ dpr: 2 });
+        t.lock.rawInDevicePixels = true; // Windows / Linux
         t.pointer('pointermove', { clientX: 500, clientY: 400 });
         t.lock.raw = true;
+        t.lock.relative = true;
         t.lock.sensitivity = 2;
         t.lock.wanted = true;
         await t.flush();
@@ -508,6 +520,7 @@ describe('PointerLockController everywhere (menus included)', () => {
         expect(t.target.calls).toEqual([undefined]);
         t.activation.isActive = false;
         t.lock.raw = true;
+        t.lock.relative = true;
         await t.flush();
         await t.flush();
         expect(t.target.calls).toEqual([undefined, true]);

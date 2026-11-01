@@ -119,6 +119,8 @@ export class GameSettings {
     /** lazer's "High precision mouse": pointer lock with raw (unaccelerated) movement, menus included. */
     readonly highPrecisionMouse = new Bindable(false);
     /** lazer's "Cursor sensitivity" (only applies with high precision mouse). */
+    /** High precision mouse ignores OS mouse acceleration (osu!stable's "Raw input"). */
+    readonly rawInput = new Bindable(true);
     readonly cursorSensitivity = new BindableNumber(1, SENSITIVITY_MIN, SENSITIVITY_MAX, 0.01);
     /** lazer's "Confine mouse cursor to window" (pointer lock while playing, or always). */
     readonly confineMouse = new Bindable<ConfineMouseMode>('never');

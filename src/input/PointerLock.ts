@@ -41,6 +41,23 @@ const MAX_ATTEMPTS = 8;
 const REQUEST_TIMEOUT_MS = 2000;
 
 /**
+ * Whether raw (`unadjustedMovement`) mouse counts land on device pixels.
+ * Windows and Linux move the system cursor one physical pixel per count
+ * (osu! raw input at 1x), so at a display scale above 100% a count is less
+ * than a CSS px. macOS moves it in points, which are CSS px: dividing by
+ * the Retina pixel ratio there made 1x half as fast as the system cursor.
+ */
+export function rawCountsInDevicePixels(platform: string): boolean {
+    return !/mac|iphone|ipad|ios/i.test(platform);
+}
+
+const RAW_IN_DEVICE_PIXELS = rawCountsInDevicePixels(
+    typeof navigator === 'undefined'
+        ? ''
+        : (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || '',
+);
+
+/**
  * Pointer lock: the browser's take on lazer's "High precision mouse"
  * (relative mode, raw input) and "Confine mouse cursor to window".
  *
@@ -72,6 +89,10 @@ export class PointerLockController {
     /** Each virtual-cursor sample while locked (logical px), for the trail. */
     readonly moved = new Signal<[x: number, y: number]>();
     sensitivity = 1;
+    /** High precision mouse: movement is scaled by `sensitivity` (else it follows the OS cursor 1:1). */
+    relative = false;
+    /** Raw counts are device pixels on this platform (see rawCountsInDevicePixels). */
+    rawInDevicePixels = RAW_IN_DEVICE_PIXELS;
     /** The browser refused `unadjustedMovement`; locks are plain from then on. */
     rawUnsupported = false;
     /** The current lock was granted with `unadjustedMovement`. */
@@ -150,7 +171,7 @@ export class PointerLockController {
         return this._wanted;
     }
 
-    /** Request raw (unaccelerated) movement and apply `sensitivity` (high precision mouse). */
+    /** Request raw (unaccelerated) movement (high precision mouse with raw input). */
     get raw(): boolean {
         return this._raw;
     }
@@ -389,7 +410,10 @@ export class PointerLockController {
     private applyMovement(e: PointerEvent): void {
         const v = this.env.view();
         this.pointer.setBounds(v.width, v.height);
-        const scale = movementScale({ raw: this.raw, rawActive: this.rawActive, sensitivity: this.sensitivity, uiScale: v.uiScale, dpr: v.dpr ?? 1 });
+        const scale = movementScale({
+            relative: this.relative, rawActive: this.rawActive, sensitivity: this.sensitivity,
+            uiScale: v.uiScale, dpr: v.dpr ?? 1, rawInDevicePixels: this.rawInDevicePixels,
+        });
         const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
         const steps = movementSteps({ x: e.movementX, y: e.movementY }, events.map(c => ({ x: c.movementX, y: c.movementY })));
         const screenW = v.width * v.uiScale, screenH = v.height * v.uiScale;
@@ -447,17 +471,17 @@ export function isLockJump(d: Delta): boolean {
 }
 
 /**
- * Logical px per reported movement unit. High precision mouse: raw input
- * (`unadjustedMovement`) reports mouse counts, which lazer and stable move
- * one device pixel each at 1x, so they're divided by the device pixel
- * ratio as well as the UI scale; without raw support the browser reports
- * the OS cursor's (accelerated) motion in CSS px, still times the
- * sensitivity. Confine only: 1:1 with the OS cursor.
+ * Logical px per reported movement unit. High precision mouse (`relative`)
+ * scales movement by the sensitivity: raw counts (`rawActive`) move one
+ * system-cursor unit each at 1x (a device pixel on Windows/Linux, a point
+ * on macOS, see rawCountsInDevicePixels), and without raw input the
+ * browser reports the OS cursor's own (accelerated) motion in CSS px.
+ * Confine only: 1:1 with the OS cursor.
  */
-export function movementScale(o: { raw: boolean; rawActive: boolean; sensitivity: number; uiScale: number; dpr: number }): number {
+export function movementScale(o: { relative: boolean; rawActive: boolean; sensitivity: number; uiScale: number; dpr: number; rawInDevicePixels: boolean }): number {
     const ui = o.uiScale > 0 ? o.uiScale : 1;
-    if (!o.raw) return 1 / ui;
-    const dpr = o.rawActive && o.dpr > 0 ? o.dpr : 1;
+    if (!o.relative) return 1 / ui;
+    const dpr = o.rawActive && o.rawInDevicePixels && o.dpr > 0 ? o.dpr : 1;
     return o.sensitivity / (ui * dpr);
 }
 

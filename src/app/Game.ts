@@ -561,7 +561,8 @@ export class Game {
         const screen = this.screens.current;
         const gameplay = screen?.showMenuCursor === false;
         const aiming = screen?.localUserPlaying ?? false;
-        lock.raw = s.highPrecisionMouse.value;
+        lock.relative = s.highPrecisionMouse.value;
+        lock.raw = s.highPrecisionMouse.value && s.rawInput.value;
         lock.sensitivity = s.cursorSensitivity.value;
         // Menus (pause menu included) only take the pointer on a click: typing in a search box or Ctrl+O
         // shouldn't, and the Esc after it should close what opened. While aiming, Z/X take it too.
