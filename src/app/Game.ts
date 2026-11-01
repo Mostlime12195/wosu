@@ -1,19 +1,22 @@
-import { Container, Graphics } from 'pixi.js';
-import { packFetch } from '../core/assetPacks';
+import { Container, Graphics, Texture } from 'pixi.js';
+import { loadPack, packFetch } from '../core/assetPacks';
 import { Bindable } from '../core/Bindable';
+import { afterNextFrame, whenIdle } from '../core/idle';
 import { App } from './App';
 import { BackgroundManager } from './BackgroundManager';
 import { Cursor, setOsCursorVisible, type CursorTextures } from './Cursor';
 import { FpsCounter } from './FpsCounter';
+import type * as Deferred from './lazy';
+import { LazyOverlay } from './LazyOverlay';
 import { MusicController } from './MusicController';
-import { OverlayManager } from './Overlay';
+import { OverlayManager, type Overlay } from './Overlay';
 import { ScreenStack, type Screen } from './Screen';
 import { AudioEngine } from '../audio/AudioEngine';
 import { resolveAssetUrl } from '../audio/base';
 import { MusicTrack } from '../audio/MusicTrack';
 import { PreviewPlayer } from '../audio/PreviewPlayer';
 import { SampleBank } from '../audio/SampleBank';
-import { UISounds } from '../audio/UISounds';
+import { LATER_UI_SAMPLES, UISounds } from '../audio/UISounds';
 import { BeatmapLibrary, type LibrarySet } from '../beatmap/Library';
 import type { DifficultySummary } from '../beatmap/types';
 import { NO_MODS, modSettingsOf, sanitizeMods, sortedMods, type ModSet } from '../gameplay/mods';
@@ -27,16 +30,16 @@ import { BeatmapApi } from '../online/BeatmapApi';
 import { DownloadManager, type DownloadTask } from '../online/Downloader';
 import { coverUrl, resolveProviders, type OnlineSet } from '../online/providers';
 import { ALWAYS_BUNDLED, bundledSelection } from '../online/bundled';
-import { BeatmapListingOverlay } from '../overlays/BeatmapListingOverlay';
+import type { BeatmapListingOverlay } from '../overlays/BeatmapListingOverlay';
 import { DialogOverlay } from '../overlays/DialogOverlay';
-import { NotificationManager } from '../overlays/notifications/Notifications';
+import { NotificationManager, type Notification } from '../overlays/notifications/Notifications';
 import { NotificationOverlay } from '../overlays/notifications/NotificationOverlay';
 import { ToastTray } from '../overlays/notifications/ToastTray';
 import { NowPlayingOverlay } from '../overlays/NowPlayingOverlay';
-import { SettingsOverlay } from '../overlays/settings/SettingsOverlay';
+import type { SettingsOverlay } from '../overlays/settings/SettingsOverlay';
 import { Toolbar } from '../overlays/Toolbar';
 import { VolumeOverlay } from '../overlays/VolumeOverlay';
-import { ProfileOverlay } from '../overlays/profile/ProfileOverlay';
+import type { ProfileOverlay } from '../overlays/profile/ProfileOverlay';
 import { LocalProfile } from './Profile';
 import { GameSettings } from '../settings/Settings';
 import { Skin } from '../skin/Skin';
@@ -46,7 +49,7 @@ import { Favourites } from '../storage/Favourites';
 import { KnownVideos } from '../storage/KnownVideos';
 import { ScoreStore, type ScoreRecord } from '../storage/ScoreStore';
 import { Dropdown } from '../ui/Dropdown';
-import { installBitmapFonts, loadFonts } from '../ui/fonts';
+import { installBitmapFonts, loadFonts, loadMenuFonts, warmBitmapFonts } from '../ui/fonts';
 import { KeyBindButton } from '../ui/KeyBindButton';
 import { Slider } from '../ui/Slider';
 import { TooltipLayer } from '../ui/Tooltip';
@@ -54,9 +57,6 @@ import { installUIContext } from '../ui/UIContext';
 import type { UIComponent } from '../ui/UIComponent';
 import { IntroScreen } from '../screens/IntroScreen';
 import { MainMenuScreen } from '../screens/MainMenuScreen';
-import { SongSelectScreen } from '../screens/select/SongSelectScreen';
-import { PlayerLoaderScreen } from '../screens/play/PlayerLoaderScreen';
-import { SkinEditorScreen } from '../screens/edit/SkinEditorScreen';
 
 export interface Selection {
     set: LibrarySet;
@@ -99,22 +99,32 @@ export class Game {
 
     readonly toolbar: Toolbar;
     readonly toasts: ToastTray;
-    readonly settingsOverlay: SettingsOverlay;
-    readonly listing: BeatmapListingOverlay;
+    /** Built on first use or in idle time after the menu shows (see LazyOverlay). */
+    readonly settingsOverlay: LazyOverlay<SettingsOverlay>;
+    readonly listing: LazyOverlay<BeatmapListingOverlay>;
     readonly notificationOverlay: NotificationOverlay;
     readonly nowPlaying: NowPlayingOverlay;
     readonly volume: VolumeOverlay;
     readonly dialog: DialogOverlay;
     /** The local player's name, picture and banner. */
     readonly profile: LocalProfile;
-    readonly profileOverlay: ProfileOverlay;
+    readonly profileOverlay: LazyOverlay<ProfileOverlay>;
 
     private readonly popupBlockers = new Map<object, { blocker: Graphics; keyOff: () => void }>();
     readonly startedAt = Date.now();
 
+    /**
+     * Startup, kept to what the intro draws: the upright UI font, the icon
+     * font and the menu cursor (index.html preloads the fonts, so they
+     * download alongside the scripts). The audio output, menu background,
+     * default skin, UI sounds, italic font and the deferred code chunk
+     * follow once the intro is on screen (startDeferred, afterMenu).
+     */
     static async boot(host: HTMLElement): Promise<Game> {
         const settings = new GameSettings();
         settings.load();
+        const assets = Promise.all([loadFonts(), Cursor.loadTextures()]);
+        assets.catch(() => { /* awaited below */ });
         const app = new App();
         await app.init({
             host,
@@ -125,7 +135,8 @@ export class Game {
         const loading = showBootSpinner(app);
         const skin = new Skin();
         const skins = new SkinManager();
-        const [, , cursorTextures] = await Promise.all([loadFonts(), skin.load(), Cursor.loadTextures(), skins.loadDefault()]);
+        const [, cursorTextures] = await assets;
+        skin.load();
         installBitmapFonts(app.renderer.resolution);
         loading.destroy();
         const game = new Game(app, settings, skin, skins, cursorTextures);
@@ -148,7 +159,9 @@ export class Game {
         settings.keyBindings.bind(v => (this.input.bindings = resolveBindings(v)), true);
         // One pack download each instead of a request per sound (see tools/assetPacks.ts).
         this.samples = new SampleBank(this.audio, { fetcher: packFetch('default-hitsounds', resolveAssetUrl(DEFAULT_SKIN_URL)) });
-        this.uiSounds = new UISounds(this.audio, packFetch('ui-samples', resolveAssetUrl('assets/samples/')));
+        const uiBase = resolveAssetUrl('assets/samples/');
+        const [menuPack, laterPack] = [packFetch('ui-samples', uiBase), packFetch('result-samples', uiBase)];
+        this.uiSounds = new UISounds(this.audio, url => (LATER_UI_SAMPLES.test(url.slice(uiBase.length)) ? laterPack : menuPack)(url));
         this.preview = new PreviewPlayer(this.audio);
         const providers = () => resolveProviders(settings.browseProvider.value, settings.downloadProvider.value);
         this.api = new BeatmapApi(providers);
@@ -156,7 +169,10 @@ export class Game {
         this.music = new MusicController(this.audio, this.preview, this.library);
         // With skins in menus, a skin's menu-background stands in for wosu!'s own (like osu!stable).
         this.background = new BackgroundManager(app.renderer, () => menuSkin.value?.texture('menu-background')?.texture ?? skin.defaultBackground);
-        this.background.defaultKey = () => (menuSkin.value?.texture('menu-background') ? `default:${skins.currentInfo.value?.id ?? 'skin'}` : 'default');
+        // 'default:none' until wosu!'s background has loaded (it follows the intro), so it then fades in.
+        this.background.defaultKey = () => (menuSkin.value?.texture('menu-background')
+            ? `default:${skins.currentInfo.value?.id ?? 'skin'}`
+            : skin.defaultBackground === Texture.EMPTY ? 'default:none' : 'default');
         this.screens = new ScreenStack(this);
         this.tooltips = new TooltipLayer(() => this.input.pointer, () => ({ width: app.width, height: app.height }));
         // The gameplay cursor and trail come from the osu! skins (selected → default).
@@ -186,14 +202,18 @@ export class Game {
         app.cursorLayer.addChild(this.cursor);
         app.debugLayer.addChild(this.fps);
 
-        this.settingsOverlay = this.overlays.register(new SettingsOverlay(this));
-        this.listing = this.overlays.register(new BeatmapListingOverlay(this));
+        // Placeholders keep the deferred overlays' stacking order.
+        const listingSlot = new Container();
+        const settingsSlot = new Container();
+        const profileSlot = new Container();
+        this.listing = this.lazyOverlay(listingSlot, (m, g) => new m.BeatmapListingOverlay(g));
+        this.settingsOverlay = this.lazyOverlay(settingsSlot, (m, g) => new m.SettingsOverlay(g));
         this.notificationOverlay = this.overlays.register(new NotificationOverlay(this));
         this.nowPlaying = this.overlays.register(new NowPlayingOverlay(this));
         this.profile = new LocalProfile(settings);
-        this.profileOverlay = this.overlays.register(new ProfileOverlay(this));
+        this.profileOverlay = this.lazyOverlay(profileSlot, (m, g) => new m.ProfileOverlay(g));
         this.dialog = this.overlays.register(new DialogOverlay(this));
-        app.overlayLayer.addChild(this.listing, this.settingsOverlay, this.notificationOverlay, this.nowPlaying, this.profileOverlay, this.dialog);
+        app.overlayLayer.addChild(listingSlot, settingsSlot, this.notificationOverlay, this.nowPlaying, profileSlot, this.dialog);
         this.volume = new VolumeOverlay(this);
 
         // The toolbar mirrors overlay state, so it is built after them.
@@ -221,8 +241,8 @@ export class Game {
         }
         MusicTrack.diagnostics.add(msg => this.notifications.warning(msg));
         this.downloads.added.add(task => this.trackDownload(task));
-        void this.samples.load().catch(e => console.warn('hitsounds failed to load', e));
-        void this.uiSounds.load();
+        // The intro's click plays a UI sound: that pack downloads first (decoded in startDeferred).
+        const uiSamples = loadPack('ui-samples');
         await Promise.all([
             this.library.init().catch(e => console.error('library init failed', e)),
             this.scores.init().catch(e => console.error('score store init failed', e)),
@@ -234,10 +254,126 @@ export class Game {
         void this.skins.attach(this).catch(e => console.error('skin store init failed', e));
         this.background.setDefault();
         this.screens.push(new IntroScreen());
+        // Boot timing marks (the intro is interactive from here; see also afterMenu).
+        performance.mark('wosu:intro');
         this.handleLaunchParams();
         this.library.imported.add(set => this.queueStarLookup(set));
         for (const set of this.library.sets) this.queueStarLookup(set);
-        void this.fetchBundledBeatmaps();
+        // First-launch songs are big downloads: after the sounds the intro needs.
+        void uiSamples.then(() => this.fetchBundledBeatmaps());
+        afterNextFrame(() => this.startDeferred(uiSamples));
+        const off = this.screens.changed.add(() => {
+            if (!(this.screens.current instanceof MainMenuScreen)) return;
+            off();
+            this.afterMenu();
+        });
+    }
+
+    /**
+     * Once the intro is on screen: open the audio output (a long task,
+     * kept off the first frame; the intro's click would open it anyway)
+     * and decode the menus' UI sounds. Downloads go in order of need: those
+     * sounds and the italic face (the menu waits for it), then the menu
+     * background, then the default skin (cursor trail, gameplay).
+     */
+    private startDeferred(uiSamples: Promise<unknown>): void {
+        this.audio.start();
+        void this.uiSounds.load(undefined, name => !LATER_UI_SAMPLES.test(name));
+        void loadMenuFonts();
+        this.essentials = uiSamples
+            .then(() => this.skin.loadBackground())
+            .then(() => {
+                if (this.background.showingDefault) this.background.setDefault();
+                return this.skins.loadDefault();
+            })
+            .catch(e => console.error('default skin failed to load', e));
+    }
+
+    /** startDeferred's downloads; gameplay's own wait for them (they share the bandwidth). */
+    private essentials: Promise<unknown> = Promise.resolve();
+
+    /**
+     * The main menu is up: in idle time, finish the counter font atlas,
+     * load the deferred code chunk and build its overlays (so they open
+     * instantly), then the hitsounds and the rest of gameplay's assets.
+     */
+    private afterMenu(): void {
+        performance.mark('wosu:menu');
+        const warm = (): void => {
+            if (!warmBitmapFonts()) whenIdle(warm);
+        };
+        whenIdle(
+            warm,
+            () => this.deferredModules(),
+            () => this.listing.load(),
+            () => this.settingsOverlay.load(),
+            () => this.profileOverlay.load(),
+            () => void this.essentials.then(() => this.gameplayAssets()),
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Deferred code (lazy.ts)
+    // ------------------------------------------------------------------
+
+    private deferred: typeof Deferred | null = null;
+    private deferredLoad: Promise<typeof Deferred> | null = null;
+
+    /** The deferred chunk (overlays, song select, gameplay, skin editor); loads once. */
+    deferredModules(): Promise<typeof Deferred> {
+        this.deferredLoad ??= import('./lazy').then(m => (this.deferred = m), (e: unknown) => {
+            this.deferredLoad = null;
+            throw e;
+        });
+        return this.deferredLoad;
+    }
+
+    private gameplayReady = false;
+
+    /** What gameplay needs beyond the menus: default skin, Venera, hitsounds (not waited for). */
+    private gameplayAssets(): Promise<unknown> {
+        void this.samples.load().catch(e => console.warn('hitsounds failed to load', e));
+        void this.uiSounds.load();
+        return Promise.all([this.skins.loadDefault(), this.skin.loadDeferred()]).then(() => (this.gameplayReady = true));
+    }
+
+    /**
+     * Run `fn` with the deferred modules: at once when they're in (the
+     * usual case, as the menu loads them), else after loading them (with
+     * gameplay's assets when `gameplay`), unless the screen changed meanwhile.
+     */
+    private withDeferred(fn: (m: typeof Deferred) => void, gameplay = false): void {
+        if (this.deferred && (!gameplay || this.gameplayReady)) {
+            fn(this.deferred);
+            return;
+        }
+        const from = this.screens.current;
+        // Normally a moment; on a slow connection, say why nothing happened yet.
+        let note: Notification | null = null;
+        const slow = setTimeout(() => {
+            note = this.notifications.progress('Loading the game…');
+            note.progress.value = NaN;
+        }, 400);
+        Promise.all([this.deferredModules(), gameplay ? this.gameplayAssets() : null]).then(([m]) => {
+            if (this.screens.current === from) fn(m);
+        }, e => this.deferredFailed(e)).finally(() => {
+            clearTimeout(slow);
+            note?.dismiss();
+        });
+    }
+
+    private deferredFailed(e: unknown): void {
+        console.error('deferred load failed', e);
+        this.notifications.error('Part of wosu! failed to load. Check your connection and try again.');
+    }
+
+    private lazyOverlay<T extends Overlay>(slot: Container, make: (m: typeof Deferred, game: Game) => T): LazyOverlay<T> {
+        return this.overlays.track(new LazyOverlay<T>(async () => {
+            const overlay = make(await this.deferredModules(), this);
+            this.overlays.register(overlay);
+            slot.addChild(overlay);
+            return overlay;
+        }, overlay => overlay.resize(this.app.width, this.app.height), e => this.deferredFailed(e)));
     }
 
     /**
@@ -655,18 +791,21 @@ export class Game {
      */
     openSkinEditor(): boolean {
         const cur = this.screens.current;
-        if (cur instanceof SkinEditorScreen) return true;
-        if (!cur || cur instanceof IntroScreen || cur instanceof PlayerLoaderScreen || !cur.showMenuCursor) {
+        // These screens live in the deferred chunk: none can be up before it loaded.
+        const d = this.deferred;
+        if (d && cur instanceof d.SkinEditorScreen) return true;
+        if (!cur || cur instanceof IntroScreen || (d && cur instanceof d.PlayerLoaderScreen) || !cur.showMenuCursor) {
             this.notifications.info('The skin editor opens from the menus and song select, not during gameplay.');
             return false;
         }
         this.overlays.hideAll();
-        this.screens.push(new SkinEditorScreen());
+        this.withDeferred(m => this.screens.push(new m.SkinEditorScreen()), true);
         return true;
     }
 
     openSongSelect(): void {
-        const existing = this.screens.screens.find(s => s instanceof SongSelectScreen);
+        const d = this.deferred;
+        const existing = d && this.screens.screens.find(s => s instanceof d.SongSelectScreen);
         if (existing) {
             this.screens.makeCurrent(existing);
             return;
@@ -674,19 +813,19 @@ export class Game {
         // Return to the main menu first so the stack stays menu → select.
         const menu = this.screens.screens.find(s => s instanceof MainMenuScreen);
         if (menu) this.screens.makeCurrent(menu);
-        this.screens.push(new SongSelectScreen());
+        this.withDeferred(m => this.screens.push(new m.SongSelectScreen()));
     }
 
     /** Start playing a difficulty (via the player loader). */
     play(selection: Selection): void {
         this.selection.value = selection;
-        this.screens.push(new PlayerLoaderScreen(selection));
+        this.withDeferred(m => this.screens.push(new m.PlayerLoaderScreen(selection)), true);
     }
 
     /** Watch a replay of a difficulty (lazer's ReplayPlayer, loaded with the score's mods). */
     watchReplay(selection: Selection, replay: ReplayInfo): void {
         this.selection.value = selection;
-        this.screens.push(new PlayerLoaderScreen(selection, replay));
+        this.withDeferred(m => this.screens.push(new m.PlayerLoaderScreen(selection, replay)), true);
     }
 
     /** Watch a saved score's replay; false when it has none or it can't be read. */

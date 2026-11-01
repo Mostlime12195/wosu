@@ -111,6 +111,13 @@ export class Cursor extends Container {
         });
         this.applySkin();
         menuSkin.bind(() => this.applyMenuSkin(), true);
+        // The default skin loads after the first screen shows; apply it once it's in.
+        if (!skins.loaded) {
+            void skins.ready.then(() => {
+                if (!this.playerChain) this.applySkin();
+                this.applyMenuSkin();
+            });
+        }
         this.listen();
     }
 

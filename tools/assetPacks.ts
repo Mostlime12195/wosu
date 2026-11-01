@@ -23,6 +23,8 @@ interface PackSpec {
 }
 
 const AUDIO = /\.(wav|ogg|mp3)$/i;
+/** UI sounds no menu plays (same rule as src/audio/UISounds.ts). */
+const LATER_UI_SAMPLES = /^(Results|Gameplay)\//;
 /** Already compressed: stored as-is (deflating them only costs time). */
 const STORED = /\.(png|jpe?g|ogg|mp3)$/i;
 /**
@@ -45,7 +47,10 @@ export const PACKS: readonly PackSpec[] = [
         include: (rel, all) => /^((normal|soft|drum)-|combobreak\.)/.test(rel)
             && (rel.endsWith('.ogg') || (rel.endsWith('.wav') && !all.has(rel.replace(/\.wav$/, '.ogg')))),
     },
-    { name: 'ui-samples', dir: 'public/assets/samples', include: rel => rel.endsWith('.mp3') },
+    // UI sounds: the menus' first (the intro's click needs them), then the results
+    // screen's and gameplay's, fetched later (src/audio/UISounds.ts, LATER_UI_SAMPLES).
+    { name: 'ui-samples', dir: 'public/assets/samples', include: rel => rel.endsWith('.mp3') && !LATER_UI_SAMPLES.test(rel) },
+    { name: 'result-samples', dir: 'public/assets/samples', include: rel => rel.endsWith('.mp3') && LATER_UI_SAMPLES.test(rel) },
 ];
 
 function walk(dir: string, prefix = ''): string[] {

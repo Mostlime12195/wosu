@@ -103,10 +103,18 @@ export abstract class Overlay extends UIComponent {
 /** Tracks overlays and enforces exclusivity. */
 export class OverlayManager {
     private readonly all: Overlay[] = [];
+    /** Overlays built on first use (LazyOverlay): open while their code loads. */
+    private readonly pending: { readonly state: Bindable<boolean> }[] = [];
 
     register<T extends Overlay>(o: T): T {
         this.all.push(o);
         return o;
+    }
+
+    /** Track a not-yet-built overlay's state, so hideAll and anyOpen cover it. */
+    track<T extends { readonly state: Bindable<boolean> }>(lazy: T): T {
+        this.pending.push(lazy);
+        return lazy;
     }
 
     notifyOpened(o: Overlay): void {
@@ -116,10 +124,11 @@ export class OverlayManager {
 
     hideAll(): void {
         for (const o of this.all) if (o.isOpen) o.hide();
+        for (const l of this.pending) l.state.value = false;
     }
 
     get anyOpen(): boolean {
-        return this.all.some(o => o.isOpen);
+        return this.all.some(o => o.isOpen) || this.pending.some(l => l.state.value);
     }
 
     resize(w: number, h: number): void {

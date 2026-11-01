@@ -3,10 +3,16 @@
  *
  * Opening only walks the central directory; entries are inflated one at a
  * time on demand, so pulling a .osu file out of a 20 MB set with a video
- * never touches the video bytes. fflate inflates large entries in a worker
- * and small ones synchronously.
+ * never touches the video bytes. Entries of WORKER_MIN_SIZE and up are
+ * inflated in a worker (fflate's own `unzip` inflates barely-compressed
+ * entries, i.e. every mp3 and jpg, on the main thread: 40 ms for a 6 MB
+ * song on a fast laptop, several frames on a slow one); small ones
+ * synchronously.
  */
-import { unzip, unzipSync, type UnzipFileInfo } from 'fflate';
+import { inflate, inflateSync, unzip, unzipSync, type UnzipFileInfo } from 'fflate';
+
+/** Entries this large (uncompressed bytes) are inflated off the main thread. */
+export const WORKER_MIN_SIZE = 256 * 1024;
 
 const AUDIO_EXT = /\.(mp3|ogg|oga|wav|flac|m4a|opus|aac)$/i;
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp)$/i;
@@ -38,6 +44,16 @@ interface Entry {
     /** Display name (re-decoded as UTF-8 or CP437, '/' separators). */
     name: string;
     size: number;
+    /** Where its data is, from the central directory (null: let fflate find it). */
+    loc: EntryLocation | null;
+}
+
+export interface EntryLocation {
+    /** 0 stored, 8 deflated. */
+    method: number;
+    compressedSize: number;
+    /** Offset of the entry's local file header. */
+    headerOffset: number;
 }
 
 const normalizePath = (s: string): string => s.replace(/\\/g, '/').replace(/^\.?\//, '');
@@ -65,12 +81,17 @@ export class OszArchive {
         else data = new Uint8Array(await input.arrayBuffer());
 
         const entries: Entry[] = [];
+        let index = 0;
+        let locs: EntryLocation[] | null = null;
         try {
+            // fflate lists in central directory order, so our own walk lines up by index.
+            locs = centralDirectory(data);
             // A filter that rejects everything lists the directory without inflating.
             unzipSync(data, {
                 filter: (f: UnzipFileInfo) => {
+                    const loc = locs?.[index++] ?? null;
                     if (!f.name.endsWith('/')) {
-                        entries.push({ raw: f.name, name: normalizePath(decodeName(f.name)), size: f.originalSize });
+                        entries.push({ raw: f.name, name: normalizePath(decodeName(f.name)), size: f.originalSize, loc });
                     }
                     return false;
                 },
@@ -78,6 +99,7 @@ export class OszArchive {
         } catch (e) {
             throw new Error(`Not a valid .osz/.zip archive (${e instanceof Error ? e.message : String(e)})`);
         }
+        if (locs && locs.length !== index) for (const e of entries) e.loc = null;
         return new OszArchive(data, entries);
     }
 
@@ -135,6 +157,13 @@ export class OszArchive {
         const resolved = this.find(name);
         const entry = resolved ? this.entries.get(resolved) : undefined;
         if (!entry) throw new Error(`File not found in archive: ${name}`);
+        if (entry.loc && entry.size >= WORKER_MIN_SIZE) {
+            try {
+                return await inflateEntry(this.data, entry.loc, entry.size);
+            } catch (e) {
+                console.warn(`archive: worker inflate of ${name} failed, retrying in place`, e);
+            }
+        }
         const raw = entry.raw;
         return new Promise<Uint8Array>((resolve, reject) => {
             unzip(this.data, { filter: f => f.name === raw }, (err, files) => {
@@ -157,6 +186,61 @@ export class OszArchive {
         const bytes = await this.readBytes(name);
         return new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mime ?? mimeForFile(name) });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Entry data
+// ---------------------------------------------------------------------------
+
+const u16 = (d: Uint8Array, i: number): number => d[i] | (d[i + 1] << 8);
+const u32 = (d: Uint8Array, i: number): number => (d[i] | (d[i + 1] << 8) | (d[i + 2] << 16) | (d[i + 3] << 24)) >>> 0;
+
+/**
+ * Data locations of every central directory entry, in order; null for
+ * archives this simple reader doesn't handle (zip64, no end record), which
+ * then go through fflate alone.
+ */
+export function centralDirectory(data: Uint8Array): EntryLocation[] | null {
+    let e = data.length - 22;
+    const stop = Math.max(0, data.length - 65558);
+    while (e >= stop && u32(data, e) !== 0x06054b50) e--;
+    if (e < stop) return null;
+    const count = u16(data, e + 10);
+    let o = u32(data, e + 16);
+    if (count === 0xffff || o === 0xffffffff) return null;
+    const out: EntryLocation[] = [];
+    for (let i = 0; i < count; i++) {
+        if (o + 46 > data.length || u32(data, o) !== 0x02014b50) return null;
+        const compressedSize = u32(data, o + 20);
+        const headerOffset = u32(data, o + 42);
+        if (compressedSize === 0xffffffff || headerOffset === 0xffffffff) return null;
+        out.push({ method: u16(data, o + 10), compressedSize, headerOffset });
+        o += 46 + u16(data, o + 28) + u16(data, o + 30) + u16(data, o + 32);
+    }
+    return out;
+}
+
+/** An entry's bytes, inflated in a worker (only its compressed bytes are copied there). */
+function inflateEntry(data: Uint8Array, loc: EntryLocation, size: number): Promise<Uint8Array> {
+    const h = loc.headerOffset;
+    if (u32(data, h) !== 0x04034b50) return Promise.reject(new Error('bad local header'));
+    const start = h + 30 + u16(data, h + 26) + u16(data, h + 28);
+    const end = start + loc.compressedSize;
+    if (end > data.length) return Promise.reject(new Error('entry past end of archive'));
+    if (loc.method === 0) return Promise.resolve(data.slice(start, end));
+    if (loc.method !== 8) return Promise.reject(new Error(`compression method ${loc.method}`));
+    return new Promise((resolve, reject) => {
+        try {
+            inflate(data.slice(start, end), { size, consume: true }, (err, out) => (err ? reject(err) : resolve(out)));
+        } catch (e) {
+            // No workers here (CSP, old runtime): inflate in place.
+            try {
+                resolve(inflateSync(data.subarray(start, end), { out: new Uint8Array(size) }));
+            } catch (e2) {
+                reject(e2 instanceof Error ? e2 : new Error(String(e2)));
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

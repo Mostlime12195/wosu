@@ -1,37 +1,51 @@
-import { Assets, BufferImageSource, Texture, type Spritesheet } from 'pixi.js';
+import { Assets, BufferImageSource, Texture } from 'pixi.js';
 import { BALL_SIZE, makeSliderBallData } from './ballData';
 
 const BASE = import.meta.env.BASE_URL;
 
 /**
- * Gameplay skin: the texture atlas plus procedurally generated textures
- * (UI shapes, glows, the shaded slider ball). Procedural textures are
- * drawn once with Canvas 2D for clean anti-aliased edges, then uploaded.
+ * wosu!'s own UI textures: procedurally generated shapes (drawn once with
+ * Canvas 2D for clean anti-aliased edges, then uploaded), the default
+ * menu background and the Venera bitmap font.
+ *
+ * Only the generated textures exist before the intro: the intro shows no
+ * background (it is fully dimmed) and Venera is a gameplay/results font,
+ * so their downloads wait until after the first screen (loadDeferred).
  */
 export class Skin {
-    private atlas: Record<string, Texture> = {};
     readonly generated = new Map<string, Texture>();
     defaultBackground: Texture = Texture.EMPTY;
+    private background: Promise<Texture> | null = null;
+    private deferred: Promise<void> | null = null;
 
-    async load(): Promise<void> {
-        const [sheet, bg] = await Promise.all([
-            Assets.load<Spritesheet>(`${BASE}assets/skin/sprites.json`),
-            Assets.load<Texture>(`${BASE}assets/skin/defaultbg.jpg`).catch(() => Texture.EMPTY),
-            Assets.load(`${BASE}assets/fonts/venera.fnt`),
-        ]);
-        this.atlas = sheet.textures;
-        this.defaultBackground = bg;
-        for (const t of Object.values(this.atlas)) t.source.autoGenerateMipmaps = false;
+    load(): void {
         this.generate();
     }
 
-    /** Atlas frame by file name (e.g. "hitcircleoverlay.png"). */
+    /** The default menu background (the main menu needs it first). Idempotent. */
+    loadBackground(): Promise<Texture> {
+        this.background ??= Assets.load<Texture>(`${BASE}assets/skin/defaultbg.jpg`)
+            .catch(() => Texture.EMPTY)
+            .then(t => (this.defaultBackground = t));
+        return this.background;
+    }
+
+    /** The default background and Venera; resolves once both settled. Idempotent. */
+    loadDeferred(): Promise<void> {
+        this.deferred ??= Promise.all([
+            this.loadBackground(),
+            Assets.load(`${BASE}assets/fonts/venera.fnt`).catch(e => console.warn('venera font failed to load', e)),
+        ]).then(() => undefined);
+        return this.deferred;
+    }
+
+    /** Generated texture by name (e.g. "sliderb.png"). */
     get(name: string): Texture {
-        return this.atlas[name] ?? this.generated.get(name) ?? Texture.EMPTY;
+        return this.generated.get(name) ?? Texture.EMPTY;
     }
 
     has(name: string): boolean {
-        return name in this.atlas || this.generated.has(name);
+        return this.generated.has(name);
     }
 
     tex(name: GeneratedTexture): Texture {

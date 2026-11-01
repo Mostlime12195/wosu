@@ -547,7 +547,8 @@ export class SongSelectScreen extends Screen {
             this.startPlay(live, d);
         },
         details: (set, diff) => {
-            if (set.onlineSetId) void this.game.listing.showSet(set.onlineSetId);
+            const sid = set.onlineSetId;
+            if (sid) this.game.listing.use(l => void l.showSet(sid));
             else this.detailsDialog.open(set, diff);
         },
         copyLink: url => void this.copyLink(url),

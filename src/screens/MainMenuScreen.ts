@@ -351,7 +351,7 @@ export class MainMenuScreen extends Screen {
         if (this.game.pendingListingQuery) {
             const q = this.game.pendingListingQuery;
             this.game.pendingListingQuery = null;
-            this.game.listing.search(q);
+            this.game.listing.use(l => l.search(q));
         }
     }
 

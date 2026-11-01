@@ -33,62 +33,101 @@ function contextConstructor(): AudioContextCtor | null {
 
 const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 
-export class AudioEngine {
+interface Graph {
     readonly context: AudioContext;
     readonly master: GainNode;
     readonly musicBus: GainNode;
-    /** Music volume, after the visualiser tap. */
     readonly musicVolume: GainNode;
     readonly effectsBus: GainNode;
     readonly analyser: AnalyserNode;
+    readonly freqData: Uint8Array<ArrayBuffer>;
+    readonly bands: { bass: [number, number]; mid: [number, number]; treble: [number, number] };
+}
 
+export class AudioEngine {
+    private graph: Graph | null = null;
+    private readonly Ctor: AudioContextCtor | null;
     private readonly volumes: AudioVolumes = { master: 1, music: 1, effects: 1 };
-    private readonly freqData: Uint8Array<ArrayBuffer>;
     private readonly levels: AudioLevels = { bass: 0, mid: 0, treble: 0, overall: 0 };
-    private readonly bands: { bass: [number, number]; mid: [number, number]; treble: [number, number] };
     private unlockPromise: Promise<void> | null = null;
     private wasUnlocked = false;
     private removeVisibilityListener: (() => void) | null = null;
 
+    /**
+     * The context is created on first use (or by `start`), not here:
+     * opening the audio output is a long main-thread task, and boot keeps
+     * it off the first frame. Nothing is audible before a user gesture
+     * anyway, and `unlock` (inside that gesture) creates it at the latest.
+     */
     constructor(options: { context?: AudioContext } = {}) {
-        let ctx = options.context;
-        if (!ctx) {
-            const Ctor = contextConstructor();
-            if (!Ctor) throw new Error('Web Audio is not supported in this browser');
-            ctx = new Ctor({ latencyHint: 'interactive' });
-        }
-        this.context = ctx;
+        this.Ctor = contextConstructor();
+        if (options.context) this.graph = this.build(options.context);
+        else if (!this.Ctor) throw new Error('Web Audio is not supported in this browser');
+    }
 
-        this.master = ctx.createGain();
-        this.musicBus = ctx.createGain();
-        this.musicVolume = ctx.createGain();
-        this.effectsBus = ctx.createGain();
-        this.analyser = ctx.createAnalyser();
-        this.analyser.fftSize = 2048;
-        this.analyser.smoothingTimeConstant = 0.8;
+    /** Create the context and mixing graph now (idempotent). */
+    start(): void {
+        if (!this.graph) this.graph = this.build(new this.Ctor!({ latencyHint: 'interactive' }));
+    }
 
-        this.musicBus.connect(this.musicVolume);
-        this.musicVolume.connect(this.master);
-        this.musicBus.connect(this.analyser);
-        this.effectsBus.connect(this.master);
-        this.master.connect(ctx.destination);
+    /** The context exists (it is created lazily; see the constructor). */
+    get started(): boolean {
+        return this.graph !== null;
+    }
 
-        const bins = this.analyser.frequencyBinCount || 1024;
-        this.freqData = new Uint8Array(bins);
-        const hzPerBin = (ctx.sampleRate || 44100) / (this.analyser.fftSize || 2048);
+    private get g(): Graph {
+        this.start();
+        return this.graph!;
+    }
+
+    get context(): AudioContext { return this.g.context; }
+    get master(): GainNode { return this.g.master; }
+    get musicBus(): GainNode { return this.g.musicBus; }
+    /** Music volume, after the visualiser tap. */
+    get musicVolume(): GainNode { return this.g.musicVolume; }
+    get effectsBus(): GainNode { return this.g.effectsBus; }
+    get analyser(): AnalyserNode { return this.g.analyser; }
+
+    private build(ctx: AudioContext): Graph {
+        const master = ctx.createGain();
+        const musicBus = ctx.createGain();
+        const musicVolume = ctx.createGain();
+        const effectsBus = ctx.createGain();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.8;
+
+        musicBus.connect(musicVolume);
+        musicVolume.connect(master);
+        musicBus.connect(analyser);
+        effectsBus.connect(master);
+        master.connect(ctx.destination);
+
+        const bins = analyser.frequencyBinCount || 1024;
+        const hzPerBin = (ctx.sampleRate || 44100) / (analyser.fftSize || 2048);
         const bin = (hz: number): number => Math.max(0, Math.min(bins - 1, Math.round(hz / hzPerBin)));
-        this.bands = {
-            bass: [bin(20), Math.max(bin(20) + 1, bin(250))],
-            mid: [bin(250), Math.max(bin(250) + 1, bin(2000))],
-            treble: [bin(2000), Math.max(bin(2000) + 1, bin(8000))],
+        const graph: Graph = {
+            context: ctx, master, musicBus, musicVolume, effectsBus, analyser,
+            freqData: new Uint8Array(bins),
+            bands: {
+                bass: [bin(20), Math.max(bin(20) + 1, bin(250))],
+                mid: [bin(250), Math.max(bin(250) + 1, bin(2000))],
+                treble: [bin(2000), Math.max(bin(2000) + 1, bin(8000))],
+            },
         };
+        // Volumes set before the context existed.
+        const now = ctx.currentTime;
+        setParam(master.gain, this.volumes.master, now);
+        setParam(musicVolume.gain, this.volumes.music, now);
+        setParam(effectsBus.gain, this.volumes.effects, now);
 
         this.wasUnlocked = ctx.state === 'running';
-        this.installVisibilityResume();
+        this.installVisibilityResume(ctx);
+        return graph;
     }
 
     get unlocked(): boolean {
-        return this.wasUnlocked && this.context.state === 'running';
+        return this.wasUnlocked && this.graph?.context.state === 'running';
     }
 
     /** Context time in ms. */
@@ -113,19 +152,15 @@ export class AudioEngine {
     }
 
     setVolumes(v: Partial<AudioVolumes>): void {
-        const now = this.context.currentTime;
-        if (v.master !== undefined) {
-            this.volumes.master = clamp01(v.master);
-            setParam(this.master.gain, this.volumes.master, now);
-        }
-        if (v.music !== undefined) {
-            this.volumes.music = clamp01(v.music);
-            setParam(this.musicVolume.gain, this.volumes.music, now);
-        }
-        if (v.effects !== undefined) {
-            this.volumes.effects = clamp01(v.effects);
-            setParam(this.effectsBus.gain, this.volumes.effects, now);
-        }
+        if (v.master !== undefined) this.volumes.master = clamp01(v.master);
+        if (v.music !== undefined) this.volumes.music = clamp01(v.music);
+        if (v.effects !== undefined) this.volumes.effects = clamp01(v.effects);
+        const g = this.graph;
+        if (!g) return; // applied when the context is created
+        const now = g.context.currentTime;
+        if (v.master !== undefined) setParam(g.master.gain, this.volumes.master, now);
+        if (v.music !== undefined) setParam(g.musicVolume.gain, this.volumes.music, now);
+        if (v.effects !== undefined) setParam(g.effectsBus.gain, this.volumes.effects, now);
     }
 
     /**
@@ -175,7 +210,8 @@ export class AudioEngine {
     }
 
     getFrequencyData(out: Uint8Array<ArrayBuffer>): void {
-        this.analyser.getByteFrequencyData(out);
+        if (this.graph) this.graph.analyser.getByteFrequencyData(out);
+        else out.fill(0);
     }
 
     /**
@@ -183,17 +219,22 @@ export class AudioEngine {
      * object is returned (and overwritten) on every call.
      */
     getLevels(): AudioLevels {
-        const data = this.freqData;
-        this.analyser.getByteFrequencyData(data);
+        const l = this.levels;
+        const g = this.graph;
+        if (!g) {
+            l.bass = l.mid = l.treble = l.overall = 0;
+            return l;
+        }
+        const data = g.freqData;
+        g.analyser.getByteFrequencyData(data);
         const avg = (range: [number, number]): number => {
             let sum = 0;
             for (let i = range[0]; i < range[1]; i++) sum += data[i];
             return sum / ((range[1] - range[0]) * 255);
         };
-        const l = this.levels;
-        l.bass = avg(this.bands.bass);
-        l.mid = avg(this.bands.mid);
-        l.treble = avg(this.bands.treble);
+        l.bass = avg(g.bands.bass);
+        l.mid = avg(g.bands.mid);
+        l.treble = avg(g.bands.treble);
         l.overall = (l.bass * 2 + l.mid + l.treble) / 4;
         return l;
     }
@@ -201,8 +242,10 @@ export class AudioEngine {
     dispose(): void {
         this.removeVisibilityListener?.();
         this.removeVisibilityListener = null;
-        try { this.master.disconnect(); } catch { /* already gone */ }
-        try { void this.context.close(); } catch { /* ignore */ }
+        const g = this.graph;
+        if (!g) return;
+        try { g.master.disconnect(); } catch { /* already gone */ }
+        try { void g.context.close(); } catch { /* ignore */ }
     }
 
     /** iOS only unlocks output after something is started inside the gesture. */
@@ -224,14 +267,14 @@ export class AudioEngine {
      * A hidden tab can suspend the context (and rAF stops); resume when it
      * comes back so audio and visuals re-sync without a reload.
      */
-    private installVisibilityResume(): void {
+    private installVisibilityResume(ctx: AudioContext): void {
         const doc = (globalThis as { document?: Document }).document;
         if (!doc || typeof doc.addEventListener !== 'function') return;
         const onVisible = (): void => {
             if (doc.hidden || !this.wasUnlocked) return;
-            const state = this.context.state as string;
+            const state = ctx.state as string;
             if (state === 'suspended' || state === 'interrupted') {
-                try { void this.context.resume(); } catch { /* ignore */ }
+                try { void ctx.resume(); } catch { /* ignore */ }
             }
         };
         doc.addEventListener('visibilitychange', onVisible);

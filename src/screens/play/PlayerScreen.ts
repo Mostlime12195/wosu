@@ -1,5 +1,7 @@
-import { Container, Graphics, RenderTexture, type Text } from 'pixi.js';
+import { Container, Graphics, type Text } from 'pixi.js';
 import { Screen } from '../../app/Screen';
+import { CursorTrail } from '../../app/cursor/CursorTrail';
+import { resolveCursorSkin } from '../../app/cursor/CursorSkin';
 import type { Game, Selection } from '../../app/Game';
 import type { MusicTrack } from '../../audio/MusicTrack';
 import { calculateDifficulty } from '../../beatmap/difficulty';
@@ -771,21 +773,45 @@ export class PlayerScreen extends Screen {
         this.renderState(this.clock.frameTime, 0);
         this.skip.update(0);
         const restoreHud = this.hud.revealForWarmUp();
-        const rt = RenderTexture.create({
-            width: Math.max(1, Math.ceil(this._w)),
-            height: Math.max(1, Math.ceil(this._h)),
-            resolution: r.resolution,
-        });
+        // Drawn into the screen's own target, not a texture: WebGPU pipelines are
+        // per target (format, MSAA, stencil), so only these are the ones gameplay
+        // uses. The loader's frame, drawn after this in the same tick, replaces it.
+        const render = (container: Container): void => r.render({ container, clear: true });
         try {
-            this.playfield.warmUp(() => r.render({ container: this.root, target: rt, clear: true }));
+            this.playfield.warmUp(() => render(this.root));
+            this.warmUpParticles(render);
         } catch (e) {
             console.warn('player warm-up failed', e);
         } finally {
             restoreHud();
-            rt.destroy(true);
         }
         // Back to the real start state.
         this.renderState(this.clock.frameTime, 0);
+    }
+
+    /**
+     * Particle layers that stay empty (draw nothing, compile nothing) until
+     * the cursor moves or the smoke key is held: draw a throwaway of each,
+     * built like the real ones, so their pipelines exist too.
+     */
+    private warmUpParticles(render: (c: Container) => void): void {
+        // Under a parent: a render's root container doesn't apply its own blend mode.
+        const holder = new Container();
+        const smoke = new SmokeLayer(this.skinChain);
+        smoke.input(0, true, 0, 0);
+        smoke.input(16, true, 40, 40);
+        smoke.draw(16);
+        holder.addChild(smoke);
+        const trailSkin = resolveCursorSkin(this.skinChain, this.game.skins.default).trail;
+        if (trailSkin) {
+            const trail = new CursorTrail(trailSkin);
+            trail.addPosition(0, 0);
+            trail.addPosition(200, 200);
+            trail.tick(0);
+            holder.addChild(trail);
+        }
+        render(holder);
+        holder.destroy({ children: true });
     }
 
     /**

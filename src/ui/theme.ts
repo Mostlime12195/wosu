@@ -137,9 +137,8 @@ export class ColorProvider {
 export const Fonts = {
     /** UI font (variable weight 100–900). */
     ui: 'Exo 2',
-    /** Font Awesome 6 Free (solid/regular). */
+    /** Font Awesome 6 Free solid, subset to the Icons table (tools/iconFont.ts). */
     iconSolid: 'FA6 Solid',
-    iconRegular: 'FA6 Regular',
     /** Bitmap font names installed at boot (see fonts.ts). */
     numeric: 'Exo2Numeric',
     venera: 'Venera',

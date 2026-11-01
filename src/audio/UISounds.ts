@@ -39,6 +39,12 @@ export const UI_SAMPLES = [
 
 export type UISampleName = (typeof UI_SAMPLES)[number];
 
+/**
+ * Sounds only the results screen and gameplay play: they ship in their own
+ * pack (tools/assetPacks.ts) and load after the menus' sounds.
+ */
+export const LATER_UI_SAMPLES = /^(Results|Gameplay)\//;
+
 export interface UIPlayOptions {
     /** Linear gain on top of the effects bus (default 1). */
     volume?: number;
@@ -83,13 +89,18 @@ export class UISounds {
 
     private readonly buffers = new Map<UISampleName, AudioBuffer>();
     private readonly lastPlayed = new Map<string, number>();
-    private loading: Promise<void> | null = null;
+    private readonly requested = new Set<UISampleName>();
 
     constructor(private readonly engine: AudioEngine, private readonly fetcher: (url: string) => Promise<Response> = url => fetch(url)) {}
 
-    /** Fetch and decode every sample (failures are skipped). Idempotent. */
-    load(baseUrl: string = resolveAssetUrl('assets/samples/')): Promise<void> {
-        this.loading ??= Promise.all(UI_SAMPLES.map(async name => {
+    /**
+     * Fetch and decode the samples `which` picks (default: all; failures
+     * are skipped). Each sample is requested once, whoever asks.
+     */
+    load(baseUrl: string = resolveAssetUrl('assets/samples/'), which: (name: UISampleName) => boolean = () => true): Promise<void> {
+        const names = UI_SAMPLES.filter(name => which(name) && !this.requested.has(name));
+        for (const name of names) this.requested.add(name);
+        return Promise.all(names.map(async name => {
             try {
                 const res = await this.fetcher(`${baseUrl}${name}.mp3`);
                 if (!res.ok) return;
@@ -99,7 +110,6 @@ export class UISounds {
                 /* a missing UI sound is not worth an error */
             }
         })).then(() => undefined);
-        return this.loading;
     }
 
     /**
@@ -126,7 +136,7 @@ export class UISounds {
     }
 
     private get canPlay(): boolean {
-        return this.enabled && this.volume > 0 && this.engine.context.state === 'running';
+        return this.enabled && this.volume > 0 && this.engine.started && this.engine.context.state === 'running';
     }
 
     /** Record a play of `key`; false while it is still within `ms` of the last one. */

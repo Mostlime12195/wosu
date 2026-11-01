@@ -10,6 +10,9 @@
   <link rel="icon" href="favicon.png" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
   <meta name="theme-color" content="#000000">
+  <!-- The intro's UI font downloads alongside the scripts (src/ui/fonts.ts loads it; the
+       icon font subset is preloaded the same way by tools/iconFont.ts). -->
+  <link rel="preload" href="assets/fonts/Exo2.woff2" as="font" type="font/woff2" crossorigin>
   <!-- The whole game, including every menu, renders into one PixiJS canvas.
        This sheet only makes the host element fill the viewport. -->
   <style>

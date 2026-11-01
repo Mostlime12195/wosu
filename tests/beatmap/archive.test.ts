@@ -1,6 +1,6 @@
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { OszArchive, decodeName, mimeForFile } from '../../src/beatmap/archive';
+import { OszArchive, WORKER_MIN_SIZE, centralDirectory, decodeName, mimeForFile } from '../../src/beatmap/archive';
 import { MAP_BASIC } from './helpers';
 
 function makeZip(files: Record<string, Uint8Array>, level: 0 | 6 = 6): Uint8Array {
@@ -27,6 +27,23 @@ describe('OszArchive', () => {
         const blob = await a.readBlob('sb/bg.jpg');
         expect(blob.type).toBe('image/jpeg');
         expect(blob.size).toBe(1);
+    });
+
+    it('reads large entries off the main thread, deflated or stored, with folders in the directory', async () => {
+        let seed = 7;
+        const noise = new Uint8Array(WORKER_MIN_SIZE + 12345).map(() => (seed = (seed * 1103515245 + 12345) >>> 0) >>> 24);
+        for (const level of [6, 0] as const) {
+            const zip = zipSync({ 'songs/': new Uint8Array(0), 'songs/audio.mp3': noise, 'a.osu': strToU8('x') }, { level });
+            const locs = centralDirectory(zip);
+            expect(locs?.length).toBe(3);
+            expect(locs?.[1].method).toBe(level ? 8 : 0);
+            const a = await OszArchive.open(zip);
+            expect(a.files).toEqual(['songs/audio.mp3', 'a.osu']);
+            const out = await a.readBytes('audio.mp3');
+            expect(out.length).toBe(noise.length);
+            expect(out.every((b, i) => b === noise[i])).toBe(true);
+            expect(await a.readText('a.osu')).toBe('x');
+        }
     });
 
     it('accepts Blob and ArrayBuffer input', async () => {

@@ -2,7 +2,10 @@ import { Text } from 'pixi.js';
 import { Fonts } from './theme';
 import { textStyle } from './text';
 
-/** Font Awesome 6 Free code points (solid unless noted). */
+/**
+ * Font Awesome 6 Free (solid) code points. The build ships only the glyphs
+ * listed here (tools/iconFont.ts), so add new icons to this table.
+ */
 export const Icons = {
     play: '',
     pause: '',
@@ -97,12 +100,12 @@ export const Icons = {
 
 export type IconName = keyof typeof Icons;
 
-export function icon(name: IconName, size = 16, color = 0xffffff, regular = false): Text {
+export function icon(name: IconName, size = 16, color = 0xffffff): Text {
     const t = new Text({
         text: Icons[name],
         style: textStyle({
-            font: regular ? Fonts.iconRegular : Fonts.iconSolid,
-            weight: regular ? '400' : '900',
+            font: Fonts.iconSolid,
+            weight: '900',
             size,
             color,
             align: 'center',

@@ -71,12 +71,12 @@ export function loadPack(name: PackName): Promise<AssetPack | null> {
 /**
  * A fetch for the files of the folder at `baseUrl`: answered from the
  * pack when it has the file, from the network otherwise (a missing pack,
- * or files it leaves out such as the WAV hitsounds).
+ * or files it leaves out such as the WAV hitsounds). The pack downloads
+ * on the first fetch (or an earlier loadPack call).
  */
 export function packFetch(name: PackName, baseUrl: string): (url: string) => Promise<Response> {
-    const pack = loadPack(name);
     return async url => {
-        const p = await pack;
+        const p = await loadPack(name);
         if (p && url.startsWith(baseUrl)) {
             const bytes = p.get(decodeURIComponent(url.slice(baseUrl.length)));
             if (bytes) return new Response(bytes as Uint8Array<ArrayBuffer>);

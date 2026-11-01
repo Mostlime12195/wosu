@@ -39,6 +39,14 @@ describe('asset packs', () => {
         expect(files.some(f => f.startsWith('UI/'))).toBe(true);
     });
 
+    it('keeps the results screen\'s and gameplay\'s UI sounds out of the menus\' pack', () => {
+        const menus = contents('ui-samples');
+        const later = contents('result-samples');
+        expect(menus.some(f => /^(Results|Gameplay)\//.test(f))).toBe(false);
+        expect(later.length).toBeGreaterThan(5);
+        expect(later.every(f => /^(Results|Gameplay)\/.*\.mp3$/.test(f) || f === PACK_ALIASES)).toBe(true);
+    });
+
     it('stores identical files once and restores them under every name', () => {
         const spec = PACKS.find(p => p.name === 'default-hitsounds')!;
         const raw = unzipSync(buildPack(ROOT, spec).bytes);

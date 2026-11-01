@@ -3,6 +3,8 @@ import { execSync } from 'node:child_process';
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import { assetPacks } from './tools/assetPacks';
+import { iconFont } from './tools/iconFont';
+import { pixiBindGroupCache } from './tools/pixiBindGroupCache';
 
 function buildInfo(): string {
     const sha = (process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.GITHUB_SHA)?.slice(0, 7);
@@ -14,7 +16,9 @@ function buildInfo(): string {
     }
 }
 
-const packs = assetPacks(fileURLToPath(new URL('.', import.meta.url)));
+const root = fileURLToPath(new URL('.', import.meta.url));
+const packs = assetPacks(root);
+const icons = await iconFont(root);
 
 export default defineConfig({
     // Relative base: the build works from the site root and from any
@@ -23,8 +27,11 @@ export default defineConfig({
     define: {
         __BUILD_INFO__: JSON.stringify(buildInfo()),
         ...packs.define,
+        ...icons.define,
     },
-    plugins: [packs.plugin],
+    plugins: [packs.plugin, icons.plugin, pixiBindGroupCache],
+    // The dependency pre-bundle resolves pixi's internal imports itself (dev only).
+    optimizeDeps: { rolldownOptions: { plugins: [pixiBindGroupCache] } },
     resolve: {
         alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
     },

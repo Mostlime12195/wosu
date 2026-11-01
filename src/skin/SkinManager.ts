@@ -57,6 +57,14 @@ const DISPOSE_DELAY = 1500;
  */
 export class SkinManager {
     private defaultSkin: LegacySkin | null = null;
+    private defaultLoad: Promise<void> | null = null;
+    private resolveReady!: () => void;
+    /**
+     * Resolves once the default skin is in. Boot doesn't wait for it (the
+     * intro draws nothing from it); gameplay, the skin editor and skinned
+     * cursors do.
+     */
+    readonly ready = new Promise<void>(resolve => (this.resolveReady = resolve));
     /** The selected skin (imported .osk), or null for wosu!'s default. */
     readonly current = new Bindable<LegacySkin | null>(null);
     /** Stored metadata of the selected skin (null = default). */
@@ -89,9 +97,21 @@ export class SkinManager {
     /**
      * Load the default skin (one pack download; file by file if that
      * fails). Its hitsounds stay with the SampleBank (same files), so
-     * only images and skin.ini are read here.
+     * only images and skin.ini are read here. Idempotent; a failed load
+     * can be retried.
      */
-    async loadDefault(): Promise<void> {
+    loadDefault(): Promise<void> {
+        this.defaultLoad ??= this.readDefault().then(skin => {
+            this.defaultSkin = skin;
+            this.resolveReady();
+        }, e => {
+            this.defaultLoad = null;
+            throw e;
+        });
+        return this.defaultLoad;
+    }
+
+    private async readDefault(): Promise<LegacySkin> {
         const pack = await loadPack('default-skin');
         const files: SkinFiles = pack
             ? {
@@ -103,7 +123,7 @@ export class SkinManager {
                 },
             }
             : await fetchedSkinFiles(resolveAssetUrl(DEFAULT_SKIN_URL));
-        this.defaultSkin = await LegacySkin.load(files, null, { samples: false });
+        return LegacySkin.load(files, null, { samples: false });
     }
 
     /** The chain for gameplay (and the cursor/HUD): [beatmap?] → selected → default. */

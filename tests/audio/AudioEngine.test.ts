@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AudioEngine } from '../../src/audio/AudioEngine';
 import { PreviewPlayer } from '../../src/audio/PreviewPlayer';
-import { UISounds } from '../../src/audio/UISounds';
-import { makeEngine, tick } from './stubs';
+import { LATER_UI_SAMPLES, UISounds, UI_SAMPLES } from '../../src/audio/UISounds';
+import { makeContext, makeEngine, tick, type ContextStub } from './stubs';
 
 describe('AudioEngine', () => {
     it('routes music through the analyser (before its volume) and both buses into master', () => {
@@ -97,6 +98,54 @@ class FakeAudioElement {
     load(): void {}
 }
 
+describe('AudioEngine context creation', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    function stubContext(): ContextStub[] {
+        const made: ContextStub[] = [];
+        vi.stubGlobal('AudioContext', class {
+            constructor() {
+                const ctx = makeContext({ state: 'suspended' });
+                made.push(ctx);
+                return ctx;
+            }
+        });
+        return made;
+    }
+
+    it('opens the audio output on first use, not when constructed', () => {
+        const made = stubContext();
+        const engine = new AudioEngine();
+        expect(made).toHaveLength(0);
+        expect(engine.started).toBe(false);
+        expect(engine.unlocked).toBe(false);
+        // Volumes and the visualiser work before it exists.
+        engine.setVolumes({ master: 0.5, effects: 0.25 });
+        expect(engine.getLevels().overall).toBe(0);
+        const fft = new Uint8Array(8).fill(9);
+        engine.getFrequencyData(fft);
+        expect([...fft]).toEqual(new Array(8).fill(0));
+        expect(made).toHaveLength(0);
+        engine.start();
+        engine.start();
+        expect(made).toHaveLength(1);
+        expect(engine.context).toBe(made[0]);
+        // Volumes set earlier apply to the new graph.
+        expect(engine.master.gain.value).toBe(0.5);
+        expect(engine.effectsBus.gain.value).toBe(0.25);
+        expect(engine.musicVolume.gain.value).toBe(1);
+    });
+
+    it('creates the context when something needs it (an unlock in a gesture)', async () => {
+        const made = stubContext();
+        const engine = new AudioEngine();
+        await engine.unlock();
+        expect(made).toHaveLength(1);
+        expect(made[0].resumed).toBe(1);
+        expect(engine.unlocked).toBe(true);
+    });
+});
+
 describe('PreviewPlayer', () => {
     function makePlayer() {
         const { engine } = makeEngine();
@@ -157,5 +206,21 @@ describe('UISounds', () => {
         expect(() => { ui.hover(); ui.click(); ui.select(); ui.back(); ui.notify(); ui.error(); }).not.toThrow();
         ui.enabled = false;
         expect(() => ui.toggleOn()).not.toThrow();
+    });
+
+    it('loads the menus\' sounds first and the rest later, each once', async () => {
+        const { engine } = makeEngine();
+        const fetched: string[] = [];
+        const ui = new UISounds(engine, async url => {
+            fetched.push(url);
+            return { ok: true, arrayBuffer: async () => new ArrayBuffer(4) } as Response;
+        });
+        await ui.load('x/', name => !LATER_UI_SAMPLES.test(name));
+        expect(fetched.length).toBeGreaterThan(0);
+        expect(fetched.some(u => /Results|Gameplay/.test(u))).toBe(false);
+        const first = fetched.length;
+        await ui.load('x/');
+        expect(fetched.length).toBe(UI_SAMPLES.length);
+        expect(fetched.slice(first).every(u => /^x\/(Results|Gameplay)\//.test(u))).toBe(true);
     });
 });

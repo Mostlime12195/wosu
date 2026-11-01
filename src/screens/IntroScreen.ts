@@ -2,6 +2,7 @@ import { Rectangle, Texture, type Text } from 'pixi.js';
 import { Screen } from '../app/Screen';
 import { tween, delay } from '../core/Tweener';
 import type { Action } from '../input/bindings';
+import { loadMenuFonts } from '../ui/fonts';
 import { label } from '../ui/text';
 import { Colors } from '../ui/theme';
 import { MainMenuScreen } from './MainMenuScreen';
@@ -122,10 +123,14 @@ export class IntroScreen extends Screen {
         tween(this.welcome, { alpha: 1, scale: 1 }, { duration: 1000, ease: 'OutQuint' });
         tween(this.logo, { scale: 1.12 }, { duration: 1400, ease: 'OutQuint' });
         if (this.game.settings.menuMusic.value) void this.game.music.playRandom();
+        // The menu's titles are italic; that face loads after the intro shows.
+        const fonts = loadMenuFonts();
         delay(1100, () => {
-            if (!this.isCurrent) return;
-            tween(this.welcome, { alpha: 0 }, { duration: 300 });
-            this.push(new MainMenuScreen());
+            void fonts.then(() => {
+                if (!this.isCurrent) return;
+                tween(this.welcome, { alpha: 0 }, { duration: 300 });
+                this.push(new MainMenuScreen());
+            });
         }, this);
     }
 
