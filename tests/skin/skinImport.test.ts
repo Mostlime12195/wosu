@@ -143,7 +143,8 @@ describe('SkinManager import and selection', () => {
 
         // A persisted selection that no longer exists falls back too.
         h.settings.skin.value = 'skin-missing';
-        expect(h.settings.skin.value).toBe('');
+        // The fallback lands once the change has reached every listener.
+        await vi.waitFor(() => expect(h.settings.skin.value).toBe(''));
     });
 
     it('falls back to the default with a notification when a skin fails to load', async () => {
