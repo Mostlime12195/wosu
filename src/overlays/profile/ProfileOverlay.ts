@@ -4,6 +4,7 @@ import { Overlay } from '../../app/Overlay';
 import { decodeImageFile, pickImageFile } from '../../app/Profile';
 import { formatNumber, lerpColor } from '../../core/math';
 import { ApiError } from '../../online/Account';
+import { offerLocalImport } from '../../online/importLocal';
 import { tween } from '../../core/Tweener';
 import type { Action } from '../../input/bindings';
 import { PLAYER_NAME_MAX, validatePlayerName } from '../../storage/profile';
@@ -77,6 +78,7 @@ export class ProfileOverlay extends Overlay {
     private readonly accountHint: Text;
     private readonly accountText: Text;
     private readonly signOutButton: Button;
+    private readonly uploadScores: Button;
     private authBusy = false;
     // Crop step
     private readonly cropView = new Container();
@@ -174,11 +176,14 @@ export class ProfileOverlay extends Overlay {
         this.accountHint.position.set(PAD, 92);
         this.signedOut.addChild(this.userBox, this.passBox, this.signInButton, this.registerButton, this.accountHint);
         this.accountText = label('', { size: 14, weight: '600' });
-        this.accountText.position.set(PAD, 10);
-        this.signOutButton = new Button('Sign out', { color: Colors.gray4, width: 140, height: 36 });
-        this.signOutButton.resize(140, 36).position.set(WIDTH - PAD - 140, 0);
+        this.accountText.position.set(PAD, 8);
+        this.uploadScores = new Button('Upload local scores', { color: colours.dark1, icon: 'upload', width: half, height: 36, fontSize: 14 });
+        this.uploadScores.resize(half, 36).position.set(PAD, 48);
+        this.uploadScores.onActivate = () => void this.upload();
+        this.signOutButton = new Button('Sign out', { color: Colors.gray4, width: half, height: 36, fontSize: 14 });
+        this.signOutButton.resize(half, 36).position.set(PAD + half + 20, 48);
         this.signOutButton.onActivate = () => void this.signOut();
-        this.signedIn.addChild(this.accountText, this.signOutButton);
+        this.signedIn.addChild(this.accountText, this.uploadScores, this.signOutButton);
         this.signedOut.position.set(0, y);
         this.signedIn.position.set(0, y);
         y += 112;
@@ -236,7 +241,7 @@ export class ProfileOverlay extends Overlay {
         if (u) {
             const rank = u.rank ? ` · global #${formatNumber(u.rank)}` : '';
             this.accountText.text = `Signed in as ${u.name}${rank} · ${formatNumber(Math.round(u.pp))}pp · ${formatNumber(u.playCount)} play${u.playCount === 1 ? '' : 's'}`;
-            fitText(this.accountText, WIDTH - PAD * 2 - 150, this.accountText.text);
+            fitText(this.accountText, WIDTH - PAD * 2, this.accountText.text);
         } else if (!this.authBusy) {
             this.accountHint.text = account.available.value
                 ? 'Passed plays on downloaded beatmaps go to the global leaderboards. Names are 2–15 characters, passwords 8+.'
@@ -244,7 +249,7 @@ export class ProfileOverlay extends Overlay {
             this.accountHint.tint = Colors.grayA;
         }
         this.signInButton.enabled = this.registerButton.enabled = !this.authBusy;
-        this.signOutButton.enabled = !this.authBusy;
+        this.signOutButton.enabled = this.uploadScores.enabled = !this.authBusy;
         if (this.isOpen) this.updateSubtitle();
     }
 
@@ -266,11 +271,25 @@ export class ProfileOverlay extends Overlay {
             this.passBox.setValue('', false);
             this.passBox.blur();
             this.game.notifications.success(kind === 'login' ? `Welcome back, ${user.name}!` : `Welcome to wosu!, ${user.name}!`);
+            // A new account on a device with plays: offer to bring them along.
+            if (kind === 'register') void offerLocalImport(this.game);
         } catch (e) {
             console.warn('[profile] sign in failed', e);
             this.accountHint.text = e instanceof ApiError ? e.message : 'The wosu! server could not be reached.';
             this.accountHint.tint = Colors.redLight;
             this.game.uiSounds.play('UI/generic-error');
+        } finally {
+            this.authBusy = false;
+            this.updateAccount();
+        }
+    }
+
+    private async upload(): Promise<void> {
+        if (this.authBusy) return;
+        this.authBusy = true;
+        this.updateAccount();
+        try {
+            await offerLocalImport(this.game, { prompt: true });
         } finally {
             this.authBusy = false;
             this.updateAccount();

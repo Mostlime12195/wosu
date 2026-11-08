@@ -156,3 +156,24 @@ describe('online API', () => {
         expect(h.body.users).toBe(2);
     });
 });
+
+describe('local score import', () => {
+    it('imports in bulk, skips duplicates and reports invalid entries', async () => {
+        const c = client();
+        await c.call('POST', '/auth/register', { name: 'importer', password: 'longenough' });
+        const scores = [{ ...play(20, 100, [], 10), date: 1700000000000 }, { ...play(21, 200, ['HD'], 20), date: 1700000001000 }, { ...play(22, 300), passed: false }, { ...play(23, 400), beatmapId: 0 }];
+        const r = await c.call('POST', '/scores/import', { scores });
+        expect(r.status).toBe(200);
+        expect(r.body).toMatchObject({ imported: 2, skipped: 0, invalid: 2 });
+        expect(r.body.user.playCount).toBe(2);
+        // The same device again: nothing new.
+        const again = await c.call('POST', '/scores/import', { scores: scores.slice(0, 2) });
+        expect(again.body).toMatchObject({ imported: 0, skipped: 2, invalid: 0 });
+        // Too many at once is refused outright.
+        const big = await c.call('POST', '/scores/import', { scores: Array.from({ length: 26 }, (_, i) => play(100 + i, 1)) });
+        expect(big.status).toBe(400);
+        const board = await c.call('GET', '/beatmaps/21/scores');
+        expect(board.body.scores[0].player).toBe('importer');
+        expect(board.body.scores[0].date).toBeGreaterThan(0);
+    });
+});

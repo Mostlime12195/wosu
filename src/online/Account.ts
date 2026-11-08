@@ -67,6 +67,12 @@ export interface SubmitResult {
     user: OnlineUser;
 }
 
+export interface ImportSummary {
+    imported: number;
+    skipped: number;
+    invalid: number;
+}
+
 export interface RankingsPage {
     users: { rank: number; id: number; name: string; pp: number; accuracy: number; rankedScore: number; playCount: number }[];
     page: number;
@@ -82,6 +88,9 @@ export class ApiError extends Error {
 
 /** Where the API lives: next to the site, so previews and sub-paths work without configuration. */
 export const DEFAULT_API_BASE = '/api';
+/** Scores per import request (the server's limit) and the replay bytes to fit under its body cap. */
+export const IMPORT_BATCH = 25;
+export const IMPORT_BATCH_BYTES = 2 * 1024 * 1024;
 
 export type Fetch = typeof fetch;
 
@@ -121,6 +130,40 @@ export function base64(bytes: Uint8Array): string {
     let s = '';
     for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
     return btoa(s);
+}
+
+/** A local record as the server's submission body. */
+export function scoreBody(record: ScoreRecord, replay?: Uint8Array): Record<string, unknown> {
+    return {
+        beatmapId: record.beatmapId,
+        setId: record.setId,
+        title: record.title,
+        artist: record.artist,
+        version: record.version,
+        creator: record.creator,
+        mods: record.mods,
+        modSettings: record.modSettings,
+        score: record.score,
+        accuracy: record.accuracy,
+        maxCombo: record.maxCombo,
+        count300: record.count300,
+        count100: record.count100,
+        count50: record.count50,
+        countMiss: record.countMiss,
+        countGeki: record.countGeki,
+        countKatu: record.countKatu,
+        grade: record.grade,
+        passed: record.passed,
+        pp: record.pp,
+        date: record.date,
+        mechanics: record.mechanics,
+        replay: replay ? base64(replay) : undefined,
+    };
+}
+
+/** The build id sent with submissions (undefined outside a Vite build, e.g. tests). */
+function build(): string | undefined {
+    return typeof __BUILD_INFO__ === 'string' ? __BUILD_INFO__ : undefined;
 }
 
 export class AccountManager {
@@ -182,36 +225,52 @@ export class AccountManager {
     }
 
     async submit(record: ScoreRecord, replay?: Uint8Array): Promise<SubmitResult> {
-        const body = {
-            beatmapId: record.beatmapId,
-            setId: record.setId,
-            title: record.title,
-            artist: record.artist,
-            version: record.version,
-            creator: record.creator,
-            mods: record.mods,
-            modSettings: record.modSettings,
-            score: record.score,
-            accuracy: record.accuracy,
-            maxCombo: record.maxCombo,
-            count300: record.count300,
-            count100: record.count100,
-            count50: record.count50,
-            countMiss: record.countMiss,
-            countGeki: record.countGeki,
-            countKatu: record.countKatu,
-            grade: record.grade,
-            passed: record.passed,
-            pp: record.pp,
-            date: record.date,
-            mechanics: record.mechanics,
-            replay: replay ? base64(replay) : undefined,
-            client: typeof __BUILD_INFO__ === 'string' ? __BUILD_INFO__ : undefined,
-        };
-        const r = await this.request<SubmitResult>('POST', '/scores', body);
+        const r = await this.request<SubmitResult>('POST', '/scores', { ...scoreBody(record, replay), client: build() });
         this.user.value = r.user;
         this.submitted.emit(r);
         return r;
+    }
+
+    /**
+     * Upload a device's local scores in batches. `replayOf` fetches a
+     * record's stored replay (by its local id); `onProgress` gets the
+     * number of records sent so far. Already-uploaded plays are skipped
+     * by the server.
+     */
+    async importScores(records: readonly ScoreRecord[], replayOf: (id: number) => Promise<Uint8Array | null>, onProgress?: (done: number) => void): Promise<ImportSummary> {
+        const total: ImportSummary = { imported: 0, skipped: 0, invalid: 0 };
+        let batch: Record<string, unknown>[] = [];
+        let bytes = 0;
+        let done = 0;
+        const flush = async () => {
+            if (!batch.length) return;
+            const sent = batch.length;
+            const r = await this.request<ImportSummary & { user: OnlineUser }>('POST', '/scores/import', { scores: batch, client: build() });
+            total.imported += r.imported;
+            total.skipped += r.skipped;
+            total.invalid += r.invalid;
+            this.user.value = r.user;
+            batch = [];
+            bytes = 0;
+            done += sent;
+            onProgress?.(done);
+        };
+        for (const record of records) {
+            let replay: Uint8Array | null = null;
+            if (record.hasReplay && record.id !== undefined) {
+                try {
+                    replay = await replayOf(record.id);
+                } catch {
+                    replay = null;
+                }
+            }
+            const size = replay ? replay.length : 0;
+            if (batch.length >= IMPORT_BATCH || (batch.length && bytes + size > IMPORT_BATCH_BYTES)) await flush();
+            batch.push(scoreBody(record, replay ?? undefined));
+            bytes += size;
+        }
+        await flush();
+        return total;
     }
 
     /** Top scores on a beatmap; `mods` filters to that exact mod set (undefined: any). */

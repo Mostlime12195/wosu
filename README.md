@@ -59,7 +59,7 @@ Accounts, score submission and the global leaderboards are served by `server/ind
 node server/index.mjs          # http://127.0.0.1:3100; `npm run dev` proxies /api there
 ```
 
-In production a reverse proxy (Caddy, nginx) forwards `/api/*` to it and passes `X-Forwarded-Proto`. Scores are only submitted for passed plays on beatmaps downloaded from a mirror (they need an online beatmap id); every submission keeps its replay, so suspicious scores can be checked. Relax, Autopilot and Difficulty Adjust plays are stored but do not count towards pp.
+In production a reverse proxy (Caddy, nginx) forwards `/api/*` to it and passes `X-Forwarded-Proto`. Playing without an account works as before (local scores only). A new account offers to upload the device's existing local scores, and the profile card can do it later. Scores are only submitted for passed plays on beatmaps downloaded from a mirror (they need an online beatmap id); every submission keeps its replay, so suspicious scores can be checked. Relax, Autopilot and Difficulty Adjust plays are stored but do not count towards pp.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report bugs and send changes.
 

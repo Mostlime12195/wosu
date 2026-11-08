@@ -12,6 +12,7 @@
  *   POST /api/auth/logout                               -> { ok }
  *   GET  /api/auth/me                                   -> { user | null }
  *   POST /api/scores          { score fields, replay? } -> { score, rank }  (signed in; passed, online beatmaps only)
+ *   POST /api/scores/import   { scores: [...] }         -> { imported, skipped, invalid }  (a device's local scores, 25 per call)
  *   GET  /api/beatmaps/:id/scores?mods=HD,DT            -> { scores, mine }
  *   GET  /api/scores/:id/replay                         -> replay bytes (application/octet-stream)
  *   GET  /api/rankings?page=1                           -> { users, page, pages }
@@ -40,6 +41,7 @@ const PASSWORD_MIN = 8;
 const PASSWORD_MAX = 200;
 const LEADERBOARD_SIZE = 50;
 const RANKINGS_PAGE = 50;
+const IMPORT_BATCH = 25;
 const GRADES = new Set(['XH', 'X', 'SH', 'S', 'A', 'B', 'C', 'D']);
 const MODS = new Set(['EZ', 'NF', 'HT', 'DC', 'HR', 'SD', 'PF', 'DT', 'NC', 'HD', 'FL', 'DA', 'RX', 'AP', 'SO']);
 /** Mods whose scores do not count towards the global rankings (osu!: unranked). */
@@ -118,6 +120,7 @@ const q = {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     markReplay: db.prepare('UPDATE scores SET has_replay = 1 WHERE id = ?'),
     scoreById: db.prepare('SELECT * FROM scores WHERE id = ?'),
+    scoreExists: db.prepare('SELECT id FROM scores WHERE user_id = ? AND beatmap_id = ? AND score = ? AND date = ? LIMIT 1'),
     /** Each user's best score on a beatmap (highest score, then earliest). */
     leaderboard: db.prepare(`
         SELECT s.*, u.name AS player FROM scores s
@@ -420,10 +423,8 @@ route('GET', /^\/api\/auth\/me$/, (req) => {
     return { user: u ? publicUser(u) : null };
 });
 
-route('POST', /^\/api\/scores$/, async (req) => {
-    const user = requireUser(req);
-    rateLimit(`submit:${user.id}`, 60, 10 * 60_000);
-    const b = await readJson(req);
+/** Validate one submitted play into its row values (plus the decoded replay). */
+function parseScore(b) {
     const beatmapId = int(b.beatmapId, 'beatmapId', { min: 1 });
     if (b.passed !== true) throw bad('Only passed plays are submitted.');
     const mods = modString(b.mods);
@@ -458,29 +459,87 @@ route('POST', /^\/api\/scores$/, async (req) => {
         replay = Buffer.from(b.replay, 'base64');
         if (!replay.length || replay.length > MAX_REPLAY) throw bad('replay is empty or too large.');
     }
-    const client = typeof b.client === 'string' ? b.client.slice(0, 40) : null;
-    const now = Date.now();
-    const { lastInsertRowid: id } = q.insertScore.run(
-        user.id, beatmapId, int(b.setId, 'setId', { optional: true }) ?? 0,
-        str(b.title, 'title'), str(b.artist, 'artist'), str(b.version, 'version'), str(b.creator, 'creator'),
+    return {
+        beatmapId, setId: int(b.setId, 'setId', { optional: true }) ?? 0,
+        title: str(b.title, 'title'), artist: str(b.artist, 'artist'), version: str(b.version, 'version'), creator: str(b.creator, 'creator'),
         mods, modSettings, score, accuracy, maxCombo, count300, count100, count50, countMiss,
-        int(b.countGeki, 'countGeki', { optional: true }), int(b.countKatu, 'countKatu', { optional: true }),
-        grade, pp, ranked, mechanics, date, now, 0, client,
+        countGeki: int(b.countGeki, 'countGeki', { optional: true }), countKatu: int(b.countKatu, 'countKatu', { optional: true }),
+        grade, pp, ranked, mechanics, date, replay,
+    };
+}
+
+/** Store a parsed play (and its replay file); returns the new score id. */
+function insertScore(userId, p, client, now = Date.now()) {
+    const { lastInsertRowid: id } = q.insertScore.run(
+        userId, p.beatmapId, p.setId, p.title, p.artist, p.version, p.creator,
+        p.mods, p.modSettings, p.score, p.accuracy, p.maxCombo, p.count300, p.count100, p.count50, p.countMiss,
+        p.countGeki, p.countKatu, p.grade, p.pp, p.ranked, p.mechanics, p.date, now, 0, client,
     );
-    if (replay) {
+    if (p.replay) {
         try {
-            writeFileSync(join(REPLAYS, `${id}.bin`), replay);
+            writeFileSync(join(REPLAYS, `${id}.bin`), p.replay);
             q.markReplay.run(id);
         } catch (e) {
             console.warn('replay write failed', e);
         }
     }
+    return id;
+}
+
+function clientOf(b) {
+    return typeof b.client === 'string' ? b.client.slice(0, 40) : null;
+}
+
+route('POST', /^\/api\/scores$/, async (req) => {
+    const user = requireUser(req);
+    rateLimit(`submit:${user.id}`, 60, 10 * 60_000);
+    const b = await readJson(req);
+    const p = parseScore(b);
+    const now = Date.now();
+    const id = insertScore(user.id, p, clientOf(b), now);
     recomputeStats(user.id);
     q.touchUser.run(now, user.id);
     const saved = q.scoreById.get(id);
-    const best = q.userBestOnBeatmap.get(beatmapId, user.id, '', '');
-    const rank = q.rankOnBeatmap.get(beatmapId, '', '', user.id, best.score, best.score, best.submitted).rank;
+    const best = q.userBestOnBeatmap.get(p.beatmapId, user.id, '', '');
+    const rank = q.rankOnBeatmap.get(p.beatmapId, '', '', user.id, best.score, best.score, best.submitted).rank;
     return { score: publicScore(saved, user.name), rank, best: best.id === id, user: publicUser(q.userById.get(user.id)) };
+});
+
+/**
+ * Bring a device's local scores into the account (after signing up on a
+ * device that already has plays). Up to IMPORT_BATCH per request; a play
+ * already on the account (same beatmap, score and date) is skipped, and an
+ * invalid one is reported without failing the rest.
+ */
+route('POST', /^\/api\/scores\/import$/, async (req) => {
+    const user = requireUser(req);
+    rateLimit(`import:${user.id}`, 60, 10 * 60_000);
+    const b = await readJson(req);
+    if (!Array.isArray(b.scores) || b.scores.length > IMPORT_BATCH) throw bad(`scores must be a list of at most ${IMPORT_BATCH}.`);
+    const client = clientOf(b);
+    const now = Date.now();
+    let imported = 0, skipped = 0, invalid = 0;
+    for (const item of b.scores) {
+        let p;
+        try {
+            p = parseScore(item ?? {});
+        } catch (e) {
+            if (e instanceof HttpError && e.status === 400) {
+                invalid++;
+                continue;
+            }
+            throw e;
+        }
+        if (q.scoreExists.get(user.id, p.beatmapId, p.score, p.date)) {
+            skipped++;
+            continue;
+        }
+        insertScore(user.id, p, client ? `${client} import` : 'import', now);
+        imported++;
+    }
+    if (imported) recomputeStats(user.id);
+    q.touchUser.run(now, user.id);
+    return { imported, skipped, invalid, user: publicUser(q.userById.get(user.id)) };
 });
 
 route('GET', /^\/api\/beatmaps\/(\d+)\/scores$/, (req, _res, m, url) => {
