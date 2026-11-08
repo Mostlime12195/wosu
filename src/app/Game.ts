@@ -43,6 +43,7 @@ import type { SettingsOverlay } from '../overlays/settings/SettingsOverlay';
 import { Toolbar } from '../overlays/Toolbar';
 import { VolumeOverlay } from '../overlays/VolumeOverlay';
 import type { ProfileOverlay } from '../overlays/profile/ProfileOverlay';
+import type { UserProfileOverlay } from '../overlays/profile/UserProfileOverlay';
 import { LocalProfile } from './Profile';
 import { GameSettings } from '../settings/Settings';
 import { Skin } from '../skin/Skin';
@@ -114,6 +115,8 @@ export class Game {
     /** The player's wosu! account (global leaderboards). */
     readonly account = new AccountManager();
     readonly profileOverlay: LazyOverlay<ProfileOverlay>;
+    /** The full profile page (any player's; rankings live there too). */
+    readonly userProfile: LazyOverlay<UserProfileOverlay>;
 
     private readonly popupBlockers = new Map<object, { blocker: Graphics; keyOff: () => void }>();
     readonly startedAt = Date.now();
@@ -212,14 +215,16 @@ export class Game {
         const listingSlot = new Container();
         const settingsSlot = new Container();
         const profileSlot = new Container();
+        const userProfileSlot = new Container();
         this.listing = this.lazyOverlay(listingSlot, (m, g) => new m.BeatmapListingOverlay(g));
         this.settingsOverlay = this.lazyOverlay(settingsSlot, (m, g) => new m.SettingsOverlay(g));
         this.notificationOverlay = this.overlays.register(new NotificationOverlay(this));
         this.nowPlaying = this.overlays.register(new NowPlayingOverlay(this));
         this.profile = new LocalProfile(settings);
         this.profileOverlay = this.lazyOverlay(profileSlot, (m, g) => new m.ProfileOverlay(g));
+        this.userProfile = this.lazyOverlay(userProfileSlot, (m, g) => new m.UserProfileOverlay(g));
         this.dialog = this.overlays.register(new DialogOverlay(this));
-        app.overlayLayer.addChild(listingSlot, settingsSlot, this.notificationOverlay, this.nowPlaying, profileSlot, this.dialog);
+        app.overlayLayer.addChild(listingSlot, userProfileSlot, settingsSlot, this.notificationOverlay, this.nowPlaying, profileSlot, this.dialog);
         this.volume = new VolumeOverlay(this);
 
         // The toolbar mirrors overlay state, so it is built after them.

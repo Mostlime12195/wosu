@@ -54,7 +54,7 @@ function client() {
         const text = await res.text();
         return { status: res.status, body: text.startsWith('{') ? JSON.parse(text) : text };
     };
-    return { call };
+    return { call, cookie: () => cookie };
 }
 
 const play = (beatmapId: number, score: number, mods: string[] = [], pp = 100) => ({
@@ -175,5 +175,76 @@ describe('local score import', () => {
         const board = await c.call('GET', '/beatmaps/21/scores');
         expect(board.body.scores[0].player).toBe('importer');
         expect(board.body.scores[0].date).toBeGreaterThan(0);
+    });
+});
+
+describe('account settings and moderation', () => {
+    it('stores an email (unverified without a mailer), changes passwords and pictures', async () => {
+        const c = client();
+        await c.call('POST', '/auth/login', { name: 'lime', password: 'longenough' });
+        expect((await c.call('POST', '/me/email', { email: 'not-an-email' })).status).toBe(400);
+        const e = await c.call('POST', '/me/email', { email: 'Lime@Example.com' });
+        expect(e.status).toBe(200);
+        expect(e.body.user.email).toBe('Lime@Example.com');
+        expect(e.body.user.emailVerified).toBe(false);
+        expect(e.body.sent).toBe(false);
+        // Another account cannot claim the same address; the public profile never shows it.
+        const s = client();
+        await s.call('POST', '/auth/login', { name: 'syl', password: 'longenough' });
+        expect((await s.call('POST', '/me/email', { email: 'lime@example.com' })).status).toBe(409);
+        expect((await client().call('GET', '/users/lime')).body.user.email).toBeUndefined();
+        // Forgot-password needs a mailer.
+        expect((await client().call('POST', '/auth/forgot', { email: 'lime@example.com' })).status).toBe(503);
+
+        expect((await c.call('POST', '/me/password', { current: 'wrong', password: 'evenlongerpw' })).status).toBe(401);
+        expect((await c.call('POST', '/me/password', { current: 'longenough', password: 'evenlongerpw' })).status).toBe(200);
+        expect((await c.call('GET', '/auth/me')).body.user.name).toBe('lime');
+        expect((await client().call('POST', '/auth/login', { name: 'lime', password: 'evenlongerpw' })).status).toBe(200);
+
+        const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+        const put = await fetch(`${base}/me/avatar`, { method: 'PUT', headers: { 'content-type': 'image/png', origin: new URL(base).origin, cookie: c.cookie() }, body: png });
+        expect(put.status).toBe(200);
+        const user = (await put.json()).user;
+        expect(user.avatarUrl).toMatch(/^\/api\/users\/\d+\/avatar\?v=1$/);
+        const img = await fetch(new URL(base).origin + user.avatarUrl);
+        expect(img.status).toBe(200);
+        expect(img.headers.get('content-type')).toBe('image/png');
+        const bad = await fetch(`${base}/me/cover`, { method: 'PUT', headers: { origin: new URL(base).origin, cookie: c.cookie() }, body: Buffer.from('not an image') });
+        expect(bad.status).toBe(400);
+        expect((await c.call('DELETE', '/me/avatar')).body.user.avatarUrl).toBeNull();
+    });
+
+    it('lets moderators delete scores and restrict players, and hides restricted players', async () => {
+        const syl = client();
+        await syl.call('POST', '/auth/login', { name: 'syl', password: 'longenough' });
+        const lime = client();
+        await lime.call('POST', '/auth/login', { name: 'lime', password: 'evenlongerpw' });
+        expect((await lime.call('POST', '/users/2/restrict', { restricted: true })).status).toBe(403);
+
+        // Promote from the server side, as the first admin would be.
+        const { execFileSync } = await import('node:child_process');
+        execFileSync(process.execPath, ['--no-warnings', 'server/admin.mjs', 'role', 'lime', 'admin'], { env: { ...process.env, WOSU_DATA: dataDir } });
+        expect((await lime.call('GET', '/auth/me')).body.user.role).toBe('admin');
+
+        const before = await client().call('GET', '/beatmaps/10/scores');
+        expect(before.body.scores.map((s: { player: string }) => s.player)).toEqual(['syl', 'lime']);
+        const r = await lime.call('POST', '/users/2/restrict', { restricted: true, reason: 'test' });
+        expect(r.body.user.restricted).toBe(true);
+        const after = await client().call('GET', '/beatmaps/10/scores');
+        expect(after.body.scores.map((s: { player: string }) => s.player)).toEqual(['lime']);
+        expect((await client().call('GET', '/rankings')).body.users.map((u: { name: string }) => u.name)).not.toContain('syl');
+        expect((await syl.call('GET', '/auth/me')).body.user.restrictedReason).toBe('test');
+        await lime.call('POST', '/users/2/restrict', { restricted: false });
+        expect((await client().call('GET', '/beatmaps/10/scores')).body.scores).toHaveLength(2);
+
+        const sylScore = before.body.scores[0].id;
+        expect((await syl.call('DELETE', `/scores/${sylScore}`, { reason: 'nope' })).status).toBe(403);
+        expect((await lime.call('DELETE', `/scores/${sylScore}`, { reason: 'impossible acc' })).status).toBe(200);
+        expect((await client().call('GET', '/beatmaps/10/scores')).body.scores.map((s: { player: string }) => s.player)).toEqual(['lime']);
+        expect((await lime.call('POST', '/users/2/rename', { name: 'syl2', reason: 'test' })).body.user.name).toBe('syl2');
+        expect((await lime.call('POST', '/users/2/role', { role: 'mod' })).body.user.role).toBe('mod');
+        const log = await lime.call('GET', '/mod/log');
+        expect(log.body.entries.map((e: { action: string }) => e.action).slice(0, 5)).toEqual(['role', 'rename', 'delete-score', 'unrestrict', 'restrict']);
+        expect((await syl.call('GET', '/mod/log')).status).toBe(200);
     });
 });

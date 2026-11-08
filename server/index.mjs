@@ -16,21 +16,42 @@
  *   GET  /api/beatmaps/:id/scores?mods=HD,DT            -> { scores, mine }
  *   GET  /api/scores/:id/replay                         -> replay bytes (application/octet-stream)
  *   GET  /api/rankings?page=1                           -> { users, page, pages }
- *   GET  /api/users/:name                               -> { user, best, recent }
- *   GET  /api/health                                    -> { ok, users, scores }
+ *   GET  /api/users/:name                               -> { user, best, recent, grades }
+ *   GET  /api/users/:id/avatar | /cover                 -> image
+ *   PUT/DELETE /api/me/avatar | /cover                  -> { user }        (raw image body, png/jpeg/webp)
+ *   POST /api/me/email        { email }                 -> { user, sent }  verification mail when mail is configured
+ *   POST /api/me/password     { current, password }     -> { ok }
+ *   GET  /api/auth/verify?token=                        -> HTML
+ *   POST /api/auth/forgot     { email }                 -> { ok, sent }
+ *   GET  /api/auth/reset?token= / POST { token, password } -> HTML / { ok }
+ *   DELETE /api/scores/:id    { reason }                -> { ok }          (moderators)
+ *   POST /api/users/:id/restrict { restricted, reason } -> { user }        (moderators)
+ *   POST /api/users/:id/rename   { name, reason }       -> { user }        (moderators)
+ *   POST /api/users/:id/role     { role }               -> { user }        (admins)
+ *   GET  /api/mod/log?page=                             -> { entries }     (moderators)
+ *   GET  /api/health                                    -> { ok, users, scores, mail }
  */
 import { randomBytes, scrypt as scryptCb, timingSafeEqual, createHash } from 'node:crypto';
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
+import { configured as mailConfigured, sendMail } from './mail.mjs';
 
 const scrypt = promisify(scryptCb);
 
 const PORT = Number(process.env.PORT ?? 3100);
 const DATA = process.env.WOSU_DATA ?? join(process.cwd(), 'data');
+/** Where links in emails point (the site's public origin). */
+const SITE_URL = (process.env.SITE_URL ?? 'https://wosu.dino.icu').replace(/\/$/, '');
 const REPLAYS = join(DATA, 'replays');
+const IMAGES = join(DATA, 'images');
+const MAX_AVATAR = 1024 * 1024;
+const MAX_COVER = 2 * 1024 * 1024;
+const TOKEN_HOURS = 24;
+const ROLES = ['user', 'mod', 'admin'];
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SESSION_COOKIE = 'wosu_session';
 const SESSION_DAYS = 180;
 const MAX_BODY = 4 * 1024 * 1024;
@@ -48,6 +69,7 @@ const MODS = new Set(['EZ', 'NF', 'HT', 'DC', 'HR', 'SD', 'PF', 'DT', 'NC', 'HD'
 const UNRANKED_MODS = new Set(['RX', 'AP', 'DA']);
 
 mkdirSync(REPLAYS, { recursive: true });
+mkdirSync(IMAGES, { recursive: true });
 const db = new DatabaseSync(join(DATA, 'wosu.sqlite'));
 db.exec(`
     PRAGMA journal_mode = WAL;
@@ -100,14 +122,69 @@ db.exec(`
         has_replay INTEGER NOT NULL DEFAULT 0,
         client TEXT
     );
+    CREATE TABLE IF NOT EXISTS tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        created INTEGER NOT NULL,
+        expires INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mod_log (
+        id INTEGER PRIMARY KEY,
+        mod_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        target_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        score_id INTEGER,
+        action TEXT NOT NULL,
+        detail TEXT,
+        reason TEXT,
+        created INTEGER NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS scores_beatmap ON scores(beatmap_id, score DESC, submitted);
     CREATE INDEX IF NOT EXISTS scores_user ON scores(user_id, submitted DESC);
     CREATE INDEX IF NOT EXISTS users_pp ON users(pp DESC);
     CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
 `);
 
+/** Columns added after the first release (CREATE TABLE above only covers new databases). */
+function addColumn(table, column, definition) {
+    const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+    if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+addColumn('users', 'email', 'TEXT');
+addColumn('users', 'email_lower', 'TEXT');
+addColumn('users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'role', "TEXT NOT NULL DEFAULT 'user'");
+addColumn('users', 'restricted', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'restricted_reason', 'TEXT');
+addColumn('users', 'avatar_ext', 'TEXT');
+addColumn('users', 'avatar_v', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'cover_ext', 'TEXT');
+addColumn('users', 'cover_v', 'INTEGER NOT NULL DEFAULT 0');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email_lower) WHERE email_lower IS NOT NULL');
+
 const q = {
     userByName: db.prepare('SELECT * FROM users WHERE name_lower = ?'),
+    userByEmail: db.prepare('SELECT * FROM users WHERE email_lower = ?'),
+    setEmail: db.prepare('UPDATE users SET email = ?, email_lower = ?, email_verified = 0 WHERE id = ?'),
+    verifyEmail: db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?'),
+    setPassword: db.prepare('UPDATE users SET pass_hash = ?, pass_salt = ? WHERE id = ?'),
+    setImage: db.prepare('UPDATE users SET avatar_ext = CASE WHEN ? = \'avatar\' THEN ? ELSE avatar_ext END, avatar_v = CASE WHEN ? = \'avatar\' THEN avatar_v + 1 ELSE avatar_v END, cover_ext = CASE WHEN ? = \'cover\' THEN ? ELSE cover_ext END, cover_v = CASE WHEN ? = \'cover\' THEN cover_v + 1 ELSE cover_v END WHERE id = ?'),
+    setRestricted: db.prepare('UPDATE users SET restricted = ?, restricted_reason = ? WHERE id = ?'),
+    setName: db.prepare('UPDATE users SET name = ?, name_lower = ? WHERE id = ?'),
+    setRole: db.prepare('UPDATE users SET role = ? WHERE id = ?'),
+    insertToken: db.prepare('INSERT INTO tokens (token_hash, user_id, kind, created, expires) VALUES (?, ?, ?, ?, ?)'),
+    token: db.prepare('SELECT * FROM tokens WHERE token_hash = ? AND kind = ?'),
+    deleteToken: db.prepare('DELETE FROM tokens WHERE token_hash = ?'),
+    deleteUserTokens: db.prepare('DELETE FROM tokens WHERE user_id = ? AND kind = ?'),
+    expireTokens: db.prepare('DELETE FROM tokens WHERE expires < ?'),
+    deleteOtherSessions: db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?'),
+    deleteScore: db.prepare('DELETE FROM scores WHERE id = ?'),
+    insertLog: db.prepare('INSERT INTO mod_log (mod_id, target_id, score_id, action, detail, reason, created) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+    modLog: db.prepare(`SELECT l.*, m.name AS mod_name, t.name AS target_name FROM mod_log l
+        JOIN users m ON m.id = l.mod_id LEFT JOIN users t ON t.id = l.target_id ORDER BY l.id DESC LIMIT ? OFFSET ?`),
+    userGrades: db.prepare(`SELECT grade, COUNT(*) AS n FROM scores s WHERE s.user_id = ? AND s.ranked = 1
+        AND s.id = (SELECT id FROM scores x WHERE x.user_id = s.user_id AND x.beatmap_id = s.beatmap_id AND x.ranked = 1 ORDER BY score DESC, submitted ASC LIMIT 1)
+        GROUP BY grade`),
     userById: db.prepare('SELECT * FROM users WHERE id = ?'),
     insertUser: db.prepare('INSERT INTO users (name, name_lower, pass_hash, pass_salt, created, last_seen) VALUES (?, ?, ?, ?, ?, ?)'),
     touchUser: db.prepare('UPDATE users SET last_seen = ? WHERE id = ?'),
@@ -123,8 +200,8 @@ const q = {
     scoreExists: db.prepare('SELECT id FROM scores WHERE user_id = ? AND beatmap_id = ? AND score = ? AND date = ? LIMIT 1'),
     /** Each user's best score on a beatmap (highest score, then earliest). */
     leaderboard: db.prepare(`
-        SELECT s.*, u.name AS player FROM scores s
-        JOIN users u ON u.id = s.user_id
+        SELECT s.*, u.name AS player, u.avatar_ext, u.avatar_v FROM scores s
+        JOIN users u ON u.id = s.user_id AND u.restricted = 0
         WHERE s.id IN (
             SELECT id FROM scores WHERE beatmap_id = ? AND (? = '' OR mods = ?)
             GROUP BY user_id HAVING id = (SELECT id FROM scores x WHERE x.user_id = scores.user_id AND x.beatmap_id = ? AND (? = '' OR x.mods = ?) ORDER BY score DESC, submitted ASC LIMIT 1)
@@ -132,7 +209,8 @@ const q = {
         ORDER BY s.score DESC, s.submitted ASC LIMIT ?`),
     rankOnBeatmap: db.prepare(`
         SELECT COUNT(*) + 1 AS rank FROM (
-            SELECT MAX(score) AS best, MIN(submitted) AS first FROM scores WHERE beatmap_id = ? AND (? = '' OR mods = ?) AND user_id != ? GROUP BY user_id
+            SELECT MAX(s.score) AS best, MIN(s.submitted) AS first FROM scores s JOIN users u ON u.id = s.user_id AND u.restricted = 0
+            WHERE s.beatmap_id = ? AND (? = '' OR s.mods = ?) AND s.user_id != ? GROUP BY s.user_id
         ) WHERE best > ? OR (best = ? AND first < ?)`),
     userBestOnBeatmap: db.prepare('SELECT * FROM scores WHERE beatmap_id = ? AND user_id = ? AND (? = \'\' OR mods = ?) ORDER BY score DESC, submitted ASC LIMIT 1'),
     /** Best pp per beatmap for a user (ranked scores only), highest first. */
@@ -144,9 +222,9 @@ const q = {
     userPlayCount: db.prepare('SELECT COUNT(*) AS n FROM scores WHERE user_id = ?'),
     userRecent: db.prepare('SELECT * FROM scores WHERE user_id = ? ORDER BY submitted DESC LIMIT ?'),
     updateStats: db.prepare('UPDATE users SET pp = ?, accuracy = ?, ranked_score = ?, play_count = ? WHERE id = ?'),
-    userRank: db.prepare('SELECT COUNT(*) + 1 AS rank FROM users WHERE pp > ? OR (pp = ? AND id < ?)'),
-    rankings: db.prepare('SELECT id, name, pp, accuracy, ranked_score, play_count FROM users WHERE play_count > 0 ORDER BY pp DESC, id ASC LIMIT ? OFFSET ?'),
-    rankedUsers: db.prepare('SELECT COUNT(*) AS n FROM users WHERE play_count > 0'),
+    userRank: db.prepare('SELECT COUNT(*) + 1 AS rank FROM users WHERE restricted = 0 AND play_count > 0 AND (pp > ? OR (pp = ? AND id < ?))'),
+    rankings: db.prepare('SELECT * FROM users WHERE play_count > 0 AND restricted = 0 ORDER BY pp DESC, id ASC LIMIT ? OFFSET ?'),
+    rankedUsers: db.prepare('SELECT COUNT(*) AS n FROM users WHERE play_count > 0 AND restricted = 0'),
     counts: db.prepare('SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM scores) AS scores'),
 };
 
@@ -227,9 +305,15 @@ function sessionCookie(token, req, maxAge = SESSION_DAYS * 86400) {
     return `${SESSION_COOKIE}=${token}; Path=/api; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 }
 
-function publicUser(u) {
-    const rank = u.play_count > 0 ? q.userRank.get(u.pp, u.pp, u.id).rank : null;
-    return {
+function imageUrl(u, kind) {
+    const ext = kind === 'avatar' ? u.avatar_ext : u.cover_ext;
+    return ext ? `/api/users/${u.id}/${kind}?v=${kind === 'avatar' ? u.avatar_v : u.cover_v}` : null;
+}
+
+/** A user as everyone sees them; `self` adds what only the owner should see. */
+function publicUser(u, self = false) {
+    const rank = u.play_count > 0 && !u.restricted ? q.userRank.get(u.pp, u.pp, u.id).rank : null;
+    const out = {
         id: u.id,
         name: u.name,
         pp: Math.round(u.pp * 100) / 100,
@@ -238,14 +322,93 @@ function publicUser(u) {
         playCount: u.play_count,
         rank,
         created: u.created,
+        lastSeen: u.last_seen,
+        role: u.role ?? 'user',
+        restricted: !!u.restricted,
+        avatarUrl: imageUrl(u, 'avatar'),
+        coverUrl: imageUrl(u, 'cover'),
     };
+    if (self) {
+        out.email = u.email ?? null;
+        out.emailVerified = !!u.email_verified;
+        out.restrictedReason = u.restricted ? u.restricted_reason ?? null : null;
+    }
+    return out;
 }
 
-function publicScore(s, player) {
+function roleRank(role) {
+    return Math.max(0, ROLES.indexOf(role ?? 'user'));
+}
+
+function requireRole(req, role) {
+    const u = requireUser(req);
+    if (roleRank(u.role) < roleRank(role)) throw new HttpError(403, 'You cannot do that.');
+    return u;
+}
+
+function logAction(mod, action, { target = null, score = null, detail = null, reason = null } = {}) {
+    q.insertLog.run(mod.id, target, score, action, detail, reason, Date.now());
+}
+
+function checkEmail(raw) {
+    const email = String(raw ?? '').trim();
+    if (!email) return null;
+    if (email.length > 200 || !EMAIL_RE.test(email)) throw bad('That email address does not look right.');
+    return email;
+}
+
+function issueToken(userId, kind) {
+    const token = randomBytes(32).toString('hex');
+    const now = Date.now();
+    q.deleteUserTokens.run(userId, kind);
+    q.insertToken.run(sha256(token), userId, kind, now, now + TOKEN_HOURS * 3_600_000);
+    return token;
+}
+
+function consumeToken(raw, kind) {
+    const token = String(raw ?? '');
+    if (!/^[a-f0-9]{64}$/.test(token)) return null;
+    const t = q.token.get(sha256(token), kind);
+    if (!t) return null;
+    q.deleteToken.run(t.token_hash);
+    if (t.expires < Date.now()) return null;
+    return q.userById.get(t.user_id) ?? null;
+}
+
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+/** The small pages linked from emails (verification result, password reset form). */
+function page(title, body) {
+    return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · wosu!</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#1c1c24;color:#eee;font:16px/1.5 system-ui,sans-serif}
+main{max-width:420px;padding:32px;background:#26262f;border-radius:12px}h1{font-size:22px;margin:0 0 12px}a{color:#ff66aa}
+input{width:100%;box-sizing:border-box;padding:10px;margin:6px 0 14px;border-radius:6px;border:1px solid #444;background:#1c1c24;color:#eee}
+button{padding:10px 18px;border:0;border-radius:6px;background:#ff66aa;color:#fff;font-weight:600;cursor:pointer}.err{color:#ff8a8a}</style>
+<main>${body}</main>`;
+}
+
+const html = (res, status, body) => {
+    res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(body);
+    return null;
+};
+
+/** PNG / JPEG / WebP by magic bytes, for uploaded images. */
+function imageType(buf) {
+    if (buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'png';
+    if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+    if (buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+    return null;
+}
+
+const MIME = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' };
+
+function publicScore(s, player, avatarUrl) {
     return {
         id: s.id,
         userId: s.user_id,
         player: player ?? s.player,
+        avatarUrl: avatarUrl !== undefined ? avatarUrl : s.avatar_ext ? `/api/users/${s.user_id}/avatar?v=${s.avatar_v}` : null,
         beatmapId: s.beatmap_id,
         setId: s.set_id,
         title: s.title,
@@ -314,6 +477,7 @@ setInterval(() => {
     const now = Date.now();
     for (const [k, b] of buckets) if (b.reset < now) buckets.delete(k);
     q.expireSessions.run(now);
+    q.expireTokens.run(now);
 }, 60_000).unref();
 
 function clientIp(req) {
@@ -379,7 +543,7 @@ function startSession(res, req, user) {
 const routes = [];
 const route = (method, pattern, handler) => routes.push({ method, pattern, handler });
 
-route('GET', /^\/api\/health$/, () => ({ ok: true, ...q.counts.get() }));
+route('GET', /^\/api\/health$/, () => ({ ok: true, ...q.counts.get(), mail: mailConfigured }));
 
 route('POST', /^\/api\/auth\/register$/, async (req, res) => {
     // Attempts are capped loosely; accounts actually created, tightly.
@@ -396,7 +560,7 @@ route('POST', /^\/api\/auth\/register$/, async (req, res) => {
     rateHit(`register:${ip}`, 60 * 60_000);
     const user = q.userById.get(lastInsertRowid);
     startSession(res, req, user);
-    return { user: publicUser(user) };
+    return { user: publicUser(user, true) };
 });
 
 route('POST', /^\/api\/auth\/login$/, async (req, res) => {
@@ -408,7 +572,7 @@ route('POST', /^\/api\/auth\/login$/, async (req, res) => {
     const { hash } = await hashPassword(password, user ? user.pass_salt : randomBytes(16));
     if (!user || !timingSafeEqual(hash, user.pass_hash)) throw new HttpError(401, 'Wrong name or password.');
     startSession(res, req, user);
-    return { user: publicUser(user) };
+    return { user: publicUser(user, true) };
 });
 
 route('POST', /^\/api\/auth\/logout$/, (req, res) => {
@@ -420,7 +584,208 @@ route('POST', /^\/api\/auth\/logout$/, (req, res) => {
 
 route('GET', /^\/api\/auth\/me$/, (req) => {
     const u = currentUser(req);
-    return { user: u ? publicUser(u) : null };
+    return { user: u ? publicUser(u, true) : null, mail: mailConfigured };
+});
+
+// ---------------------------------------------------------------------------
+// Account settings: email, password, pictures
+
+route('POST', /^\/api\/me\/email$/, async (req) => {
+    const user = requireUser(req);
+    rateLimit(`email:${user.id}`, 6, 60 * 60_000);
+    const body = await readJson(req);
+    const email = checkEmail(body.email);
+    if (email && q.userByEmail.get(email.toLowerCase())?.id !== undefined && q.userByEmail.get(email.toLowerCase()).id !== user.id) {
+        throw new HttpError(409, 'That email address is already on another account.');
+    }
+    q.setEmail.run(email, email ? email.toLowerCase() : null, user.id);
+    let sent = false;
+    if (email) {
+        const token = issueToken(user.id, 'verify');
+        sent = await sendMail(email, 'Verify your wosu! email',
+            `Hi ${user.name},\n\nConfirm this address for your wosu! account by opening:\n${SITE_URL}/api/auth/verify?token=${token}\n\nThe link works for ${TOKEN_HOURS} hours. If this wasn't you, ignore this mail.`);
+    }
+    return { user: publicUser(q.userById.get(user.id), true), sent };
+});
+
+route('GET', /^\/api\/auth\/verify$/, (_req, res, _m, url) => {
+    const user = consumeToken(url.searchParams.get('token'), 'verify');
+    if (!user || !user.email) return html(res, 400, page('Link expired', `<h1>That link has expired</h1><p>Ask for a new verification mail from your profile in <a href="${SITE_URL}">wosu!</a>.</p>`));
+    q.verifyEmail.run(user.id);
+    return html(res, 200, page('Email verified', `<h1>Email verified</h1><p>${escapeHtml(user.email)} now belongs to <b>${escapeHtml(user.name)}</b>. You can close this tab and go back to <a href="${SITE_URL}">wosu!</a>.</p>`));
+});
+
+route('POST', /^\/api\/me\/password$/, async (req) => {
+    const user = requireUser(req);
+    rateLimit(`password:${user.id}`, 10, 10 * 60_000);
+    const body = await readJson(req);
+    const { hash } = await hashPassword(String(body.current ?? ''), user.pass_salt);
+    if (!timingSafeEqual(hash, user.pass_hash)) throw new HttpError(401, 'Your current password is wrong.');
+    const next = await hashPassword(checkPassword(body.password));
+    q.setPassword.run(next.hash, next.salt, user.id);
+    // Other devices sign out; this one keeps its session.
+    const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    q.deleteOtherSessions.run(user.id, sha256(token));
+    return { ok: true };
+});
+
+route('POST', /^\/api\/auth\/forgot$/, async (req) => {
+    rateLimit(`forgot:${clientIp(req)}`, 5, 60 * 60_000);
+    const body = await readJson(req);
+    const email = checkEmail(body.email);
+    if (!email) throw bad('Enter the email address on your account.');
+    if (!mailConfigured) throw new HttpError(503, 'Password resets are not available: this server cannot send mail yet.');
+    const user = q.userByEmail.get(email.toLowerCase());
+    let sent = false;
+    if (user && user.email_verified) {
+        const token = issueToken(user.id, 'reset');
+        sent = await sendMail(user.email, 'Reset your wosu! password',
+            `Hi ${user.name},\n\nReset the password of your wosu! account by opening:\n${SITE_URL}/api/auth/reset?token=${token}\n\nThe link works for ${TOKEN_HOURS} hours. If this wasn't you, ignore this mail.`);
+    }
+    // The answer never says whether the address exists.
+    return { ok: true, sent: sent || !user };
+});
+
+const resetForm = (token, error = '') => page('Reset password', `<h1>Choose a new password</h1>${error ? `<p class="err">${escapeHtml(error)}</p>` : ''}
+<form method="post" action="${SITE_URL}/api/auth/reset"><input type="hidden" name="token" value="${escapeHtml(token)}">
+<label>New password (8+ characters)<input type="password" name="password" minlength="8" required autofocus></label><button>Set password</button></form>`);
+
+route('GET', /^\/api\/auth\/reset$/, (_req, res, _m, url) => {
+    const token = String(url.searchParams.get('token') ?? '');
+    if (!/^[a-f0-9]{64}$/.test(token)) return html(res, 400, page('Bad link', '<h1>That link is not valid</h1>'));
+    return html(res, 200, resetForm(token));
+});
+
+route('POST', /^\/api\/auth\/reset$/, async (req, res) => {
+    rateLimit(`reset:${clientIp(req)}`, 10, 60 * 60_000);
+    const raw = await readBody(req);
+    const form = (req.headers['content-type'] ?? '').startsWith('application/x-www-form-urlencoded');
+    const body = form ? Object.fromEntries(new URLSearchParams(raw.toString('utf8'))) : JSON.parse(raw.toString('utf8') || '{}');
+    let password;
+    try {
+        password = checkPassword(body.password);
+    } catch (e) {
+        if (form) return html(res, 400, resetForm(String(body.token ?? ''), e.message));
+        throw e;
+    }
+    const user = consumeToken(body.token, 'reset');
+    if (!user) {
+        if (form) return html(res, 400, page('Link expired', `<h1>That link has expired</h1><p>Ask for a new one from the sign-in card in <a href="${SITE_URL}">wosu!</a>.</p>`));
+        throw bad('That reset link has expired.');
+    }
+    const next = await hashPassword(password);
+    q.setPassword.run(next.hash, next.salt, user.id);
+    q.deleteOtherSessions.run(user.id, '');
+    if (form) return html(res, 200, page('Password changed', `<h1>Password changed</h1><p>Sign in to <a href="${SITE_URL}">wosu!</a> with your new password.</p>`));
+    return { ok: true };
+});
+
+async function putImage(req, kind) {
+    const user = requireUser(req);
+    rateLimit(`image:${user.id}`, 20, 60 * 60_000);
+    const buf = await readBody(req);
+    const max = kind === 'avatar' ? MAX_AVATAR : MAX_COVER;
+    if (buf.length > max) throw bad(`That picture is too large (${Math.round(max / 1024 / 1024)} MB at most).`);
+    const ext = imageType(buf);
+    if (!ext) throw bad('Pictures must be PNG, JPEG or WebP.');
+    writeFileSync(join(IMAGES, `${kind}-${user.id}.${ext}`), buf);
+    q.setImage.run(kind, ext, kind, kind, ext, kind, user.id);
+    return { user: publicUser(q.userById.get(user.id), true) };
+}
+
+function dropImage(req, kind) {
+    const user = requireUser(req);
+    const ext = kind === 'avatar' ? user.avatar_ext : user.cover_ext;
+    if (ext) {
+        try {
+            unlinkSync(join(IMAGES, `${kind}-${user.id}.${ext}`));
+        } catch { /* already gone */ }
+    }
+    q.setImage.run(kind, null, kind, kind, null, kind, user.id);
+    return { user: publicUser(q.userById.get(user.id), true) };
+}
+
+route('PUT', /^\/api\/me\/avatar$/, (req) => putImage(req, 'avatar'));
+route('PUT', /^\/api\/me\/cover$/, (req) => putImage(req, 'cover'));
+route('DELETE', /^\/api\/me\/avatar$/, (req) => dropImage(req, 'avatar'));
+route('DELETE', /^\/api\/me\/cover$/, (req) => dropImage(req, 'cover'));
+
+route('GET', /^\/api\/users\/(\d+)\/(avatar|cover)$/, (_req, res, m) => {
+    const u = q.userById.get(Number(m[1]));
+    const kind = m[2];
+    const ext = u ? (kind === 'avatar' ? u.avatar_ext : u.cover_ext) : null;
+    const file = ext ? join(IMAGES, `${kind}-${u.id}.${ext}`) : null;
+    if (!file || !existsSync(file)) throw new HttpError(404, 'No picture.');
+    res.setHeader('Content-Type', MIME[ext]);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return readFileSync(file);
+});
+
+// ---------------------------------------------------------------------------
+// Moderation
+
+route('DELETE', /^\/api\/scores\/(\d+)$/, async (req, _res, m) => {
+    const mod = requireRole(req, 'mod');
+    const s = q.scoreById.get(Number(m[1]));
+    if (!s) throw new HttpError(404, 'No such score.');
+    const body = await readJson(req);
+    q.deleteScore.run(s.id);
+    try {
+        unlinkSync(join(REPLAYS, `${s.id}.bin`));
+    } catch { /* no replay */ }
+    recomputeStats(s.user_id);
+    logAction(mod, 'delete-score', { target: s.user_id, score: s.id, detail: `${s.title} [${s.version}] ${s.score} ${s.mods}`, reason: str(body.reason ?? '', 'reason', 500) || null });
+    return { ok: true };
+});
+
+route('POST', /^\/api\/users\/(\d+)\/restrict$/, async (req, _res, m) => {
+    const mod = requireRole(req, 'mod');
+    const target = q.userById.get(Number(m[1]));
+    if (!target) throw new HttpError(404, 'No such player.');
+    if (target.id === mod.id) throw bad('You cannot restrict yourself.');
+    if (roleRank(target.role) >= roleRank(mod.role)) throw new HttpError(403, 'Only a higher role can restrict that account.');
+    const body = await readJson(req);
+    const restricted = body.restricted === true ? 1 : 0;
+    const reason = str(body.reason ?? '', 'reason', 500) || null;
+    q.setRestricted.run(restricted, restricted ? reason : null, target.id);
+    logAction(mod, restricted ? 'restrict' : 'unrestrict', { target: target.id, reason });
+    return { user: publicUser(q.userById.get(target.id)) };
+});
+
+route('POST', /^\/api\/users\/(\d+)\/rename$/, async (req, _res, m) => {
+    const mod = requireRole(req, 'mod');
+    const target = q.userById.get(Number(m[1]));
+    if (!target) throw new HttpError(404, 'No such player.');
+    const body = await readJson(req);
+    const name = checkName(body.name);
+    const taken = q.userByName.get(name.toLowerCase());
+    if (taken && taken.id !== target.id) throw new HttpError(409, 'That name is taken.');
+    q.setName.run(name, name.toLowerCase(), target.id);
+    logAction(mod, 'rename', { target: target.id, detail: `${target.name} -> ${name}`, reason: str(body.reason ?? '', 'reason', 500) || null });
+    return { user: publicUser(q.userById.get(target.id)) };
+});
+
+route('POST', /^\/api\/users\/(\d+)\/role$/, async (req, _res, m) => {
+    const admin = requireRole(req, 'admin');
+    const target = q.userById.get(Number(m[1]));
+    if (!target) throw new HttpError(404, 'No such player.');
+    const body = await readJson(req);
+    const role = String(body.role ?? '');
+    if (!ROLES.includes(role)) throw bad('role must be user, mod or admin.');
+    if (target.id === admin.id) throw bad('Change your own role from the server, not here.');
+    q.setRole.run(role, target.id);
+    logAction(admin, 'role', { target: target.id, detail: role });
+    return { user: publicUser(q.userById.get(target.id)) };
+});
+
+route('GET', /^\/api\/mod\/log$/, (req, _res, _m, url) => {
+    requireRole(req, 'mod');
+    const page_ = Math.max(1, Number(url.searchParams.get('page')) || 1);
+    const entries = q.modLog.all(50, (page_ - 1) * 50).map((l) => ({
+        id: l.id, action: l.action, detail: l.detail, reason: l.reason, created: l.created, scoreId: l.score_id,
+        mod: { id: l.mod_id, name: l.mod_name }, target: l.target_id ? { id: l.target_id, name: l.target_name } : null,
+    }));
+    return { entries, page: page_ };
 });
 
 /** Validate one submitted play into its row values (plus the decoded replay). */
@@ -502,7 +867,7 @@ route('POST', /^\/api\/scores$/, async (req) => {
     const saved = q.scoreById.get(id);
     const best = q.userBestOnBeatmap.get(p.beatmapId, user.id, '', '');
     const rank = q.rankOnBeatmap.get(p.beatmapId, '', '', user.id, best.score, best.score, best.submitted).rank;
-    return { score: publicScore(saved, user.name), rank, best: best.id === id, user: publicUser(q.userById.get(user.id)) };
+    return { score: publicScore(saved, user.name, imageUrl(user, 'avatar')), rank, best: best.id === id, user: publicUser(q.userById.get(user.id), true) };
 });
 
 /**
@@ -539,7 +904,7 @@ route('POST', /^\/api\/scores\/import$/, async (req) => {
     }
     if (imported) recomputeStats(user.id);
     q.touchUser.run(now, user.id);
-    return { imported, skipped, invalid, user: publicUser(q.userById.get(user.id)) };
+    return { imported, skipped, invalid, user: publicUser(q.userById.get(user.id), true) };
 });
 
 route('GET', /^\/api\/beatmaps\/(\d+)\/scores$/, (req, _res, m, url) => {
@@ -556,7 +921,7 @@ route('GET', /^\/api\/beatmaps\/(\d+)\/scores$/, (req, _res, m, url) => {
         const best = q.userBestOnBeatmap.get(beatmapId, user.id, filter, mods);
         if (best) {
             const rank = q.rankOnBeatmap.get(beatmapId, filter, mods, user.id, best.score, best.score, best.submitted).rank;
-            mine = { ...publicScore(best, user.name), rank };
+            mine = { ...publicScore(best, user.name, imageUrl(user, 'avatar')), rank };
         }
     }
     return { scores, mine, total: scores.length };
@@ -584,6 +949,7 @@ route('GET', /^\/api\/rankings$/, (_req, _res, _m, url) => {
         accuracy: u.accuracy,
         rankedScore: u.ranked_score,
         playCount: u.play_count,
+        avatarUrl: imageUrl(u, 'avatar'),
     }));
     return { users, page, pages, total };
 });
@@ -592,10 +958,14 @@ route('GET', /^\/api\/users\/([^/]+)$/, (_req, _res, m) => {
     const name = decodeURIComponent(m[1]).replace(/\s+/g, ' ').trim().toLowerCase();
     const u = q.userByName.get(name);
     if (!u) throw new HttpError(404, 'No such player.');
+    const avatar = imageUrl(u, 'avatar');
+    const grades = { XH: 0, X: 0, SH: 0, S: 0, A: 0 };
+    for (const g of q.userGrades.all(u.id)) if (g.grade in grades) grades[g.grade] = g.n;
     return {
         user: publicUser(u),
-        best: q.userTopPp.all(u.id, 50).map((s) => publicScore(s, u.name)),
-        recent: q.userRecent.all(u.id, 50).map((s) => publicScore(s, u.name)),
+        best: q.userTopPp.all(u.id, 50).map((s) => publicScore(s, u.name, avatar)),
+        recent: q.userRecent.all(u.id, 50).map((s) => publicScore(s, u.name, avatar)),
+        grades,
     };
 });
 
@@ -620,6 +990,7 @@ const server = createServer(async (req, res) => {
             }
         }
         const body = await r.handler(req, res, url.pathname.match(r.pattern), url);
+        if (body === null) return;
         if (Buffer.isBuffer(body)) {
             res.writeHead(200);
             res.end(body);

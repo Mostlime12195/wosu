@@ -6,7 +6,7 @@ import { Bindable, type ReadonlyBindable } from '../../core/Bindable';
 import { tween } from '../../core/Tweener';
 import { formatNumber } from '../../core/math';
 import { sanitizeMods } from '../../gameplay/mods';
-import { ApiError, toScoreRecord } from '../../online/Account';
+import { ApiError, toScoreRecord, type OnlineScore } from '../../online/Account';
 import { ModIconRow } from '../../overlays/mods/ModIcon';
 import type { LegacySkin } from '../../skin/LegacySkin';
 import { beatmapKeyOf, type ScoreRecord } from '../../storage/ScoreStore';
@@ -31,6 +31,9 @@ export type LeaderboardScope = 'local' | 'global';
 
 /** The scope stays selected across song select visits. */
 let lastScope: LeaderboardScope = 'local';
+
+/** Online records remember the score they came from (profile links, moderation). */
+const online = new WeakMap<ScoreRecord, OnlineScore>();
 
 /** The leaderboard key a saved score would use for this difficulty. */
 export function scoreKeyFor(set: LibrarySet, diff: DifficultySummary): string {
@@ -64,6 +67,9 @@ class ScoreRow extends UIComponent {
     private record: ScoreRecord | null = null;
     /** Drawn as the player's own row (global scope). */
     private own = false;
+    private avatarToken = 0;
+    /** Loads an online player's picture (global scope). */
+    loadAvatar: ((url: string) => Promise<Texture | null>) | null = null;
     /** Right-click / long-press on the row: (record, global x, y). */
     onMenu: ((r: ScoreRecord, x: number, y: number) => void) | null = null;
 
@@ -111,6 +117,15 @@ class ScoreRow extends UIComponent {
         this.date.text = r.date ? relativeDate(r.date) : '';
         this.mods.setMods(r.mods, r.modSettings);
         this.replayGlyph.visible = !!r.hasReplay;
+        const token = ++this.avatarToken;
+        const url = online.get(r)?.avatarUrl;
+        if (url && this.loadAvatar) {
+            void this.loadAvatar(url).then(tex => {
+                if (token === this.avatarToken && !this.destroyed) this.avatar.setTexture(tex);
+            });
+        } else if (online.has(r)) {
+            this.avatar.setTexture(null);
+        }
         this.relayout();
     }
 
@@ -315,7 +330,12 @@ export class LocalLeaderboard extends UIComponent {
         this.game.account.leaderboard(beatmapId, undefined, abort.signal).then(board => {
             if (token !== this.token || this.destroyed) return;
             const mine = board.mine;
-            this.show(board.scores.map(toScoreRecord), { title: 'No scores yet', body: 'Sign in and pass this difficulty to set the first one!' }, mine ? `you: #${mine.rank}` : '');
+            const records = board.scores.map(s => {
+                const r = toScoreRecord(s);
+                online.set(r, s);
+                return r;
+            });
+            this.show(records, { title: 'No scores yet', body: 'Sign in and pass this difficulty to set the first one!' }, mine ? `you: #${mine.rank}` : '');
         }).catch(e => {
             if (token !== this.token || this.destroyed || abort.signal.aborted) return;
             const offline = !(e instanceof ApiError);
@@ -335,9 +355,11 @@ export class LocalLeaderboard extends UIComponent {
         const me = this.scope === 'global' ? this.game.account.user.value?.name ?? null : null;
         while (this.rows.length < shown.length) {
             const row = new ScoreRow(this.rowAvatar, () => this.gradeSkin());
+            row.loadAvatar = url => this.game.covers.get(url);
             row.onActivate = () => {
                 const r = row.scoreRecord;
                 if (r?.hasReplay) this.onWatchReplay?.(r);
+                else if (online.has(r!)) this.openProfile(r!);
             };
             row.onMenu = (r, x, y) => ContextMenu.open(this.menuFor(r), x, y);
             this.rows.push(row);
@@ -367,9 +389,15 @@ export class LocalLeaderboard extends UIComponent {
         }
     }
 
+    private openProfile(r: ScoreRecord): void {
+        this.game.userProfile.use(o => o.open(r.player, 'best'));
+    }
+
     /** lazer's LeaderboardScore.ContextMenuItems. */
     private menuFor(r: ScoreRecord): MenuEntry[] {
         const entries: MenuEntry[] = [];
+        const s = online.get(r);
+        if (s) entries.push({ text: 'View profile', type: 'highlighted', action: () => this.openProfile(r) });
         if (r.hasReplay) entries.push({ text: 'Watch replay', type: 'highlighted', action: () => this.onWatchReplay?.(r) });
         if (r.mods.length) entries.push({ text: 'Use these mods', action: () => (this.game.mods.value = sanitizeMods(r.mods, r.modSettings)) });
         if (r.hasReplay) entries.push({ text: 'Export replay (.osr)', action: () => this.onExport?.(r) });
@@ -377,7 +405,30 @@ export class LocalLeaderboard extends UIComponent {
             if (entries.length) entries.push(MENU_SPACER);
             entries.push({ text: 'Delete', type: 'destructive', action: () => this.onDelete?.(r) });
         }
+        if (s && this.game.account.isMod) {
+            if (entries.length) entries.push(MENU_SPACER);
+            entries.push({ text: 'Delete score (moderator)', type: 'destructive', action: () => void this.modDelete(s) });
+        }
         return entries;
+    }
+
+    private async modDelete(s: OnlineScore): Promise<void> {
+        const ok = await this.game.dialog.confirm({
+            title: 'Delete this score from the server?',
+            text: `${s.player}'s ${(s.accuracy * 100).toFixed(2)}% on ${s.title} [${s.version}] is removed for everyone, replay included. The action is logged.`,
+            confirmText: 'Delete it',
+            cancelText: 'Keep it',
+            danger: true,
+            icon: 'trash',
+        });
+        if (!ok) return;
+        try {
+            await this.game.account.deleteScore(s.id, '');
+            this.game.notifications.success('Score deleted.');
+            this.refresh();
+        } catch (e) {
+            this.game.notifications.error(e instanceof ApiError ? e.message : 'The wosu! server could not be reached.');
+        }
     }
 
     private layoutRows(): void {

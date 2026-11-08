@@ -78,7 +78,8 @@ export class ProfileOverlay extends Overlay {
     private readonly accountHint: Text;
     private readonly accountText: Text;
     private readonly signOutButton: Button;
-    private readonly uploadScores: Button;
+    private readonly pageButton: Button;
+    private readonly rankingsButton: Button;
     private authBusy = false;
     // Crop step
     private readonly cropView = new Container();
@@ -124,9 +125,15 @@ export class ProfileOverlay extends Overlay {
         this.uploadCover = btn('Upload banner', 'image', colours.dark1);
         this.removeCover = btn('Use default', 'trash', Colors.gray4);
         this.uploadAvatar.onActivate = () => void this.chooseAvatar();
-        this.removeAvatar.onActivate = () => void this.run(() => p.removeAvatar());
+        this.removeAvatar.onActivate = () => void this.run(async () => {
+            await p.removeAvatar();
+            await this.sync('avatar', null);
+        });
         this.uploadCover.onActivate = () => void this.chooseCover();
-        this.removeCover.onActivate = () => void this.run(() => p.removeCover());
+        this.removeCover.onActivate = () => void this.run(async () => {
+            await p.removeCover();
+            await this.sync('cover', null);
+        });
         const heading = (t: string) => label(t, { size: 16, weight: '700' });
         const nameHead = heading('Display name');
         const avatarHead = heading('Profile picture');
@@ -164,26 +171,30 @@ export class ProfileOverlay extends Overlay {
         this.passBox = new TextBox({ placeholder: 'Password', password: true, maxLength: 200, accent: colours.highlight1 });
         this.userBox.resize(half, 40).position.set(PAD, 0);
         this.passBox.resize(half, 40).position.set(PAD + half + 20, 0);
-        this.signInButton = new Button('Sign in', { color: colours.dark1, width: half, height: 36 });
-        this.registerButton = new Button('Create account', { color: Colors.gray4, width: half, height: 36 });
-        this.signInButton.resize(half, 36).position.set(PAD, 48);
-        this.registerButton.resize(half, 36).position.set(PAD + half + 20, 48);
+        const third = (WIDTH - PAD * 2 - 20) / 3;
+        this.signInButton = new Button('Sign in', { color: colours.dark1, width: third, height: 36, fontSize: 14 });
+        this.registerButton = new Button('Create account', { color: Colors.gray4, width: third, height: 36, fontSize: 14 });
+        this.rankingsButton = new Button('Rankings', { color: Colors.gray4, icon: 'trophy', width: third, height: 36, fontSize: 14 });
+        this.signInButton.resize(third, 36).position.set(PAD, 48);
+        this.registerButton.resize(third, 36).position.set(PAD + third + 10, 48);
+        this.rankingsButton.resize(third, 36).position.set(PAD + (third + 10) * 2, 48);
+        this.rankingsButton.onActivate = () => this.openPage('rankings');
         this.signInButton.onActivate = () => void this.auth('login');
         this.registerButton.onActivate = () => void this.auth('register');
         this.userBox.committed.add(() => this.passBox.focus());
         this.passBox.committed.add(() => void this.auth('login'));
         this.accountHint = label('', { size: 12, weight: '500', color: Colors.grayA });
         this.accountHint.position.set(PAD, 92);
-        this.signedOut.addChild(this.userBox, this.passBox, this.signInButton, this.registerButton, this.accountHint);
+        this.signedOut.addChild(this.userBox, this.passBox, this.signInButton, this.registerButton, this.rankingsButton, this.accountHint);
         this.accountText = label('', { size: 14, weight: '600' });
         this.accountText.position.set(PAD, 8);
-        this.uploadScores = new Button('Upload local scores', { color: colours.dark1, icon: 'upload', width: half, height: 36, fontSize: 14 });
-        this.uploadScores.resize(half, 36).position.set(PAD, 48);
-        this.uploadScores.onActivate = () => void this.upload();
+        this.pageButton = new Button('Open profile page', { color: colours.dark1, icon: 'user', width: half, height: 36, fontSize: 14 });
+        this.pageButton.resize(half, 36).position.set(PAD, 48);
+        this.pageButton.onActivate = () => this.openPage('best');
         this.signOutButton = new Button('Sign out', { color: Colors.gray4, width: half, height: 36, fontSize: 14 });
         this.signOutButton.resize(half, 36).position.set(PAD + half + 20, 48);
         this.signOutButton.onActivate = () => void this.signOut();
-        this.signedIn.addChild(this.accountText, this.uploadScores, this.signOutButton);
+        this.signedIn.addChild(this.accountText, this.pageButton, this.signOutButton);
         this.signedOut.position.set(0, y);
         this.signedIn.position.set(0, y);
         y += 112;
@@ -249,7 +260,7 @@ export class ProfileOverlay extends Overlay {
             this.accountHint.tint = Colors.grayA;
         }
         this.signInButton.enabled = this.registerButton.enabled = !this.authBusy;
-        this.signOutButton.enabled = this.uploadScores.enabled = !this.authBusy;
+        this.signOutButton.enabled = this.pageButton.enabled = !this.authBusy;
         if (this.isOpen) this.updateSubtitle();
     }
 
@@ -284,15 +295,21 @@ export class ProfileOverlay extends Overlay {
         }
     }
 
-    private async upload(): Promise<void> {
-        if (this.authBusy) return;
-        this.authBusy = true;
-        this.updateAccount();
+    /** The full profile page (rankings when signed out). */
+    private openPage(tab: 'best' | 'rankings'): void {
+        this.hide();
+        this.game.userProfile.use(o => o.open(tab === 'rankings' && !this.game.account.signedIn ? undefined : this.game.account.user.value?.name, tab));
+    }
+
+    /** Mirror a picture change to the account (the local copy is the source of truth on this device). */
+    private async sync(kind: 'avatar' | 'cover', blob: Blob | null): Promise<void> {
+        if (!this.game.account.signedIn) return;
         try {
-            await offerLocalImport(this.game, { prompt: true });
-        } finally {
-            this.authBusy = false;
-            this.updateAccount();
+            if (blob) await this.game.account.setImage(kind, blob);
+            else await this.game.account.removeImage(kind);
+        } catch (e) {
+            console.warn('[profile] online picture update failed', e);
+            this.game.notifications.warning(`Your ${kind === 'avatar' ? 'picture' : 'banner'} is saved on this device, but the wosu! server did not take it.`);
         }
     }
 
@@ -395,7 +412,7 @@ export class ProfileOverlay extends Overlay {
     private async chooseCover(): Promise<void> {
         const image = await this.pickImage();
         if (!image) return;
-        await this.run(() => this.game.profile.setCover(image));
+        await this.run(async () => this.sync('cover', await this.game.profile.setCover(image)));
         image.close();
     }
 
@@ -439,7 +456,7 @@ export class ProfileOverlay extends Overlay {
         const cropper = this.cropper, image = this.cropImage;
         if (!cropper || !image) return;
         const crop = cropper.crop;
-        await this.run(() => this.game.profile.setAvatar(image, crop));
+        await this.run(async () => this.sync('avatar', await this.game.profile.setAvatar(image, crop)));
         this.closeCrop();
     }
 

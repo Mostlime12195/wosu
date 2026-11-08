@@ -17,9 +17,38 @@ export interface OnlineUser {
     accuracy: number;
     rankedScore: number;
     playCount: number;
-    /** Global rank, or null before the first submitted play. */
+    /** Global rank, or null before the first submitted play (or while restricted). */
     rank: number | null;
     created: number;
+    lastSeen: number;
+    role: UserRole;
+    restricted: boolean;
+    avatarUrl: string | null;
+    coverUrl: string | null;
+    // Only on the player's own user (/auth/me and friends).
+    email?: string | null;
+    emailVerified?: boolean;
+    restrictedReason?: string | null;
+}
+
+export type UserRole = 'user' | 'mod' | 'admin';
+
+export interface ProfileData {
+    user: OnlineUser;
+    best: OnlineScore[];
+    recent: OnlineScore[];
+    grades: Record<'XH' | 'X' | 'SH' | 'S' | 'A', number>;
+}
+
+export interface ModLogEntry {
+    id: number;
+    action: string;
+    detail: string | null;
+    reason: string | null;
+    created: number;
+    scoreId: number | null;
+    mod: { id: number; name: string };
+    target: { id: number; name: string } | null;
 }
 
 /** A score from the server (same shape as a local record, with its owner's name and rank). */
@@ -27,6 +56,7 @@ export interface OnlineScore {
     id: number;
     userId: number;
     player: string;
+    avatarUrl?: string | null;
     beatmapId: number;
     setId: number;
     title: string;
@@ -74,7 +104,7 @@ export interface ImportSummary {
 }
 
 export interface RankingsPage {
-    users: { rank: number; id: number; name: string; pp: number; accuracy: number; rankedScore: number; playCount: number }[];
+    users: { rank: number; id: number; name: string; pp: number; accuracy: number; rankedScore: number; playCount: number; avatarUrl: string | null }[];
     page: number;
     pages: number;
     total: number;
@@ -171,6 +201,8 @@ export class AccountManager {
     readonly user = new Bindable<OnlineUser | null>(null);
     /** The API answered at least once (false: offline or no server here). */
     readonly available = new Bindable(false);
+    /** The server can send mail (verification, password resets). */
+    readonly mail = new Bindable(false);
     /** A score was accepted by the server (song select refreshes the global board). */
     readonly submitted = new Signal<[result: SubmitResult]>();
 
@@ -180,11 +212,18 @@ export class AccountManager {
         return this.user.value !== null;
     }
 
+    /** The signed-in player moderates (mod or admin). */
+    get isMod(): boolean {
+        const r = this.user.value?.role;
+        return r === 'mod' || r === 'admin';
+    }
+
     /** Restore the session cookie's user (never throws). */
     async init(): Promise<void> {
         try {
-            const r = await this.request<{ user: OnlineUser | null }>('GET', '/auth/me');
+            const r = await this.request<{ user: OnlineUser | null; mail?: boolean }>('GET', '/auth/me');
             this.available.value = true;
+            this.mail.value = !!r.mail;
             this.user.value = r.user;
         } catch (e) {
             if (e instanceof ApiError) this.available.value = true;
@@ -217,6 +256,57 @@ export class AccountManager {
         if (!this.signedIn) return;
         const r = await this.request<{ user: OnlineUser | null }>('GET', '/auth/me');
         this.user.value = r.user;
+    }
+
+    // ---- Account settings ------------------------------------------------
+
+    /** Set (or clear with '') the account's email; `sent` says a verification mail went out. */
+    async setEmail(email: string): Promise<{ user: OnlineUser; sent: boolean }> {
+        const r = await this.request<{ user: OnlineUser; sent: boolean }>('POST', '/me/email', { email });
+        this.user.value = r.user;
+        return r;
+    }
+
+    async changePassword(current: string, password: string): Promise<void> {
+        await this.request('POST', '/me/password', { current, password });
+    }
+
+    async forgotPassword(email: string): Promise<void> {
+        await this.request('POST', '/auth/forgot', { email });
+    }
+
+    /** Store a profile picture or banner on the account (PNG/JPEG/WebP blob). */
+    async setImage(kind: 'avatar' | 'cover', blob: Blob): Promise<void> {
+        const res = await this.fetchFn(`${this.base}/me/${kind}`, { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': blob.type || 'application/octet-stream' }, body: blob });
+        const r = await this.parse<{ user: OnlineUser }>(res, `/me/${kind}`);
+        this.user.value = r.user;
+    }
+
+    async removeImage(kind: 'avatar' | 'cover'): Promise<void> {
+        const r = await this.request<{ user: OnlineUser }>('DELETE', `/me/${kind}`);
+        this.user.value = r.user;
+    }
+
+    async profile(name: string, signal?: AbortSignal): Promise<ProfileData> {
+        return this.request<ProfileData>('GET', `/users/${encodeURIComponent(name)}`, undefined, signal);
+    }
+
+    // ---- Moderation ------------------------------------------------------
+
+    async deleteScore(scoreId: number, reason: string): Promise<void> {
+        await this.request('DELETE', `/scores/${scoreId}`, { reason });
+    }
+
+    async restrict(userId: number, restricted: boolean, reason: string): Promise<OnlineUser> {
+        return (await this.request<{ user: OnlineUser }>('POST', `/users/${userId}/restrict`, { restricted, reason })).user;
+    }
+
+    async rename(userId: number, name: string, reason: string): Promise<OnlineUser> {
+        return (await this.request<{ user: OnlineUser }>('POST', `/users/${userId}/rename`, { name, reason })).user;
+    }
+
+    async modLog(page = 1): Promise<ModLogEntry[]> {
+        return (await this.request<{ entries: ModLogEntry[] }>('GET', `/mod/log?page=${page}`)).entries;
     }
 
     /** Whether a play would be accepted: signed in, passed, on an online beatmap. */
@@ -289,7 +379,7 @@ export class AccountManager {
         return new Uint8Array(await res.arrayBuffer());
     }
 
-    private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+    private async request<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
         const res = await this.fetchFn(`${this.base}${path}`, {
             method,
             credentials: 'same-origin',
@@ -297,6 +387,10 @@ export class AccountManager {
             body: body === undefined ? undefined : JSON.stringify(body),
             signal,
         });
+        return this.parse<T>(res, path);
+    }
+
+    private async parse<T>(res: Response, path: string): Promise<T> {
         let data: unknown = null;
         const text = await res.text();
         try {

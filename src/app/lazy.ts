@@ -9,6 +9,7 @@
 export { SettingsOverlay } from '../overlays/settings/SettingsOverlay';
 export { BeatmapListingOverlay } from '../overlays/BeatmapListingOverlay';
 export { ProfileOverlay } from '../overlays/profile/ProfileOverlay';
+export { UserProfileOverlay } from '../overlays/profile/UserProfileOverlay';
 export { SongSelectScreen } from '../screens/select/SongSelectScreen';
 export { PlayerLoaderScreen } from '../screens/play/PlayerLoaderScreen';
 export { SkinEditorScreen } from '../screens/edit/SkinEditorScreen';

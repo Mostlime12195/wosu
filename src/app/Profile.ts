@@ -47,11 +47,12 @@ export class LocalProfile {
         return check;
     }
 
-    /** Save a cropped profile picture (`crop` in image pixels; default: centre square). */
-    async setAvatar(image: ImageBitmap, crop: CropRect = cropRect(image.width, image.height)): Promise<void> {
+    /** Save a cropped profile picture (`crop` in image pixels; default: centre square); resolves with the stored image. */
+    async setAvatar(image: ImageBitmap, crop: CropRect = cropRect(image.width, image.height)): Promise<Blob> {
         const blob = await renderCrop(image, crop, AVATAR_SIZE, AVATAR_SIZE, 'image/png');
         await (await this.database()).kv.put(blob, AVATAR_KEY);
         this.replace(this.avatar, await textureFromBlob(blob, AVATAR_SIZE));
+        return blob;
     }
 
     async removeAvatar(): Promise<void> {
@@ -59,12 +60,13 @@ export class LocalProfile {
         this.replace(this.avatar, null);
     }
 
-    /** Save a banner, centre-cropped to the profile's wide strip. */
-    async setCover(image: ImageBitmap): Promise<void> {
+    /** Save a banner, centre-cropped to the profile's wide strip; resolves with the stored image. */
+    async setCover(image: ImageBitmap): Promise<Blob> {
         const crop = cropRect(image.width, image.height, COVER_WIDTH / COVER_HEIGHT);
         const blob = await renderCrop(image, crop, COVER_WIDTH, COVER_HEIGHT, 'image/jpeg');
         await (await this.database()).kv.put(blob, COVER_KEY);
         this.replace(this.cover, await textureFromBlob(blob, COVER_WIDTH));
+        return blob;
     }
 
     async removeCover(): Promise<void> {
