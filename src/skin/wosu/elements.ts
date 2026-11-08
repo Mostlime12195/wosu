@@ -95,7 +95,7 @@ export function generateWosuSkin(o: WosuSkinOptions, cache: SkinCache = new Map(
         allowSliderBallTint: false,
         sliderBallFlip: false,
         cursorRotate: false,
-        cursorExpand: true,
+        cursorExpand: false,
         cursorCentre: true,
         hitCircleOverlayAboveNumber: false,
         hitCirclePrefix: 'default',
@@ -470,18 +470,19 @@ const subtractRing = (sdf: (x: number, y: number) => number, w: number) => (x: n
 /**
  * cursor, cursormiddle and cursortrail. The game shows cursor images at
  * px × 0.5 / 1.6 playfield units (lazer's legacy cursor size), so a 96px
- * image is 30 units across. cursormiddle (a white centre dot) stays put
- * while the cursor expands on presses.
+ * image is 30 units across. The dot follows what popular community skins
+ * do (Rafis, Vaxei, WhiteCat, YUGEN...): a solid white core with a thin
+ * rim and soft glow in the cursor colour, no centre dot, no expanding.
  */
 function cursor(o: WosuSkinOptions, put: Put): void {
     const colour = o.cursorColour;
     let r: Raster;
     if (o.cursorStyle === 'dot') {
-        const n = 88, c = n / 2;
+        const n = 96, c = n / 2;
         r = new Raster(n, n);
-        r.glow(circle(c, c, 22), BLACK, 0.35, 10);
-        r.shape(circle(c, c, 25), WHITE);
-        r.shape(circle(c, c, 20), colour);
+        r.glow(circle(c, c, 28), colour, 0.5, 16);
+        r.shape(circle(c, c, 28), colour);
+        r.shape(circle(c, c, 22), WHITE);
     } else if (o.cursorStyle === 'ring') {
         const n = 120, c = n / 2;
         r = new Raster(n, n);
@@ -497,19 +498,17 @@ function cursor(o: WosuSkinOptions, put: Put): void {
         r.shape(ring(c, c, 40, 9), WHITE);
     }
     put('cursor', r);
-    const n = r.width, c = n / 2;
-    const middle = new Raster(n, n);
-    middle.shape(circle(c, c, 8), BLACK, 0.3);
-    middle.shape(circle(c, c, 6), WHITE);
-    put('cursormiddle', middle);
+    // No centre dot (none of the popular skins draw one); an empty image keeps a fallback skin's from showing.
+    put('cursormiddle', new Raster(1, 1));
     if (o.trail !== 'off') {
         // Parts of lazer's default trail: soft dots in the cursor colour, drawn additively.
-        const t = 16, tc = t / 2;
+        // Soft discs about half the cursor's size; they overlap additively, so keep them dim.
+        const t = 30, tc = t / 2;
         const trail = new Raster(t, t);
         trail.fill((x, y) => {
             const k = 1 - len(x - tc, y - tc) / tc;
-            return k > 0 ? Math.min(1, k * 1.6) : 0;
-        }, mix(colour, WHITE, 0.35), 0.9);
+            return k > 0 ? Math.min(1, k * 2.2) : 0;
+        }, mix(colour, WHITE, 0.2), 0.5);
         put('cursortrail', trail);
     }
     // Smoke: a small soft dot (the game tints and fades it).
