@@ -14,7 +14,7 @@ WOSU_DATA=/var/lib/wosu PORT=3100 node --no-warnings=ExperimentalWarning server/
 Optional environment:
 
 - `SITE_URL` (default `https://wosu.dino.icu`): the origin links in emails point at.
-- `RESEND_API_KEY` + `MAIL_FROM` (e.g. `wosu! <noreply@wosu.dino.icu>`): enables verification mails and password resets through [Resend](https://resend.com). Without them addresses are stored unverified and resets answer 503.
+- `MAIL_FROM` (e.g. `"wosu! <you@user.hackclub.app>"`) plus either SMTP over TLS (`SMTP_HOST`, `SMTP_PORT=465`, `SMTP_USER`, `SMTP_PASS`; a Hack Club Nest mailbox works: `mx.user.hackclub.app`) or `RESEND_API_KEY` for [Resend](https://resend.com): enables verification mails and password resets. Without them addresses are stored unverified and resets answer 503. wosu.dino.icu keeps these in `/etc/wosu-api.env` (root-only), loaded by the systemd unit.
 
 Moderation: `node server/admin.mjs role <name> admin` makes the first admin; admins promote mods in-game (profile page → Moderation) or with the same command. `admin.mjs users|mods|log|restrict|unrestrict|delete-score` cover the rest from a shell.
 
