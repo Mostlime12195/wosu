@@ -1,5 +1,6 @@
 import { Container, Graphics, Texture } from 'pixi.js';
 import { loadPack, packFetch } from '../core/assetPacks';
+import { track } from '../core/analytics';
 import { Bindable } from '../core/Bindable';
 import { afterNextFrame, whenIdle } from '../core/idle';
 import { App } from './App';
@@ -765,6 +766,7 @@ export class Game {
         const n = this.notifications.progress(`Importing ${osz.length} beatmap${osz.length > 1 ? 's' : ''}…`);
         n.progress.value = NaN;
         const result = await this.library.importMany(osz);
+        track('import', { files: osz.length, ok: result.ok.length });
         if (result.ok.length) {
             const first = result.ok[0];
             n.complete(
@@ -801,6 +803,7 @@ export class Game {
         const pending = this.imports.get(set.sid);
         if (pending) return pending;
         const task = this.downloads.download(set.sid, { title: set.title, artist: set.artist }, { withVideo: opts.video ?? this.settings.backgroundVideo.value });
+        track('download', { set: set.sid });
         const p = task.result
             .then(blob => this.library.importOsz(blob, { onlineSetId: set.sid }))
             .catch(e => {
@@ -880,6 +883,7 @@ export class Game {
     /** Start playing a difficulty (via the player loader). */
     play(selection: Selection): void {
         this.selection.value = selection;
+        track('play', { mods: sortedMods(this.mods.value).join('') || 'NM', online: selection.diff.beatmapId > 0, stars: Math.round((selection.diff.stars ?? 0) * 10) / 10 });
         this.withDeferred(m => this.screens.push(new m.PlayerLoaderScreen(selection)), true);
     }
 

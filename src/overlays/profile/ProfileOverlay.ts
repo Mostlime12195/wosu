@@ -3,6 +3,7 @@ import type { Game } from '../../app/Game';
 import { Overlay } from '../../app/Overlay';
 import { decodeImageFile, pickImageFile } from '../../app/Profile';
 import { formatNumber, lerpColor } from '../../core/math';
+import { track } from '../../core/analytics';
 import { ApiError } from '../../online/Account';
 import { offerLocalImport } from '../../online/importLocal';
 import { tween } from '../../core/Tweener';
@@ -279,6 +280,7 @@ export class ProfileOverlay extends Overlay {
         try {
             const account = this.game.account;
             const user = kind === 'login' ? await account.login(name, password) : await account.register(name, password);
+            track(kind === 'login' ? 'signin' : 'register');
             this.passBox.setValue('', false);
             this.passBox.blur();
             this.game.notifications.success(kind === 'login' ? `Welcome back, ${user.name}!` : `Welcome to wosu!, ${user.name}!`);

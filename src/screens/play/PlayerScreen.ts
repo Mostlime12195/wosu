@@ -44,6 +44,7 @@ import { actionLabel, type Action } from '../../input/bindings';
 import { formatBeatmapOffset, type PlayTiming } from '../../gameplay/offsetCalibration';
 import { beatmapOffsets, offsetKeyFor } from '../../storage/BeatmapOffsets';
 import { label } from '../../ui/text';
+import { track } from '../../core/analytics';
 import { ApiError } from '../../online/Account';
 import { beatmapKeyOf, type ScoreRecord } from '../../storage/ScoreStore';
 import { Colors } from '../../ui/theme';
@@ -1546,6 +1547,7 @@ export class PlayerScreen extends Screen {
     }
 
     private async saveScore(r: ScoreResult, replay: ReplayInfo): Promise<void> {
+        track('score', { passed: r.passed, grade: r.grade, mods: r.mods.join('') || 'NM', online: this.game.account.canSubmit(r) });
         let data: Uint8Array | undefined;
         try {
             data = encodeReplay(replay.events);
