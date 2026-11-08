@@ -2,7 +2,8 @@ import { Container, FillGradient, Graphics, type Text, type Texture } from 'pixi
 import type { Game } from '../../app/Game';
 import { Overlay } from '../../app/Overlay';
 import { decodeImageFile, pickImageFile } from '../../app/Profile';
-import { lerpColor } from '../../core/math';
+import { formatNumber, lerpColor } from '../../core/math';
+import { ApiError } from '../../online/Account';
 import { tween } from '../../core/Tweener';
 import type { Action } from '../../input/bindings';
 import { PLAYER_NAME_MAX, validatePlayerName } from '../../storage/profile';
@@ -66,6 +67,17 @@ export class ProfileOverlay extends Overlay {
     private readonly removeAvatar: Button;
     private readonly uploadCover: Button;
     private readonly removeCover: Button;
+    // wosu! account (global leaderboards)
+    private readonly signedOut = new Container();
+    private readonly signedIn = new Container();
+    private readonly userBox: TextBox;
+    private readonly passBox: TextBox;
+    private readonly signInButton: Button;
+    private readonly registerButton: Button;
+    private readonly accountHint: Text;
+    private readonly accountText: Text;
+    private readonly signOutButton: Button;
+    private authBusy = false;
     // Crop step
     private readonly cropView = new Container();
     private readonly cropTitle: Text;
@@ -141,10 +153,41 @@ export class ProfileOverlay extends Overlay {
         coverNote.position.set(PAD + half + 20, y);
         fitText(avatarNote, half);
         fitText(coverNote, half);
-        y += 30;
+        y += 34;
+        // Account: sign in / register, or who is signed in.
+        const accountHead = heading('wosu! account');
+        accountHead.position.set(PAD, y);
+        y += 28;
+        this.userBox = new TextBox({ placeholder: 'Username', maxLength: PLAYER_NAME_MAX * 2, accent: colours.highlight1 });
+        this.passBox = new TextBox({ placeholder: 'Password', password: true, maxLength: 200, accent: colours.highlight1 });
+        this.userBox.resize(half, 40).position.set(PAD, 0);
+        this.passBox.resize(half, 40).position.set(PAD + half + 20, 0);
+        this.signInButton = new Button('Sign in', { color: colours.dark1, width: half, height: 36 });
+        this.registerButton = new Button('Create account', { color: Colors.gray4, width: half, height: 36 });
+        this.signInButton.resize(half, 36).position.set(PAD, 48);
+        this.registerButton.resize(half, 36).position.set(PAD + half + 20, 48);
+        this.signInButton.onActivate = () => void this.auth('login');
+        this.registerButton.onActivate = () => void this.auth('register');
+        this.userBox.committed.add(() => this.passBox.focus());
+        this.passBox.committed.add(() => void this.auth('login'));
+        this.accountHint = label('', { size: 12, weight: '500', color: Colors.grayA });
+        this.accountHint.position.set(PAD, 92);
+        this.signedOut.addChild(this.userBox, this.passBox, this.signInButton, this.registerButton, this.accountHint);
+        this.accountText = label('', { size: 14, weight: '600' });
+        this.accountText.position.set(PAD, 10);
+        this.signOutButton = new Button('Sign out', { color: Colors.gray4, width: 140, height: 36 });
+        this.signOutButton.resize(140, 36).position.set(WIDTH - PAD - 140, 0);
+        this.signOutButton.onActivate = () => void this.signOut();
+        this.signedIn.addChild(this.accountText, this.signOutButton);
+        this.signedOut.position.set(0, y);
+        this.signedIn.position.set(0, y);
+        y += 112;
         this.cardH = this.editorH = y;
         this.editor.addChild(nameHead, this.nameBox, this.saveName, this.nameHint, avatarHead, coverHead,
-            this.uploadAvatar, this.uploadCover, this.removeAvatar, this.removeCover, avatarNote, coverNote);
+            this.uploadAvatar, this.uploadCover, this.removeAvatar, this.removeCover, avatarNote, coverNote,
+            accountHead, this.signedOut, this.signedIn);
+        this.disposer.add(game.account.user.bind(() => this.updateAccount(), true));
+        this.disposer.add(game.account.available.bind(() => this.updateAccount()));
 
         this.cropTitle = label('Crop your picture', { size: 18, weight: '700' });
         this.cropSave = new Button('Save picture', { color: colours.dark1, width: 160, height: 38 });
@@ -172,10 +215,78 @@ export class ProfileOverlay extends Overlay {
     private onOpen(): void {
         this.nameBox.setValue(this.game.profile.name.value, false);
         this.updateNameHint(this.nameBox.value);
+        this.updateSubtitle();
+        void this.game.account.refresh().catch(() => {});
+    }
+
+    private updateSubtitle(): void {
+        const u = this.game.account.user.value;
         void this.game.scores.all().then(list => {
             const n = list.length;
-            this.subtitle.text = `Local player · ${n} score${n === 1 ? '' : 's'} set on this device`;
-        }).catch(() => (this.subtitle.text = 'Local player'));
+            const local = `${n} score${n === 1 ? '' : 's'} on this device`;
+            this.subtitle.text = u ? `${u.rank ? `Global #${formatNumber(u.rank)} · ` : ''}${formatNumber(Math.round(u.pp))}pp · ${local}` : `Local player · ${local}`;
+        }).catch(() => (this.subtitle.text = u ? `${formatNumber(Math.round(u.pp))}pp` : 'Local player'));
+    }
+
+    private updateAccount(): void {
+        const account = this.game.account;
+        const u = account.user.value;
+        this.signedIn.visible = !!u;
+        this.signedOut.visible = !u;
+        if (u) {
+            const rank = u.rank ? ` · global #${formatNumber(u.rank)}` : '';
+            this.accountText.text = `Signed in as ${u.name}${rank} · ${formatNumber(Math.round(u.pp))}pp · ${formatNumber(u.playCount)} play${u.playCount === 1 ? '' : 's'}`;
+            fitText(this.accountText, WIDTH - PAD * 2 - 150, this.accountText.text);
+        } else if (!this.authBusy) {
+            this.accountHint.text = account.available.value
+                ? 'Passed plays on downloaded beatmaps go to the global leaderboards. Names are 2–15 characters, passwords 8+.'
+                : 'Global leaderboards need the wosu! server (not reachable from here).';
+            this.accountHint.tint = Colors.grayA;
+        }
+        this.signInButton.enabled = this.registerButton.enabled = !this.authBusy;
+        this.signOutButton.enabled = !this.authBusy;
+        if (this.isOpen) this.updateSubtitle();
+    }
+
+    private async auth(kind: 'login' | 'register'): Promise<void> {
+        if (this.authBusy) return;
+        const name = this.userBox.value.replace(/\s+/g, ' ').trim();
+        const password = this.passBox.value;
+        if (!name || !password) {
+            this.accountHint.text = 'Enter your username and password.';
+            this.accountHint.tint = Colors.redLight;
+            this.game.uiSounds.play('UI/generic-error');
+            return;
+        }
+        this.authBusy = true;
+        this.updateAccount();
+        try {
+            const account = this.game.account;
+            const user = kind === 'login' ? await account.login(name, password) : await account.register(name, password);
+            this.passBox.setValue('', false);
+            this.passBox.blur();
+            this.game.notifications.success(kind === 'login' ? `Welcome back, ${user.name}!` : `Welcome to wosu!, ${user.name}!`);
+        } catch (e) {
+            console.warn('[profile] sign in failed', e);
+            this.accountHint.text = e instanceof ApiError ? e.message : 'The wosu! server could not be reached.';
+            this.accountHint.tint = Colors.redLight;
+            this.game.uiSounds.play('UI/generic-error');
+        } finally {
+            this.authBusy = false;
+            this.updateAccount();
+        }
+    }
+
+    private async signOut(): Promise<void> {
+        if (this.authBusy) return;
+        this.authBusy = true;
+        this.updateAccount();
+        try {
+            await this.game.account.logout();
+        } finally {
+            this.authBusy = false;
+            this.updateAccount();
+        }
     }
 
     private drawHeader(): void {
@@ -333,6 +444,8 @@ export class ProfileOverlay extends Overlay {
 
     protected async popOut(): Promise<void> {
         this.nameBox.blur();
+        this.userBox.blur();
+        this.passBox.blur();
         await tween(this.card, { alpha: 0, y: this.centreY + 40 }, { duration: 250, ease: 'OutQuint' }).finished;
     }
 

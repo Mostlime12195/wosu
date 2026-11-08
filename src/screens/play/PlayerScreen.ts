@@ -44,7 +44,8 @@ import { actionLabel, type Action } from '../../input/bindings';
 import { formatBeatmapOffset, type PlayTiming } from '../../gameplay/offsetCalibration';
 import { beatmapOffsets, offsetKeyFor } from '../../storage/BeatmapOffsets';
 import { label } from '../../ui/text';
-import { beatmapKeyOf } from '../../storage/ScoreStore';
+import { ApiError } from '../../online/Account';
+import { beatmapKeyOf, type ScoreRecord } from '../../storage/ScoreStore';
 import { Colors } from '../../ui/theme';
 import { ResultsScreen, skinApplause } from '../results/ResultsScreen';
 import type { LiveScoreStats } from '../../gameplay/hud/livePerformance';
@@ -1552,7 +1553,7 @@ export class PlayerScreen extends Screen {
             console.warn('encoding the replay failed', e);
         }
         try {
-            await this.game.scores.add({
+            const saved = await this.game.scores.add({
                 beatmapKey: beatmapKeyOf({ beatmapId: r.beatmapId, title: r.title, version: r.version, setId: r.setId }),
                 beatmapId: r.beatmapId,
                 setId: r.setId,
@@ -1578,9 +1579,21 @@ export class PlayerScreen extends Screen {
                 mechanics: replay.mechanics,
                 ...(r.pp != null ? { pp: r.pp } : {}),
             }, data);
+            if (this.game.account.canSubmit(saved)) void this.submitScore(saved, data);
         } catch (e) {
             console.warn('saving score failed', e);
             this.game.notifications.error('Your score could not be saved.');
+        }
+    }
+
+    /** Send a passed play on an online beatmap to the global leaderboards (the local copy is kept either way). */
+    private async submitScore(rec: ScoreRecord, replay?: Uint8Array): Promise<void> {
+        try {
+            const r = await this.game.account.submit(rec, replay);
+            this.game.notifications.success(r.best ? `Score submitted: #${r.rank} on the global leaderboard!` : `Score submitted (your best here is #${r.rank}).`);
+        } catch (e) {
+            console.warn('score submission failed', e);
+            this.game.notifications.warning(e instanceof ApiError ? `Your score was not submitted: ${e.message}` : 'Your score could not be submitted, but it is saved on this device.');
         }
     }
 

@@ -49,7 +49,11 @@ export default defineConfig({
             },
         },
     },
-    server: { host: true },
+    server: {
+        host: true,
+        // The online API (server/) during development: `node server/index.mjs` on :3100.
+        proxy: { '/api': 'http://127.0.0.1:3100' },
+    },
     test: {
         include: ['tests/**/*.test.ts'],
         environment: 'node',

@@ -28,6 +28,7 @@ import { resolveBindings, type Action } from '../input/bindings';
 import { openFileDialog } from '../input/PointerLock';
 import { pointerLockWanted } from '../input/pointerLockPolicy';
 import { TextInputProxy } from '../input/TextInputProxy';
+import { AccountManager } from '../online/Account';
 import { BeatmapApi } from '../online/BeatmapApi';
 import { DownloadManager, type DownloadTask } from '../online/Downloader';
 import { coverUrl, resolveProviders, type OnlineSet } from '../online/providers';
@@ -110,6 +111,8 @@ export class Game {
     readonly dialog: DialogOverlay;
     /** The local player's name, picture and banner. */
     readonly profile: LocalProfile;
+    /** The player's wosu! account (global leaderboards). */
+    readonly account = new AccountManager();
     readonly profileOverlay: LazyOverlay<ProfileOverlay>;
 
     private readonly popupBlockers = new Map<object, { blocker: Graphics; keyOff: () => void }>();
@@ -253,6 +256,11 @@ export class Game {
             this.knownVideos.init().catch(e => console.error('video registry init failed', e)),
             this.profile.init().catch(e => console.error('profile init failed', e)),
         ]);
+        // The account session restores in the background; a signed-in player's scores carry the account name.
+        this.account.user.bind(u => {
+            if (u) this.profile.rename(u.name);
+        });
+        void this.account.init();
         // Imported skins and the selected one load in the background (applies from the next play).
         void this.skins.attach(this).catch(e => console.error('skin store init failed', e));
         this.background.setDefault();

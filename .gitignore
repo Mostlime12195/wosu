@@ -11,3 +11,6 @@ test-results/
 .DS_Store
 .claude/
 .vercel/
+
+# online API state (server/)
+data/

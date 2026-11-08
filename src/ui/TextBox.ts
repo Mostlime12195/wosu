@@ -20,6 +20,8 @@ export interface TextBoxOptions {
     maxLength?: number;
     /** Keep focus after Enter (search boxes). */
     keepFocusOnCommit?: boolean;
+    /** Show bullets instead of the text (passwords). */
+    password?: boolean;
 }
 
 /**
@@ -197,13 +199,18 @@ export class TextBox extends UIComponent implements TextSink {
         this.render();
     }
 
+    /** The text as drawn (bullets for a password box). */
+    private shown(s: string): string {
+        return this.opts.password ? '\u2022'.repeat(s.length) : s;
+    }
+
     private measure(s: string): number {
         if (!s) return 0;
-        return CanvasTextMetrics.measureText(s, textStyle({ size: this.fontSize, weight: '500' })).width;
+        return CanvasTextMetrics.measureText(this.shown(s), textStyle({ size: this.fontSize, weight: '500' })).width;
     }
 
     private render(): void {
-        this.display.text = this._value;
+        this.display.text = this.shown(this._value);
         this.placeholderText.visible = this._value.length === 0;
         const h = this._h;
         const caretX = this.measure(this._value.slice(0, this.caretPos));
