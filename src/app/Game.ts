@@ -1,6 +1,7 @@
 import { Container, Graphics, Texture } from 'pixi.js';
 import { loadPack, packFetch } from '../core/assetPacks';
 import { track } from '../core/analytics';
+import { sendPlayPing } from '../online/gameEvents';
 import { Bindable } from '../core/Bindable';
 import { afterNextFrame, whenIdle } from '../core/idle';
 import { App } from './App';
@@ -266,7 +267,10 @@ export class Game {
         this.account.user.bind(u => {
             if (u) this.profile.rename(u.name);
         });
-        void this.account.init();
+        void this.account.init().then(() => {
+            // The game opened (counts this player for the day; guests by their anonymous id).
+            if (this.account.available.value) sendPlayPing({ phase: 'open' });
+        });
         // Imported skins and the selected one load in the background (applies from the next play).
         void this.skins.attach(this).catch(e => console.error('skin store init failed', e));
         this.background.setDefault();

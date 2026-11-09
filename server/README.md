@@ -20,4 +20,6 @@ Moderation: `node server/admin.mjs role <name> admin` makes the first admin; adm
 
 Routes are listed at the top of `index.mjs`; `tests/server/api.test.ts` runs the whole thing against a temporary data directory.
 
+Game analytics: the client reports plays to `POST /api/play` (game opened, play start / finish / fail / quit), and the server adds sign-ups, sign-ins, score submissions and a daily account snapshot. With `UMAMI_GAME_WEBSITE` set (an Umami website id; `UMAMI_URL` defaults to `http://127.0.0.1:3200/stats`) each event is forwarded to Umami's `/api/send`, fire-and-forget. Players are Umami's distinct id (`u:<id>` for accounts, `g:<random id>` for guests) and every event is tagged `account`, `guest` or `server`. On first start past sign-ups and scores are backfilled once (progress kept in the `meta` table). No IPs are forwarded. Details at the top of `events.mjs`.
+
 Honest caveat: scores are what the client reports. The replay is stored with each one, so a wrong-looking score can be checked (and deleted from the database) by hand; server-side replay verification is a later step.

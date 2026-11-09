@@ -46,6 +46,7 @@ import { beatmapOffsets, offsetKeyFor } from '../../storage/BeatmapOffsets';
 import { label } from '../../ui/text';
 import { track } from '../../core/analytics';
 import { ApiError } from '../../online/Account';
+import { sendPlayPing, type PlayPhase } from '../../online/gameEvents';
 import { beatmapKeyOf, type ScoreRecord } from '../../storage/ScoreStore';
 import { Colors } from '../../ui/theme';
 import { ResultsScreen, skinApplause } from '../results/ResultsScreen';
@@ -150,6 +151,10 @@ export class PlayerScreen extends Screen {
     private driver!: RulesDriver;
     /** Records a real play's input (not Autoplay, not a replay). */
     private recorder: ReplayRecorder | null = null;
+    /** The play's start / end sent to the server (real plays only: not Autoplay, not a replay). */
+    private pinged: 'no' | 'started' | 'ended' = 'no';
+    /** Time spent playing, pauses excluded (for that end ping). */
+    private playedMs = 0;
     /** The replay being watched. */
     private replay: ReplayPlayback | null = null;
     private replayIndicator: ReplayIndicator | null = null;
@@ -684,6 +689,10 @@ export class PlayerScreen extends Screen {
 
     private begin(): void {
         this.phase = 'playing';
+        if (this.recorder && this.pinged === 'no') {
+            this.pinged = 'started';
+            sendPlayPing({ phase: 'start', ...this.pingInfo() });
+        }
         this.input.enabled = this.mode !== 'autoplay' && !this.replay;
         this.clock.start();
         const at = this.options.startAt;
@@ -698,6 +707,7 @@ export class PlayerScreen extends Screen {
     }
 
     override onExiting(): number {
+        this.endPing('quit');
         // The loader offers "Calibrate using last play" from this (also after results → song select → play again).
         const timing = this.playTiming;
         if (timing && this.phase !== 'loading') beatmapOffsets().recordPlay(offsetKeyFor(this.options.selection.set, this.options.selection.diff), timing);
@@ -747,6 +757,7 @@ export class PlayerScreen extends Screen {
         this.timed.sync();
 
         if (this.phase === 'playing') {
+            this.playedMs += dt;
             this.updateHorizon(time, dt);
             this.scheduleNested(time);
             this.feedRules(time, cursor);
@@ -1350,6 +1361,7 @@ export class PlayerScreen extends Screen {
 
     private startFail(): void {
         if (this.phase === 'failed' || this.phase === 'completed') return;
+        this.endPing('fail');
         if (restartOnFail(this.options.mods)) {
             // lazer's Player.onFail: a fail override with RestartOnFail (SD / PF
             // "Restart on fail") restarts at once (quick restart), with no fail animation.
@@ -1430,6 +1442,7 @@ export class PlayerScreen extends Screen {
         if (this.phase !== 'playing') return;
         this.phase = 'completed';
         this.outcome = 'completed';
+        this.endPing('finish');
         this.input.enabled = false;
         this.hitsounds.stopAll();
         const result = this.buildResult();
@@ -1599,9 +1612,23 @@ export class PlayerScreen extends Screen {
         }
     }
 
+    /** What the server hears about this play's map. */
+    private pingInfo(): { beatmapId: number; mods: string[]; map: string; stars?: number } {
+        const { set, diff } = this.options.selection;
+        return { beatmapId: diff.beatmapId, mods: sortedMods(this.options.mods), map: `${set.artist} - ${set.title} [${diff.version}]`, stars: diff.stars ?? undefined };
+    }
+
+    /** The play ended (once): finished, failed, or left / restarted midway. */
+    private endPing(phase: Exclude<PlayPhase, 'open' | 'start'>): void {
+        if (this.pinged !== 'started') return;
+        this.pinged = 'ended';
+        sendPlayPing({ phase, ms: this.playedMs, ...this.pingInfo() });
+    }
+
     /** `quick`: straight back into gameplay; otherwise through the loader's screen (lazer's Restart(quickRestart)). */
     retry(quick = false): void {
         if (this.outcome !== 'none') return;
+        this.endPing('quit');
         this.outcome = quick ? 'quickRetry' : 'retry';
         this.menu.hide();
         this.exit();
@@ -1622,6 +1649,7 @@ export class PlayerScreen extends Screen {
 
     quit(): void {
         if (this.outcome !== 'none') return;
+        this.endPing('quit');
         this.outcome = 'quit';
         this.menu.hide();
         this.game.uiSounds.back();
