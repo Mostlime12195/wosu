@@ -1,5 +1,7 @@
 import { Container, Graphics, Texture } from 'pixi.js';
 import { loadPack, packFetch } from '../core/assetPacks';
+import { track } from '../core/analytics';
+import { sendPlayPing } from '../online/gameEvents';
 import { Bindable } from '../core/Bindable';
 import { afterNextFrame, whenIdle } from '../core/idle';
 import { App } from './App';
@@ -28,6 +30,7 @@ import { resolveBindings, type Action } from '../input/bindings';
 import { openFileDialog } from '../input/PointerLock';
 import { pointerLockWanted } from '../input/pointerLockPolicy';
 import { TextInputProxy } from '../input/TextInputProxy';
+import { AccountManager } from '../online/Account';
 import { BeatmapApi } from '../online/BeatmapApi';
 import { DownloadManager, type DownloadTask } from '../online/Downloader';
 import { coverUrl, resolveProviders, type OnlineSet } from '../online/providers';
@@ -42,6 +45,7 @@ import type { SettingsOverlay } from '../overlays/settings/SettingsOverlay';
 import { Toolbar } from '../overlays/Toolbar';
 import { VolumeOverlay } from '../overlays/VolumeOverlay';
 import type { ProfileOverlay } from '../overlays/profile/ProfileOverlay';
+import type { UserProfileOverlay } from '../overlays/profile/UserProfileOverlay';
 import { LocalProfile } from './Profile';
 import { GameSettings } from '../settings/Settings';
 import { Skin } from '../skin/Skin';
@@ -110,7 +114,11 @@ export class Game {
     readonly dialog: DialogOverlay;
     /** The local player's name, picture and banner. */
     readonly profile: LocalProfile;
+    /** The player's wosu! account (global leaderboards). */
+    readonly account = new AccountManager();
     readonly profileOverlay: LazyOverlay<ProfileOverlay>;
+    /** The full profile page (any player's; rankings live there too). */
+    readonly userProfile: LazyOverlay<UserProfileOverlay>;
 
     private readonly popupBlockers = new Map<object, { blocker: Graphics; keyOff: () => void }>();
     readonly startedAt = Date.now();
@@ -209,14 +217,16 @@ export class Game {
         const listingSlot = new Container();
         const settingsSlot = new Container();
         const profileSlot = new Container();
+        const userProfileSlot = new Container();
         this.listing = this.lazyOverlay(listingSlot, (m, g) => new m.BeatmapListingOverlay(g));
         this.settingsOverlay = this.lazyOverlay(settingsSlot, (m, g) => new m.SettingsOverlay(g));
         this.notificationOverlay = this.overlays.register(new NotificationOverlay(this));
         this.nowPlaying = this.overlays.register(new NowPlayingOverlay(this));
         this.profile = new LocalProfile(settings);
         this.profileOverlay = this.lazyOverlay(profileSlot, (m, g) => new m.ProfileOverlay(g));
+        this.userProfile = this.lazyOverlay(userProfileSlot, (m, g) => new m.UserProfileOverlay(g));
         this.dialog = this.overlays.register(new DialogOverlay(this));
-        app.overlayLayer.addChild(listingSlot, settingsSlot, this.notificationOverlay, this.nowPlaying, profileSlot, this.dialog);
+        app.overlayLayer.addChild(listingSlot, userProfileSlot, settingsSlot, this.notificationOverlay, this.nowPlaying, profileSlot, this.dialog);
         this.volume = new VolumeOverlay(this);
 
         // The toolbar mirrors overlay state, so it is built after them.
@@ -253,6 +263,14 @@ export class Game {
             this.knownVideos.init().catch(e => console.error('video registry init failed', e)),
             this.profile.init().catch(e => console.error('profile init failed', e)),
         ]);
+        // The account session restores in the background; a signed-in player's scores carry the account name.
+        this.account.user.bind(u => {
+            if (u) this.profile.rename(u.name);
+        });
+        void this.account.init().then(() => {
+            // The game opened (counts this player for the day; guests by their anonymous id).
+            if (this.account.available.value) sendPlayPing({ phase: 'open' });
+        });
         // Imported skins and the selected one load in the background (applies from the next play).
         void this.skins.attach(this).catch(e => console.error('skin store init failed', e));
         this.background.setDefault();
@@ -752,6 +770,7 @@ export class Game {
         const n = this.notifications.progress(`Importing ${osz.length} beatmap${osz.length > 1 ? 's' : ''}…`);
         n.progress.value = NaN;
         const result = await this.library.importMany(osz);
+        track('import', { files: osz.length, ok: result.ok.length });
         if (result.ok.length) {
             const first = result.ok[0];
             n.complete(
@@ -788,6 +807,7 @@ export class Game {
         const pending = this.imports.get(set.sid);
         if (pending) return pending;
         const task = this.downloads.download(set.sid, { title: set.title, artist: set.artist }, { withVideo: opts.video ?? this.settings.backgroundVideo.value });
+        track('download', { set: set.sid });
         const p = task.result
             .then(blob => this.library.importOsz(blob, { onlineSetId: set.sid }))
             .catch(e => {
@@ -867,6 +887,7 @@ export class Game {
     /** Start playing a difficulty (via the player loader). */
     play(selection: Selection): void {
         this.selection.value = selection;
+        track('play', { mods: sortedMods(this.mods.value).join('') || 'NM', online: selection.diff.beatmapId > 0, stars: Math.round((selection.diff.stars ?? 0) * 10) / 10 });
         this.withDeferred(m => this.screens.push(new m.PlayerLoaderScreen(selection)), true);
     }
 

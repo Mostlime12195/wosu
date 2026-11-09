@@ -19,6 +19,7 @@ Scoring and judgement follow osu!'s rules closely, but can still differ from off
 - Mods: EZ, NF, HT, DC, HR, SD, PF, DT, NC, HD, FL, RX, AP, SO and Autoplay
 - Download beatmaps in-game, with several default beatmaps and the option to import your own
 - Full HUD with difficulty visualization bars, click counters, and more
+- Optional wosu! account: passed plays on downloaded beatmaps go to per-beatmap and global pp leaderboards
 - Extra configuration and features like storyboards, beatmap skins and hitsounds, background video, background dim/blur, mouse/keyboard/touch input, volume meters, notifications, a now-playing panel, and everything saved locally in your browser.
 
 ## Controls
@@ -48,7 +49,17 @@ npm run typecheck  # TypeScript
 npm run build      # typecheck + production build into dist/
 ```
 
-Every push and pull request runs CI (typecheck, tests, build). The site is hosted on [Vercel](https://vercel.com): pushes to `main` deploy to production, and pull requests get preview deployments. `dist/` is plain static files with relative paths, so it can be served from any host or sub-path.
+Every push and pull request runs CI (typecheck, tests, build). `dist/` is plain static files with relative paths, so it can be served from any host or sub-path; wosu.dino.icu serves it with Caddy from a small VPS.
+
+### Online (accounts and global leaderboards)
+
+Accounts, score submission and the global leaderboards are served by `server/index.mjs`: one Node 22+ process with no dependencies, a SQLite database and replay files under `WOSU_DATA` (default `./data`). The site talks to it at `/api` on the same origin, so a static build without the server simply stays offline (local scores only).
+
+```bash
+node server/index.mjs          # http://127.0.0.1:3100; `npm run dev` proxies /api there
+```
+
+In production a reverse proxy (Caddy, nginx) forwards `/api/*` to it and passes `X-Forwarded-Proto`. Every player has a profile page in-game (banner, picture, stats, best and recent plays), the global rankings live there too, and moderators (`node server/admin.mjs role <name> mod`) can restrict players, rename them and delete scores from the same page; every action is logged. Accounts can carry an email for password resets (verification and reset links are mailed when the server has `RESEND_API_KEY` and `MAIL_FROM`). Playing without an account works as before (local scores only). A new account offers to upload the device's existing local scores, and the profile card can do it later. Scores are only submitted for passed plays on beatmaps downloaded from a mirror (they need an online beatmap id); every submission keeps its replay, so suspicious scores can be checked. Relax, Autopilot and Difficulty Adjust plays are stored but do not count towards pp.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report bugs and send changes.
 
@@ -64,7 +75,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report bugs and send changes.
 | `src/screens` | Intro, main menu, song select, player loader, player, results |
 | `src/overlays` | Toolbar, settings, beatmap listing, mod select, notifications, now playing, volume, dialogs |
 | `src/ui` | The small UI framework every screen is built from (buttons, text boxes, sliders, dropdowns, scroll containers, tooltips, triangles) |
-| `src/audio`, `src/online`, `src/storage` | Web Audio engine, mirror APIs and downloads, IndexedDB storage |
+| `src/audio`, `src/online`, `src/storage` | Web Audio engine, mirror APIs and downloads, the account/leaderboard client, IndexedDB storage |
+| `server` | The online API: accounts, score submission, leaderboards (SQLite, no dependencies) |
 | `public/assets` | Skin atlas, cursor textures, hitsounds and fonts; `art/sprites` holds the source sprites of the atlas |
 
 ## License notes

@@ -65,7 +65,7 @@ export const PRESETS: Record<PresetId, WosuSkinOptions> = {
     clean: {
         circleStyle: 'flat', palette: 'wosu', customColours: '', comboNumbers: true, numberSize: 0.85,
         approachWidth: 3, sliderBody: 'combo', sliderBorder: 'white', sliderBorderWidth: 0.14,
-        followPoints: 'dots', cursorStyle: 'dot', cursorColour: 0xff66aa, trail: 'short',
+        followPoints: 'dots', cursorStyle: 'dot', cursorColour: 0xffcc22, trail: 'short',
         show300: false, hitLighting: false, judgements: 'numbers',
     },
     // osu!'s look: shaded circles, osu!'s combo colours, gradient sliders, arrows, everything shown.
