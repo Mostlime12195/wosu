@@ -29,6 +29,7 @@
  *   POST /api/users/:id/rename   { name, reason }       -> { user }        (moderators)
  *   POST /api/users/:id/role     { role }               -> { user }        (admins)
  *   GET  /api/mod/log?page=                             -> { entries }     (moderators)
+ *   POST /api/play  { phase, beatmapId, ms, mods, map, anonId? } -> { ok }  game events (see events.mjs), forwarded to Umami
  *   GET  /api/health                                    -> { ok, users, scores, mail }
  */
 import { randomBytes, scrypt as scryptCb, timingSafeEqual, createHash } from 'node:crypto';
@@ -38,6 +39,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { configured as mailConfigured, sendMail } from './mail.mjs';
+import { actorOf, clientInfo, createForwarder, mapLabel, maybeSnapshot, modsLabel, parsePlayPing, playEvent, runBackfill, beatmapPath, MAX_PLAY_MS } from './events.mjs';
 
 const scrypt = promisify(scryptCb);
 
@@ -47,6 +49,11 @@ const DATA = process.env.WOSU_DATA ?? join(process.cwd(), 'data');
 const SITE_URL = (process.env.SITE_URL ?? 'https://wosu.dino.icu').replace(/\/$/, '');
 const REPLAYS = join(DATA, 'replays');
 const IMAGES = join(DATA, 'images');
+/** Game events go to this Umami website (unset: not forwarded anywhere). */
+const UMAMI_URL = process.env.UMAMI_URL ?? 'http://127.0.0.1:3200/stats';
+const UMAMI_WEBSITE = process.env.UMAMI_GAME_WEBSITE ?? '';
+/** A signed-in player's last_seen moves at most this often (it is bumped on every signed-in request). */
+const SEEN_EVERY_MS = 5 * 60_000;
 const MAX_AVATAR = 1024 * 1024;
 const MAX_COVER = 2 * 1024 * 1024;
 const TOKEN_HOURS = 24;
@@ -160,6 +167,11 @@ addColumn('users', 'avatar_ext', 'TEXT');
 addColumn('users', 'avatar_v', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('users', 'cover_ext', 'TEXT');
 addColumn('users', 'cover_v', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'first_play', 'INTEGER');
+db.exec(`
+    CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    UPDATE users SET first_play = (SELECT MIN(date) FROM scores WHERE scores.user_id = users.id) WHERE first_play IS NULL;
+`);
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email_lower) WHERE email_lower IS NOT NULL');
 
 const q = {
@@ -188,6 +200,7 @@ const q = {
     userById: db.prepare('SELECT * FROM users WHERE id = ?'),
     insertUser: db.prepare('INSERT INTO users (name, name_lower, pass_hash, pass_salt, created, last_seen) VALUES (?, ?, ?, ?, ?, ?)'),
     touchUser: db.prepare('UPDATE users SET last_seen = ? WHERE id = ?'),
+    firstPlay: db.prepare('UPDATE users SET first_play = MIN(COALESCE(first_play, ?), ?) WHERE id = ?'),
     insertSession: db.prepare('INSERT INTO sessions (token_hash, user_id, created, expires) VALUES (?, ?, ?, ?)'),
     session: db.prepare('SELECT s.user_id, s.expires FROM sessions s WHERE s.token_hash = ?'),
     deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
@@ -476,6 +489,7 @@ function rateHit(key, windowMs) {
 setInterval(() => {
     const now = Date.now();
     for (const [k, b] of buckets) if (b.reset < now) buckets.delete(k);
+    for (const [k, t] of openPlays) if (now - t > MAX_PLAY_MS) openPlays.delete(k);
     q.expireSessions.run(now);
     q.expireTokens.run(now);
 }, 60_000).unref();
@@ -519,8 +533,14 @@ function currentUser(req) {
     const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
     const s = q.session.get(sha256(token));
-    if (!s || s.expires < Date.now()) return null;
-    return q.userById.get(s.user_id) ?? null;
+    const now = Date.now();
+    if (!s || s.expires < now) return null;
+    const u = q.userById.get(s.user_id) ?? null;
+    if (u && now - u.last_seen > SEEN_EVERY_MS) {
+        q.touchUser.run(now, u.id);
+        u.last_seen = now;
+    }
+    return u;
 }
 
 function requireUser(req) {
@@ -536,6 +556,27 @@ function startSession(res, req, user) {
     q.touchUser.run(now, user.id);
     res.setHeader('Set-Cookie', sessionCookie(token, req));
 }
+
+// ---------------------------------------------------------------------------
+// Game events (Umami)
+
+const events = createForwarder({ url: UMAMI_URL, website: UMAMI_WEBSITE, hostname: new URL(SITE_URL).host });
+
+/** Browser, OS, device and language of a request, for Umami's session (nothing else from the request leaves). */
+function requestClient(req) {
+    const out = clientInfo(req.headers['user-agent']);
+    const lang = String(req.headers['accept-language'] ?? '').split(',')[0].split(';')[0].trim();
+    if (/^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8}){0,3}$/.test(lang)) out.language = lang;
+    return out;
+}
+
+/** A server-side event about a signed-in player (sign-up, sign-in, scores). */
+function userEvent(req, user, name, { url = '/', data = {}, view } = {}) {
+    events.send({ id: `u:${user.id}`, signedIn: true, ts: Date.now(), client: requestClient(req), url, name, data, view });
+}
+
+/** Started plays per player (start time), so a finish/fail/quit can't claim more time than has passed. */
+const openPlays = new Map();
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -560,6 +601,7 @@ route('POST', /^\/api\/auth\/register$/, async (req, res) => {
     rateHit(`register:${ip}`, 60 * 60_000);
     const user = q.userById.get(lastInsertRowid);
     startSession(res, req, user);
+    userEvent(req, user, 'signup', { url: '/signup', view: { url: '/signup', title: 'Sign up' } });
     return { user: publicUser(user, true) };
 });
 
@@ -572,6 +614,7 @@ route('POST', /^\/api\/auth\/login$/, async (req, res) => {
     const { hash } = await hashPassword(password, user ? user.pass_salt : randomBytes(16));
     if (!user || !timingSafeEqual(hash, user.pass_hash)) throw new HttpError(401, 'Wrong name or password.');
     startSession(res, req, user);
+    userEvent(req, user, 'login', { url: '/login', view: { url: '/login', title: 'Sign in' } });
     return { user: publicUser(user, true) };
 });
 
@@ -840,6 +883,7 @@ function insertScore(userId, p, client, now = Date.now()) {
         p.mods, p.modSettings, p.score, p.accuracy, p.maxCombo, p.count300, p.count100, p.count50, p.countMiss,
         p.countGeki, p.countKatu, p.grade, p.pp, p.ranked, p.mechanics, p.date, now, 0, client,
     );
+    q.firstPlay.run(p.date, p.date, userId);
     if (p.replay) {
         try {
             writeFileSync(join(REPLAYS, `${id}.bin`), p.replay);
@@ -865,6 +909,9 @@ route('POST', /^\/api\/scores$/, async (req) => {
     recomputeStats(user.id);
     q.touchUser.run(now, user.id);
     const saved = q.scoreById.get(id);
+    const data = { mods: modsLabel(p.mods), beatmapId: p.beatmapId, map: mapLabel(p), grade: p.grade, ranked: !!p.ranked, accuracy: Math.round(p.accuracy * 10000) / 100 };
+    if (p.pp != null) data.pp = Math.round(p.pp);
+    userEvent(req, user, 'score-submit', { url: beatmapPath(p.beatmapId), data });
     const best = q.userBestOnBeatmap.get(p.beatmapId, user.id, '', '');
     const rank = q.rankOnBeatmap.get(p.beatmapId, '', '', user.id, best.score, best.score, best.submitted).rank;
     return { score: publicScore(saved, user.name, imageUrl(user, 'avatar')), rank, best: best.id === id, user: publicUser(q.userById.get(user.id), true) };
@@ -904,7 +951,34 @@ route('POST', /^\/api\/scores\/import$/, async (req) => {
     }
     if (imported) recomputeStats(user.id);
     q.touchUser.run(now, user.id);
+    if (imported) userEvent(req, user, 'score-import', { url: '/import', data: { scores: imported, skipped } });
     return { imported, skipped, invalid, user: publicUser(q.userById.get(user.id), true) };
+});
+
+/**
+ * The game's play events: open (the game started), start, finish, fail,
+ * quit. Signed in: the account; otherwise the client's random anonymous id.
+ * Validated, rate-limited, then forwarded to Umami without waiting.
+ */
+route('POST', /^\/api\/play$/, async (req) => {
+    rateLimit(`play-ip:${clientIp(req)}`, 300, 10 * 60_000);
+    const ping = parsePlayPing(await readJson(req), MODS);
+    if (!ping) throw bad('That event is not valid.');
+    const user = currentUser(req);
+    const actor = actorOf(user, ping.anonId);
+    if (!actor) throw bad('anonId is required when signed out.');
+    rateLimit(`play:${actor.id}`, 150, 10 * 60_000);
+    const now = Date.now();
+    if (ping.phase === 'start') {
+        openPlays.set(actor.id, now);
+        if (user) q.firstPlay.run(now, now, user.id);
+    } else if (ping.phase !== 'open') {
+        const started = openPlays.get(actor.id);
+        openPlays.delete(actor.id);
+        ping.ms = Math.min(ping.ms, started ? now - started + 10_000 : MAX_PLAY_MS);
+    }
+    events.send(playEvent(ping, actor, requestClient(req), now));
+    return { ok: true };
 });
 
 route('GET', /^\/api\/beatmaps\/(\d+)\/scores$/, (req, _res, m, url) => {
@@ -1007,6 +1081,20 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => console.log(`wosu api on http://127.0.0.1:${server.address().port} (data: ${DATA})`));
+
+if (events.enabled) {
+    // Past sign-ups and scores go to Umami once (resumable), then a daily account snapshot.
+    void runBackfill(db, events, { website: UMAMI_WEBSITE }).catch((e) => console.warn('[umami] backfill failed', e));
+    const snapshot = () => {
+        try {
+            maybeSnapshot(db, events);
+        } catch (e) {
+            console.warn('[umami] snapshot failed', e);
+        }
+    };
+    snapshot();
+    setInterval(snapshot, 10 * 60_000).unref();
+}
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
